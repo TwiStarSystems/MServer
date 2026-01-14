@@ -69,6 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTools();
   loadJarFetcherTypes();
   loadJarConfig();
+  loadApiUrls();
   
   // Time range change handler
   document.getElementById('time-range').addEventListener('change', loadStatsHistory);
@@ -634,6 +635,154 @@ async function loadJarConfig() {
     }
   } catch (err) {
     configDisplay.textContent = `# Error loading config: ${err.message}`;
+  }
+}
+
+// ==================== API URL Configuration Functions ====================
+
+const SERVER_TYPE_NAMES = {
+  'vanilla': 'Vanilla (Java)',
+  'bedrock': 'Vanilla (Bedrock)',
+  'paper': 'Paper',
+  'purpur': 'Purpur',
+  'fabric': 'Fabric',
+  'folia': 'Folia',
+  'velocity': 'Velocity',
+  'waterfall': 'Waterfall'
+};
+
+async function loadApiUrls() {
+  const container = document.getElementById('api-urls-container');
+  if (!container) return;
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/api-urls');
+    if (response.ok) {
+      const data = await response.json();
+      renderApiUrls(data.urls, data.defaults);
+    } else {
+      container.innerHTML = '<div class="error-text">Failed to load API URLs</div>';
+    }
+  } catch (err) {
+    container.innerHTML = `<div class="error-text">Error: ${err.message}</div>`;
+  }
+}
+
+function renderApiUrls(urls, defaults) {
+  const container = document.getElementById('api-urls-container');
+  if (!container) return;
+  
+  let html = '';
+  
+  for (const [type, url] of Object.entries(urls)) {
+    const isDefault = url === defaults[type];
+    const name = SERVER_TYPE_NAMES[type] || type;
+    
+    html += `
+      <div class="api-url-item" data-type="${type}">
+        <div class="api-url-header">
+          <span class="api-url-name">${name}</span>
+          ${isDefault ? '<span class="api-url-badge default">Default</span>' : '<span class="api-url-badge custom">Custom</span>'}
+        </div>
+        <div class="api-url-input-group">
+          <input type="text" 
+                 class="form-control api-url-input" 
+                 id="api-url-${type}" 
+                 value="${url}" 
+                 placeholder="${defaults[type]}"
+                 data-default="${defaults[type]}">
+          <button class="btn btn-small" onclick="saveApiUrl('${type}')" title="Save URL">💾</button>
+          <button class="btn btn-small btn-secondary" onclick="resetApiUrl('${type}')" title="Reset to Default">↩️</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  container.innerHTML = html;
+}
+
+async function saveApiUrl(type) {
+  const input = document.getElementById(`api-url-${type}`);
+  const url = input.value.trim();
+  const item = input.closest('.api-url-item');
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/api-urls', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, url })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok && data.success) {
+      // Update badge
+      const badge = item.querySelector('.api-url-badge');
+      if (data.isDefault) {
+        badge.className = 'api-url-badge default';
+        badge.textContent = 'Default';
+      } else {
+        badge.className = 'api-url-badge custom';
+        badge.textContent = 'Custom';
+      }
+      
+      // Flash success
+      item.classList.add('save-success');
+      setTimeout(() => item.classList.remove('save-success'), 1500);
+    } else {
+      alert('Failed to save: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Error saving URL: ' + err.message);
+  }
+}
+
+async function resetApiUrl(type) {
+  const input = document.getElementById(`api-url-${type}`);
+  const defaultUrl = input.dataset.default;
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/api-urls', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, url: '' }) // Empty URL resets to default
+    });
+    
+    if (response.ok) {
+      input.value = defaultUrl;
+      
+      // Update badge
+      const item = input.closest('.api-url-item');
+      const badge = item.querySelector('.api-url-badge');
+      badge.className = 'api-url-badge default';
+      badge.textContent = 'Default';
+      
+      // Flash success
+      item.classList.add('save-success');
+      setTimeout(() => item.classList.remove('save-success'), 1500);
+    }
+  } catch (err) {
+    alert('Error resetting URL: ' + err.message);
+  }
+}
+
+async function resetAllApiUrls() {
+  if (!confirm('Are you sure you want to reset all API URLs to their defaults?')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/api-urls/reset', {
+      method: 'POST'
+    });
+    
+    if (response.ok) {
+      loadApiUrls(); // Reload the display
+    } else {
+      alert('Failed to reset API URLs');
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
   }
 }
 

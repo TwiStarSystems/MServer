@@ -59,6 +59,7 @@ SETTINGS_PATH = BASE_DIR / 'settings.json'
 SCHEDULES_PATH = BASE_DIR / 'schedules.json'
 STATS_PATH = BASE_DIR / 'stats.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
+API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
 
 # Ensure directories exist
@@ -3350,8 +3351,8 @@ def get_stats_history():
 
 # ==================== JAR URL Fetcher API ====================
 
-# API endpoints for fetching Minecraft server JARs
-MINECRAFT_APIS = {
+# Default API endpoints for fetching Minecraft server JARs
+DEFAULT_MINECRAFT_APIS = {
     'vanilla': 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json',
     'bedrock': 'https://raw.githubusercontent.com/AlexxIT/BedrockDedicatedServer/master/versions.json',
     'paper': 'https://api.papermc.io/v2/projects/paper',
@@ -3361,6 +3362,32 @@ MINECRAFT_APIS = {
     'waterfall': 'https://api.papermc.io/v2/projects/waterfall',
     'folia': 'https://api.papermc.io/v2/projects/folia'
 }
+
+def load_minecraft_apis():
+    """Load API URLs from config file, falling back to defaults"""
+    if API_URLS_PATH.exists():
+        try:
+            with open(API_URLS_PATH, 'r') as f:
+                custom_apis = json.load(f)
+                # Merge with defaults (custom overrides default)
+                return {**DEFAULT_MINECRAFT_APIS, **custom_apis}
+        except Exception:
+            pass
+    return DEFAULT_MINECRAFT_APIS.copy()
+
+def save_minecraft_apis(apis):
+    """Save API URLs to config file"""
+    API_URLS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(API_URLS_PATH, 'w') as f:
+        json.dump(apis, f, indent=2)
+
+def get_api_url(server_type):
+    """Get the API URL for a server type"""
+    apis = load_minecraft_apis()
+    return apis.get(server_type, DEFAULT_MINECRAFT_APIS.get(server_type))
+
+# For backwards compatibility
+MINECRAFT_APIS = load_minecraft_apis()
 
 @app.route('/api/tools/jarfetcher/types', methods=['GET'])
 @admin_required
@@ -3377,6 +3404,68 @@ def get_jar_types():
             {'id': 'velocity', 'name': 'Velocity', 'description': 'Modern Minecraft proxy'},
             {'id': 'waterfall', 'name': 'Waterfall', 'description': 'BungeeCord fork by PaperMC'}
         ]
+    })
+
+@app.route('/api/tools/jarfetcher/api-urls', methods=['GET'])
+@admin_required
+def get_api_urls():
+    """Get current API URLs for all server types"""
+    current_apis = load_minecraft_apis()
+    return jsonify({
+        'urls': current_apis,
+        'defaults': DEFAULT_MINECRAFT_APIS
+    })
+
+@app.route('/api/tools/jarfetcher/api-urls', methods=['PUT'])
+@admin_required
+def update_api_urls():
+    """Update API URLs for server types"""
+    data = request.get_json()
+    server_type = data.get('type')
+    url = data.get('url', '').strip()
+    
+    if not server_type:
+        return jsonify({'error': 'Missing server type'}), 400
+    
+    if server_type not in DEFAULT_MINECRAFT_APIS:
+        return jsonify({'error': 'Invalid server type'}), 400
+    
+    # Load current URLs
+    current_apis = load_minecraft_apis()
+    
+    if url:
+        # Update the URL
+        current_apis[server_type] = url
+    else:
+        # Reset to default if empty
+        current_apis[server_type] = DEFAULT_MINECRAFT_APIS[server_type]
+    
+    # Save to config
+    save_minecraft_apis(current_apis)
+    
+    # Update global variable
+    global MINECRAFT_APIS
+    MINECRAFT_APIS = current_apis
+    
+    return jsonify({
+        'success': True,
+        'type': server_type,
+        'url': current_apis[server_type],
+        'isDefault': current_apis[server_type] == DEFAULT_MINECRAFT_APIS[server_type]
+    })
+
+@app.route('/api/tools/jarfetcher/api-urls/reset', methods=['POST'])
+@admin_required
+def reset_api_urls():
+    """Reset all API URLs to defaults"""
+    save_minecraft_apis(DEFAULT_MINECRAFT_APIS.copy())
+    
+    global MINECRAFT_APIS
+    MINECRAFT_APIS = DEFAULT_MINECRAFT_APIS.copy()
+    
+    return jsonify({
+        'success': True,
+        'urls': DEFAULT_MINECRAFT_APIS
     })
 
 @app.route('/api/tools/jarfetcher/versions/<server_type>', methods=['GET'])
@@ -3409,7 +3498,7 @@ def fetch_bedrock_versions():
     """Fetch Bedrock Dedicated Server versions"""
     # Try the community-maintained version list first
     try:
-        response = requests.get(MINECRAFT_APIS['bedrock'], timeout=30)
+        response = requests.get(get_api_url('bedrock'), timeout=30)
         if response.status_code == 200:
             data = response.json()
             versions = []
@@ -3437,7 +3526,7 @@ def fetch_bedrock_versions():
 
 def fetch_vanilla_versions():
     """Fetch Vanilla Minecraft versions from Mojang"""
-    response = requests.get(MINECRAFT_APIS['vanilla'], timeout=30)
+    response = requests.get(get_api_url('vanilla'), timeout=30)
     if response.status_code != 200:
         return jsonify({'error': 'Failed to fetch from Mojang API'}), 502
     
@@ -3487,7 +3576,7 @@ def fetch_papermc_versions(project):
 
 def fetch_purpur_versions():
     """Fetch versions from Purpur API"""
-    response = requests.get(MINECRAFT_APIS['purpur'], timeout=30)
+    response = requests.get(get_api_url('purpur'), timeout=30)
     if response.status_code != 200:
         return jsonify({'error': 'Failed to fetch from Purpur API'}), 502
     
@@ -3538,7 +3627,7 @@ def get_jar_download_url():
     try:
         if server_type == 'vanilla':
             # First get the version manifest URL
-            manifest_response = requests.get(MINECRAFT_APIS['vanilla'], timeout=30)
+            manifest_response = requests.get(get_api_url('vanilla'), timeout=30)
             if manifest_response.status_code != 200:
                 return jsonify({'error': 'Failed to fetch manifest'}), 502
             

@@ -1727,6 +1727,78 @@ select.form-control:disabled {
   color: #f85149;
 }
 
+/* API URL Configuration */
+.tool-info {
+  color: #8b949e;
+  font-size: 0.9rem;
+  margin-bottom: 15px;
+}
+
+.api-urls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.api-url-item {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px 15px;
+  transition: border-color 0.2s, background-color 0.3s;
+}
+
+.api-url-item.save-success {
+  border-color: #7ee787;
+  background: rgba(126, 231, 135, 0.05);
+}
+
+.api-url-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.api-url-name {
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.api-url-badge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.api-url-badge.default {
+  background: rgba(88, 166, 255, 0.15);
+  color: #58a6ff;
+}
+
+.api-url-badge.custom {
+  background: rgba(126, 231, 135, 0.15);
+  color: #7ee787;
+}
+
+.api-url-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-url-input {
+  flex: 1;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.8rem;
+}
+
+.tool-panel-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* Config Viewer */
 .config-viewer {
   background: #0d1117;

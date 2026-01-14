@@ -38,7 +38,7 @@
           <button type="button" class="settings-tab-btn" data-tab="users">👥 User Management</button>
           <button type="button" class="settings-tab-btn" data-tab="approvals">✅ Approvals</button>
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
-          <button type="button" class="settings-tab-btn" data-tab="tools">🛠️ Tools <span class="coming-soon-badge">Beta</span></button>
+          <button type="button" class="settings-tab-btn" data-tab="tools">🛠️ Tools</button>
         </nav>
         
         <!-- Stats Section -->
@@ -250,6 +250,22 @@
               </div>
               
               <div id="jar-status" class="jar-status"></div>
+            </div>
+          </div>
+          
+          <!-- API URL Configuration -->
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>🔗 API URL Configuration</h3>
+              <div class="tool-panel-actions">
+                <button class="btn btn-small btn-warning" onclick="resetAllApiUrls()">🔄 Reset All to Defaults</button>
+              </div>
+            </div>
+            <div class="tool-panel-body">
+              <p class="tool-info">Configure the source URLs used to fetch version lists for each server type. Leave empty to use the default URL.</p>
+              <div id="api-urls-container" class="api-urls-list">
+                <div class="loading-text">Loading API URLs...</div>
+              </div>
             </div>
           </div>
           
