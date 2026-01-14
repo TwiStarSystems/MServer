@@ -65,6 +65,24 @@ cd MServerController
 sudo ./install.sh
 ```
 
+This will show an interactive menu with options:
+- **Fresh Install** - Complete new installation
+- **Update** - Update existing installation (preserves your data)
+- **Quick Update** - Update files only (fast, ideal for dev testing)
+- **Development Mode** - Run locally without installing
+- **Status** - Show installation status
+- **Uninstall** - Remove MServerController
+
+You can also use command-line arguments:
+```bash
+sudo ./install.sh install        # Fresh installation
+sudo ./install.sh update         # Update existing installation
+sudo ./install.sh quick-update   # Quick file update (dev testing)
+sudo ./install.sh status         # Check status
+sudo ./install.sh uninstall      # Remove completely
+./install.sh dev                 # Development mode (no sudo needed)
+```
+
 The script will:
 - Install all required dependencies (Python, Nginx, Java)
 - Create a Python virtual environment
@@ -211,6 +229,38 @@ sudo systemctl status mservercontroller
 # View logs
 sudo journalctl -u mservercontroller -f
 ```
+
+## Updating
+
+### Update from Git Repository
+
+To update an existing installation:
+
+```bash
+cd MServerController
+git pull origin main
+sudo ./install.sh update
+```
+
+The update process:
+- Stops the service
+- Backs up your configuration
+- Updates application files
+- Reinstalls Python dependencies
+- Restores your configuration
+- Restarts the service
+
+All your servers, backups, and settings are preserved.
+
+### Quick Update (Development)
+
+For rapid development testing, use quick update:
+
+```bash
+sudo ./install.sh quick-update
+```
+
+This only copies the application files (server.py, public/) without reinstalling dependencies, making it much faster for iterative development.
 
 ## API Reference
 
