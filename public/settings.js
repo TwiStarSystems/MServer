@@ -5,33 +5,7 @@ let statsChart = null;
 let currentUser = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
-  // Check authentication
-  try {
-    const response = await fetch('/api/auth/me');
-    if (!response.ok) {
-      window.location.href = '/login.html';
-      return;
-    }
-    currentUser = await response.json();
-    if (currentUser.role !== 'admin') {
-      window.location.href = '/';
-      return;
-    }
-    // Update user UI in top bar
-    updateUserUI();
-  } catch (err) {
-    window.location.href = '/login.html';
-    return;
-  }
-  
-  // Load branding for page
-  loadPageBranding();
-  
-  // Initialize Socket.IO for real-time stats
-  socket = io();
-  socket.on('stats_update', updateCurrentStats);
-  
-  // Tab switching
+  // Set up tab switching FIRST before any async operations
   document.querySelectorAll('.settings-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.tab;
@@ -48,6 +22,37 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   });
+  
+  // Check authentication
+  try {
+    const response = await fetch('/api/auth/me');
+    if (!response.ok) {
+      window.location.href = '/login.html';
+      return;
+    }
+    currentUser = await response.json();
+    if (currentUser.role !== 'admin') {
+      window.location.href = '/';
+      return;
+    }
+    // Update user UI in top bar
+    updateUserUI();
+  } catch (err) {
+    console.error('Auth error:', err);
+    window.location.href = '/login.html';
+    return;
+  }
+  
+  // Load branding for page
+  loadPageBranding();
+  
+  // Initialize Socket.IO for real-time stats
+  try {
+    socket = io();
+    socket.on('stats_update', updateCurrentStats);
+  } catch (err) {
+    console.error('Socket.IO error:', err);
+  }
   
   // Load initial data
   loadCurrentStats();
