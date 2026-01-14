@@ -30,7 +30,7 @@ async function checkAuth() {
 }
 
 function updateUserUI() {
-  // Update user info in sidebar
+  // Update user info in top bar
   const userInfo = document.getElementById('user-info');
   if (userInfo && currentUser) {
     userInfo.innerHTML = `
@@ -39,12 +39,17 @@ function updateUserUI() {
         <span class="user-role ${currentUser.role}">${currentUser.role}</span>
       </div>
       <div class="user-actions">
-        ${currentUser.role === 'admin' ? '<a href="/settings.html" class="btn-icon" title="Settings">⚙️</a>' : ''}
         ${currentUser.role === 'admin' ? '<button class="btn-icon" onclick="openAdminPanel()" title="User Management">👥</button>' : ''}
         <button class="btn-icon" onclick="openProfileSettings()" title="Profile">👤</button>
         <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
       </div>
     `;
+  }
+  
+  // Show/hide settings link based on admin role
+  const settingsLink = document.getElementById('settings-link');
+  if (settingsLink && currentUser) {
+    settingsLink.style.display = currentUser.role === 'admin' ? 'inline-block' : 'none';
   }
 }
 
@@ -57,9 +62,9 @@ async function loadBranding() {
       // Update page title
       if (branding.siteTitle) {
         document.title = branding.siteTitle;
-        const headerTitle = document.querySelector('.sidebar-header h1');
-        if (headerTitle) {
-          headerTitle.textContent = branding.siteTitle.length > 10 ? branding.siteTitle.substring(0, 10) : branding.siteTitle;
+        const siteTitle = document.getElementById('site-title');
+        if (siteTitle) {
+          siteTitle.textContent = '🎮 ' + branding.siteTitle;
         }
       }
       

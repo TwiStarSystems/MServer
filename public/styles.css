@@ -16,26 +16,129 @@ body {
 /* ==================== App Layout ==================== */
 
 .app-container {
-  display: flex;
+  display: grid;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar main";
+  grid-template-columns: 250px 1fr;
+  grid-template-rows: 60px 1fr;
   min-height: 100vh;
+}
+
+/* ==================== Top Bar ==================== */
+
+.top-bar {
+  grid-area: topbar;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px;
+  border-bottom: 1px solid #0f3460;
+  z-index: 1000;
+}
+
+.top-bar-left h1 {
+  font-size: 1.4rem;
+  color: white;
+  font-weight: 700;
+}
+
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.top-nav {
+  display: flex;
+  gap: 5px;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.nav-link:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.nav-link.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.top-bar .user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+
+.top-bar .user-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.top-bar .user-name {
+  color: white;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.top-bar .user-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.top-bar .btn-icon {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-decoration: none;
+}
+
+.top-bar .btn-icon:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 /* ==================== Sidebar ==================== */
 
 .sidebar {
-  width: 280px;
+  grid-area: sidebar;
+  width: 250px;
   background: #16213e;
   border-right: 1px solid #0f3460;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .sidebar-header {
-  padding: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 15px;
+  background: #0f3460;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-weight: 600;
+  color: #aaa;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .sidebar-header h1 {
@@ -100,10 +203,11 @@ body {
 /* ==================== Main Content ==================== */
 
 .main-content {
-  flex: 1;
+  grid-area: main;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow-y: auto;
 }
 
 .no-server-view {
@@ -804,30 +908,6 @@ select.form-control:disabled {
 
 /* ==================== User Info & Auth ==================== */
 
-.sidebar-footer {
-  padding: 15px;
-  border-top: 1px solid #0f3460;
-  background: #141e30;
-}
-
-.user-info {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.user-display {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.user-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: #fff;
-}
-
 .user-role {
   font-size: 11px;
   padding: 2px 8px;
@@ -872,28 +952,6 @@ select.form-control:disabled {
 .role-badge.public {
   background: #9e9e9e;
   color: white;
-}
-
-.user-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.btn-icon {
-  background: transparent;
-  border: 1px solid #333;
-  color: #aaa;
-  padding: 6px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.2s;
-}
-
-.btn-icon:hover {
-  border-color: #667eea;
-  color: #fff;
-  background: rgba(102, 126, 234, 0.1);
 }
 
 /* ==================== Admin Panel ==================== */

@@ -8,10 +8,26 @@
 </head>
 <body>
   <div class="app-container">
+    <!-- Top Bar -->
+    <header class="top-bar">
+      <div class="top-bar-left">
+        <h1 id="site-title">🎮 MServerController</h1>
+      </div>
+      <div class="top-bar-right">
+        <nav class="top-nav">
+          <a href="/" class="nav-link active">Dashboard</a>
+          <a href="/settings.html" class="nav-link" id="settings-link" style="display:none;">Settings</a>
+        </nav>
+        <div id="user-info" class="user-info">
+          <!-- Populated by JavaScript -->
+        </div>
+      </div>
+    </header>
+    
     <!-- Sidebar - Server List -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h1>🎮 MSC</h1>
+        <span>Servers</span>
         <button id="add-server-btn" class="btn btn-success btn-small" title="Add Server">+ Add</button>
       </div>
       
@@ -20,13 +36,6 @@
         <div class="empty-state">
           <p>No servers configured</p>
           <small>Click "Add" to create one</small>
-        </div>
-      </div>
-      
-      <!-- User Info Section -->
-      <div class="sidebar-footer">
-        <div id="user-info" class="user-info">
-          <!-- Populated by JavaScript -->
         </div>
       </div>
     </aside>
