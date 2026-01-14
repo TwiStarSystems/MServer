@@ -41,6 +41,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
       document.getElementById(`${tab}-section`).classList.add('active');
+      
+      // Load users when User Management tab is clicked
+      if (tab === 'users') {
+        loadUsers();
+      }
     });
   });
   
@@ -431,4 +436,176 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ==================== User Management Functions ====================
+
+function switchUserTab(subtab) {
+  document.querySelectorAll('.user-mgmt-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.subtab === subtab);
+  });
+  document.querySelectorAll('.user-mgmt-content').forEach(content => {
+    content.classList.toggle('active', content.id === `${subtab}-users-tab`);
+  });
+}
+
+async function loadUsers() {
+  try {
+    const response = await fetch('/api/admin/users');
+    if (!response.ok) throw new Error('Failed to load users');
+    
+    const data = await response.json();
+    const users = data.users || [];
+    
+    const approvedUsers = users.filter(u => u.approved);
+    const pendingUsers = users.filter(u => !u.approved);
+    
+    // Render approved users
+    const approvedTab = document.getElementById('approved-users-tab');
+    if (approvedUsers.length === 0) {
+      approvedTab.innerHTML = `
+        <div class="user-mgmt-empty">
+          <h3>No Users</h3>
+          <p>No approved users found</p>
+        </div>
+      `;
+    } else {
+      approvedTab.innerHTML = `
+        <table class="user-mgmt-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Role</th>
+              <th>Created</th>
+              <th>Last Login</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${approvedUsers.map(u => `
+              <tr>
+                <td>${escapeHtml(u.username)}</td>
+                <td><span class="role-badge ${u.role}">${u.role}</span></td>
+                <td>${new Date(u.created).toLocaleDateString()}</td>
+                <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
+                <td class="user-mgmt-actions">
+                  <select onchange="changeUserRole('${u.id}', this.value)">
+                    <option value="public" ${u.role === 'public' ? 'selected' : ''}>Public</option>
+                    <option value="user" ${u.role === 'user' ? 'selected' : ''}>User</option>
+                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                  </select>
+                  <button class="btn btn-small" onclick="resetUserPassword('${u.id}')">Reset PW</button>
+                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    // Render pending users
+    const pendingTab = document.getElementById('pending-users-tab');
+    if (pendingUsers.length === 0) {
+      pendingTab.innerHTML = `
+        <div class="user-mgmt-empty">
+          <h3>No Pending Requests</h3>
+          <p>No users waiting for approval</p>
+        </div>
+      `;
+    } else {
+      pendingTab.innerHTML = `
+        <table class="user-mgmt-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Registered</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pendingUsers.map(u => `
+              <tr>
+                <td>${escapeHtml(u.username)}</td>
+                <td>${new Date(u.created).toLocaleDateString()}</td>
+                <td class="user-mgmt-actions">
+                  <button class="btn btn-small btn-success" onclick="approveUser('${u.id}')">Approve</button>
+                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Reject</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  } catch (err) {
+    console.error('Failed to load users:', err);
+    document.getElementById('approved-users-tab').innerHTML = `
+      <div class="user-mgmt-empty">
+        <h3>Error Loading Users</h3>
+        <p>${err.message}</p>
+      </div>
+    `;
+  }
+}
+
+async function approveUser(userId) {
+  try {
+    const response = await fetch(`/api/admin/users/${userId}/approve`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to approve user');
+    loadUsers();
+  } catch (err) {
+    console.error('Failed to approve user:', err);
+    alert('Failed to approve user: ' + err.message);
+  }
+}
+
+async function changeUserRole(userId, role) {
+  try {
+    const response = await fetch(`/api/admin/users/${userId}/role`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role })
+    });
+    if (!response.ok) throw new Error('Failed to change role');
+    loadUsers();
+  } catch (err) {
+    console.error('Failed to change role:', err);
+    alert('Failed to change role: ' + err.message);
+  }
+}
+
+async function resetUserPassword(userId) {
+  const newPassword = prompt('Enter new password (min 8 characters):');
+  if (!newPassword) return;
+  if (newPassword.length < 8) {
+    alert('Password must be at least 8 characters');
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/admin/users/${userId}/password`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: newPassword })
+    });
+    if (!response.ok) throw new Error('Failed to reset password');
+    alert('Password reset successfully');
+  } catch (err) {
+    console.error('Failed to reset password:', err);
+    alert('Failed to reset password: ' + err.message);
+  }
+}
+
+async function deleteUser(userId, username) {
+  if (!confirm(`Are you sure you want to delete user "${username}"?`)) return;
+  
+  try {
+    const response = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to delete user');
+    loadUsers();
+  } catch (err) {
+    console.error('Failed to delete user:', err);
+    alert('Failed to delete user: ' + err.message);
+  }
 }

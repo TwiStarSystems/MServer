@@ -1888,3 +1888,121 @@ select.form-control:disabled {
   font-size: 0.85rem;
   margin-top: 20px;
 }
+
+/* ==================== User Management (Settings Page) ==================== */
+
+.user-mgmt-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #333;
+  padding-bottom: 15px;
+}
+
+.user-mgmt-tab-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  padding: 8px 16px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.user-mgmt-tab-btn:hover {
+  color: #fff;
+}
+
+.user-mgmt-tab-btn.active {
+  color: #667eea;
+  border-bottom-color: #667eea;
+}
+
+.user-mgmt-content {
+  display: none;
+}
+
+.user-mgmt-content.active {
+  display: block;
+}
+
+.user-mgmt-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #1e1e2e;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #333;
+}
+
+.user-mgmt-table thead {
+  background: #16213e;
+}
+
+.user-mgmt-table th {
+  text-align: left;
+  padding: 14px 16px;
+  font-weight: 600;
+  color: #888;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.user-mgmt-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid #333;
+  font-size: 0.95rem;
+  color: #e0e0e0;
+}
+
+.user-mgmt-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.user-mgmt-table tbody tr:hover {
+  background: #252538;
+}
+
+.user-mgmt-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.user-mgmt-actions select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #2a2a3e;
+  border: 1px solid #333;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.user-mgmt-actions select:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.user-mgmt-actions .btn-small {
+  font-size: 0.85rem;
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+
+.user-mgmt-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: #888;
+  background: #1e1e2e;
+  border-radius: 12px;
+  border: 1px solid #333;
+}
+
+.user-mgmt-empty h3 {
+  margin-bottom: 8px;
+  color: #aaa;
+}

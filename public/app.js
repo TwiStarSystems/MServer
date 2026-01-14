@@ -39,7 +39,6 @@ function updateUserUI() {
         <span class="user-role ${currentUser.role}">${currentUser.role}</span>
       </div>
       <div class="user-actions">
-        ${currentUser.role === 'admin' ? '<button class="btn-icon" onclick="openAdminPanel()" title="User Management">👥</button>' : ''}
         <button class="btn-icon" onclick="openProfileSettings()" title="Profile">👤</button>
         <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
       </div>

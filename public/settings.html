@@ -35,6 +35,7 @@
         <nav class="settings-tabs">
           <button class="settings-tab-btn active" data-tab="stats">📊 Server Stats</button>
           <button class="settings-tab-btn" data-tab="branding">🎨 Branding</button>
+          <button class="settings-tab-btn" data-tab="users">👥 User Management</button>
           <button class="settings-tab-btn" data-tab="tools">🛠️ Tools <span class="coming-soon-badge">Beta</span></button>
         </nav>
         
@@ -117,6 +118,22 @@
               <span id="preview-footer-addition"></span>
               <span>Made By TwiStarSystems © All Rights Reserved</span>
             </div>
+          </div>
+        </section>
+        
+        <!-- User Management Section -->
+        <section id="users-section" class="settings-section">
+          <div class="user-mgmt-tabs">
+            <button class="user-mgmt-tab-btn active" data-subtab="approved" onclick="switchUserTab('approved')">Users</button>
+            <button class="user-mgmt-tab-btn" data-subtab="pending" onclick="switchUserTab('pending')">Pending Approval</button>
+          </div>
+          
+          <div id="approved-users-tab" class="user-mgmt-content active">
+            <div class="loading">Loading users...</div>
+          </div>
+          
+          <div id="pending-users-tab" class="user-mgmt-content">
+            <div class="loading">Loading pending users...</div>
           </div>
         </section>
         
