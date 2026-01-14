@@ -474,7 +474,7 @@ class JarVersionManager:
 
 
 # Initialize JAR manager
-jar_manager = JarManager()
+jar_manager = JarVersionManager()
 
 # Multi-server state management
 class ServerManager:
