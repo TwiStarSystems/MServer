@@ -1248,6 +1248,12 @@ select.form-control:disabled {
   padding: 20px;
   border: 1px solid #333;
   margin-bottom: 20px;
+  position: relative;
+  height: 350px;
+}
+
+.chart-container canvas {
+  max-height: 280px !important;
 }
 
 .chart-header {
