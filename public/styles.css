@@ -501,6 +501,10 @@ body {
   max-width: 800px;
 }
 
+.modal-content.modal-medium {
+  max-width: 600px;
+}
+
 .modal-header {
   padding: 20px 25px;
   border-bottom: 1px solid #0f3460;
@@ -538,6 +542,125 @@ body {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
+}
+
+/* ==================== Server Creation Type Selection ==================== */
+
+.creation-type-section {
+  padding: 25px;
+}
+
+.creation-type-section h3 {
+  font-size: 16px;
+  color: #fff;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.creation-type-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.creation-type-btn {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 20px;
+  background: #1a1a2e;
+  border: 2px solid #0f3460;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.creation-type-btn:hover {
+  border-color: #667eea;
+  background: #0f3460;
+}
+
+.creation-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+}
+
+.creation-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  display: block;
+}
+
+.creation-desc {
+  font-size: 12px;
+  color: #888;
+  display: block;
+  margin-top: 4px;
+}
+
+/* Server form specific styles */
+.server-form {
+  padding-bottom: 0;
+}
+
+.type-desc {
+  display: block;
+  margin-top: 6px;
+  color: #667eea;
+  font-style: italic;
+}
+
+.form-row {
+  display: flex;
+  gap: 15px;
+  padding: 0 25px;
+  margin-bottom: 20px;
+}
+
+.form-row .form-group {
+  padding: 0;
+  margin-bottom: 0;
+}
+
+.form-group.half {
+  flex: 1;
+}
+
+.form-group input[type="checkbox"] {
+  margin-right: 8px;
+  accent-color: #667eea;
+}
+
+.form-group input[type="file"] {
+  padding: 10px;
+  background: #1a1a2e;
+  border: 2px dashed #0f3460;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.form-group input[type="file"]:hover {
+  border-color: #667eea;
+}
+
+select.form-control {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23888' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 15px center;
+  padding-right: 40px;
+}
+
+select.form-control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.back-btn {
+  margin-right: auto;
 }
 
 /* ==================== Forms ==================== */
@@ -677,4 +800,253 @@ body {
   .terminal-container {
     height: calc(100vh - 350px);
   }
+}
+
+/* ==================== User Info & Auth ==================== */
+
+.sidebar-footer {
+  padding: 15px;
+  border-top: 1px solid #0f3460;
+  background: #141e30;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #fff;
+}
+
+.user-role {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.user-role.admin {
+  background: #f44336;
+  color: white;
+}
+
+.user-role.user {
+  background: #4caf50;
+  color: white;
+}
+
+.user-role.public {
+  background: #9e9e9e;
+  color: white;
+}
+
+.role-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.role-badge.admin {
+  background: #f44336;
+  color: white;
+}
+
+.role-badge.user {
+  background: #4caf50;
+  color: white;
+}
+
+.role-badge.public {
+  background: #9e9e9e;
+  color: white;
+}
+
+.user-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-icon {
+  background: transparent;
+  border: 1px solid #333;
+  color: #aaa;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.btn-icon:hover {
+  border-color: #667eea;
+  color: #fff;
+  background: rgba(102, 126, 234, 0.1);
+}
+
+/* ==================== Admin Panel ==================== */
+
+.modal-large {
+  max-width: 800px;
+  width: 95%;
+}
+
+.admin-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #333;
+  padding-bottom: 15px;
+}
+
+.admin-tab-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.admin-tab-btn:hover {
+  color: #fff;
+}
+
+.admin-tab-btn.active {
+  color: #667eea;
+  border-bottom-color: #667eea;
+}
+
+.admin-tab-content {
+  display: none;
+}
+
+.admin-tab-content.active {
+  display: block;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #333;
+}
+
+.admin-table th {
+  color: #888;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.admin-table td {
+  font-size: 14px;
+}
+
+.admin-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-actions select {
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #1a1a2e;
+  border: 1px solid #333;
+  color: #e0e0e0;
+  font-size: 13px;
+}
+
+.btn-small {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.btn-success {
+  background: #4caf50;
+  color: white;
+}
+
+.btn-success:hover {
+  background: #45a049;
+}
+
+.admin-loading {
+  text-align: center;
+  padding: 40px;
+  color: #888;
+}
+
+.admin-empty {
+  text-align: center;
+  padding: 40px;
+  color: #888;
+}
+
+/* ==================== Profile Settings ==================== */
+
+.profile-info {
+  background: #1a1a2e;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.profile-info p {
+  margin-bottom: 8px;
+}
+
+.profile-info p:last-child {
+  margin-bottom: 0;
+}
+
+#password-form h3 {
+  margin-bottom: 15px;
+  font-size: 16px;
+  color: #fff;
+}
+
+#password-form .form-group {
+  margin-bottom: 15px;
+}
+
+#password-form label {
+  display: block;
+  margin-bottom: 6px;
+  color: #aaa;
+  font-size: 13px;
+}
+
+#password-form input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 14px;
+}
+
+#password-form input:focus {
+  outline: none;
+  border-color: #667eea;
 }

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Minecraft Server Controller</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+        
+        .login-container {
+            background: var(--card-bg, #1e1e2e);
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            width: 100%;
+            max-width: 400px;
+            border: 1px solid var(--border-color, #333);
+        }
+        
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .login-header h1 {
+            color: var(--text-primary, #fff);
+            font-size: 1.8rem;
+            margin-bottom: 8px;
+        }
+        
+        .login-header p {
+            color: var(--text-secondary, #aaa);
+            font-size: 0.95rem;
+        }
+        
+        .logo-icon {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #4caf50, #2e7d32);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .logo-icon svg {
+            width: 36px;
+            height: 36px;
+            fill: white;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-primary, #fff);
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border-color, #333);
+            border-radius: 8px;
+            background: var(--input-bg, #2a2a3e);
+            color: var(--text-primary, #fff);
+            font-size: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            box-sizing: border-box;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent-color, #4caf50);
+            box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
+        }
+        
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #4caf50, #2e7d32);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+        }
+        
+        .login-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .error-message {
+            background: rgba(244, 67, 54, 0.1);
+            border: 1px solid #f44336;
+            color: #f44336;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .error-message.show {
+            display: block;
+        }
+        
+        .success-message {
+            background: rgba(76, 175, 80, 0.1);
+            border: 1px solid #4caf50;
+            color: #4caf50;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        
+        .success-message.show {
+            display: block;
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border-color, #333);
+        }
+        
+        .tab-btn {
+            flex: 1;
+            padding: 12px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary, #aaa);
+            font-size: 1rem;
+            cursor: pointer;
+            transition: color 0.2s, border-color 0.2s;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+        }
+        
+        .tab-btn.active {
+            color: var(--accent-color, #4caf50);
+            border-bottom-color: var(--accent-color, #4caf50);
+        }
+        
+        .tab-btn:hover {
+            color: var(--text-primary, #fff);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .public-link {
+            text-align: center;
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border-color, #333);
+        }
+        
+        .public-link a {
+            color: var(--accent-color, #4caf50);
+            text-decoration: none;
+            font-size: 0.95rem;
+        }
+        
+        .public-link a:hover {
+            text-decoration: underline;
+        }
+        
+        .password-requirements {
+            font-size: 0.85rem;
+            color: var(--text-secondary, #aaa);
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L2 7v10l10 5 10-5V7L12 2zm0 2.18l7.23 3.61-7.23 3.62-7.23-3.62L12 4.18zM4 8.67l7 3.5v6.66l-7-3.5V8.67zm9 10.16v-6.66l7-3.5v6.66l-7 3.5z"/>
+                </svg>
+            </div>
+            <h1>Server Controller</h1>
+            <p>Manage your Minecraft servers</p>
+        </div>
+        
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="login">Login</button>
+            <button class="tab-btn" data-tab="register">Register</button>
+        </div>
+        
+        <div id="error-message" class="error-message"></div>
+        <div id="success-message" class="success-message"></div>
+        
+        <!-- Login Form -->
+        <div id="login-tab" class="tab-content active">
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" name="username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" name="password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="login-btn">Sign In</button>
+            </form>
+        </div>
+        
+        <!-- Register Form -->
+        <div id="register-tab" class="tab-content">
+            <form id="register-form">
+                <div class="form-group">
+                    <label for="register-username">Username</label>
+                    <input type="text" id="register-username" name="username" required minlength="3" maxlength="32" autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="register-password">Password</label>
+                    <input type="password" id="register-password" name="password" required minlength="8" autocomplete="new-password">
+                    <p class="password-requirements">Minimum 8 characters</p>
+                </div>
+                <div class="form-group">
+                    <label for="register-confirm">Confirm Password</label>
+                    <input type="password" id="register-confirm" name="confirm" required autocomplete="new-password">
+                </div>
+                <button type="submit" class="login-btn">Create Account</button>
+            </form>
+        </div>
+        
+        <div class="public-link">
+            <a href="/public.html">View Public Server Status →</a>
+        </div>
+    </div>
+    
+    <script src="login.js"></script>
+</body>
+</html>

@@ -7,6 +7,56 @@ let currentPath = '';
 let currentEditingFile = '';
 let editingServerId = null;
 let servers = [];
+let currentUser = null;
+
+// ==================== Authentication ====================
+
+async function checkAuth() {
+  try {
+    const response = await fetch('/api/auth/me');
+    if (response.ok) {
+      currentUser = await response.json();
+      updateUserUI();
+      return true;
+    } else {
+      // Not authenticated, redirect to login
+      window.location.href = '/login.html';
+      return false;
+    }
+  } catch (err) {
+    window.location.href = '/login.html';
+    return false;
+  }
+}
+
+function updateUserUI() {
+  // Update user info in sidebar
+  const userInfo = document.getElementById('user-info');
+  if (userInfo && currentUser) {
+    userInfo.innerHTML = `
+      <div class="user-display">
+        <span class="user-name">${escapeHtml(currentUser.username)}</span>
+        <span class="user-role ${currentUser.role}">${currentUser.role}</span>
+      </div>
+      <div class="user-actions">
+        ${currentUser.role === 'admin' ? '<button class="btn-icon" onclick="openAdminPanel()" title="Admin Panel">⚙️</button>' : ''}
+        <button class="btn-icon" onclick="openProfileSettings()" title="Settings">👤</button>
+        <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
+      </div>
+    `;
+  }
+}
+
+async function logout() {
+  if (!confirm('Are you sure you want to logout?')) return;
+  
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch (err) {
+    // Ignore errors
+  }
+  window.location.href = '/login.html';
+}
 
 // ==================== Socket.IO Connection ====================
 
@@ -57,6 +107,13 @@ async function apiRequest(url, options = {}) {
         ...options.headers
       }
     });
+    
+    // Handle authentication errors
+    if (response.status === 401) {
+      window.location.href = '/login.html';
+      throw new Error('Session expired. Please login again.');
+    }
+    
     const data = await response.json();
     if (!response.ok && data.error) {
       throw new Error(data.error);
@@ -685,7 +742,11 @@ function escapeHtml(text) {
 
 // ==================== Event Listeners ====================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Check authentication first
+  const isAuthenticated = await checkAuth();
+  if (!isAuthenticated) return;
+  
   // Connect WebSocket
   connectWebSocket();
   
@@ -755,3 +816,255 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target.id === 'file-editor-modal') closeFileEditor();
   };
 });
+
+// ==================== Admin Panel ====================
+
+function openAdminPanel() {
+  // Create admin panel modal
+  const modal = document.createElement('div');
+  modal.id = 'admin-modal';
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <div class="modal-content modal-large">
+      <div class="modal-header">
+        <h2>Admin Panel</h2>
+        <button class="close-btn" onclick="closeAdminPanel()">&times;</button>
+      </div>
+      <div class="admin-tabs">
+        <button class="admin-tab-btn active" data-tab="users" onclick="switchAdminTab('users')">Users</button>
+        <button class="admin-tab-btn" data-tab="pending" onclick="switchAdminTab('pending')">Pending Approval</button>
+      </div>
+      <div id="admin-users-tab" class="admin-tab-content active">
+        <div class="admin-loading">Loading users...</div>
+      </div>
+      <div id="admin-pending-tab" class="admin-tab-content">
+        <div class="admin-loading">Loading pending users...</div>
+      </div>
+    </div>
+  `;
+  modal.style.display = 'flex';
+  document.body.appendChild(modal);
+  
+  modal.onclick = (e) => {
+    if (e.target.id === 'admin-modal') closeAdminPanel();
+  };
+  
+  loadAdminUsers();
+}
+
+function closeAdminPanel() {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.remove();
+}
+
+function switchAdminTab(tabName) {
+  document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.admin-tab-content').forEach(content => {
+    content.classList.toggle('active', content.id === `admin-${tabName}-tab`);
+  });
+}
+
+async function loadAdminUsers() {
+  try {
+    const data = await apiRequest('/api/admin/users');
+    const users = data.users || [];
+    
+    const approvedUsers = users.filter(u => u.approved);
+    const pendingUsers = users.filter(u => !u.approved);
+    
+    // Render approved users
+    const usersTab = document.getElementById('admin-users-tab');
+    if (approvedUsers.length === 0) {
+      usersTab.innerHTML = '<p class="admin-empty">No approved users</p>';
+    } else {
+      usersTab.innerHTML = `
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Role</th>
+              <th>Created</th>
+              <th>Last Login</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${approvedUsers.map(u => `
+              <tr>
+                <td>${escapeHtml(u.username)}</td>
+                <td><span class="role-badge ${u.role}">${u.role}</span></td>
+                <td>${new Date(u.created).toLocaleDateString()}</td>
+                <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
+                <td class="admin-actions">
+                  <select onchange="changeUserRole('${u.id}', this.value)">
+                    <option value="public" ${u.role === 'public' ? 'selected' : ''}>Public</option>
+                    <option value="user" ${u.role === 'user' ? 'selected' : ''}>User</option>
+                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                  </select>
+                  <button class="btn-small" onclick="resetUserPassword('${u.id}')">Reset PW</button>
+                  <button class="btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Delete</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    // Render pending users
+    const pendingTab = document.getElementById('admin-pending-tab');
+    if (pendingUsers.length === 0) {
+      pendingTab.innerHTML = '<p class="admin-empty">No pending approval requests</p>';
+    } else {
+      pendingTab.innerHTML = `
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Registered</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pendingUsers.map(u => `
+              <tr>
+                <td>${escapeHtml(u.username)}</td>
+                <td>${new Date(u.created).toLocaleDateString()}</td>
+                <td class="admin-actions">
+                  <button class="btn-small btn-success" onclick="approveUser('${u.id}')">Approve</button>
+                  <button class="btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Reject</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  } catch (err) {
+    console.error('Failed to load users:', err);
+  }
+}
+
+async function approveUser(userId) {
+  try {
+    await apiRequest(`/api/admin/users/${userId}/approve`, { method: 'POST' });
+    loadAdminUsers();
+  } catch (err) {
+    console.error('Failed to approve user:', err);
+  }
+}
+
+async function changeUserRole(userId, role) {
+  try {
+    await apiRequest(`/api/admin/users/${userId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role })
+    });
+    loadAdminUsers();
+  } catch (err) {
+    console.error('Failed to change role:', err);
+  }
+}
+
+async function resetUserPassword(userId) {
+  const newPassword = prompt('Enter new password (min 8 characters):');
+  if (!newPassword) return;
+  if (newPassword.length < 8) {
+    alert('Password must be at least 8 characters');
+    return;
+  }
+  
+  try {
+    await apiRequest(`/api/admin/users/${userId}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password: newPassword })
+    });
+    alert('Password reset successfully');
+  } catch (err) {
+    console.error('Failed to reset password:', err);
+  }
+}
+
+async function deleteUser(userId, username) {
+  if (!confirm(`Are you sure you want to delete user "${username}"?`)) return;
+  
+  try {
+    await apiRequest(`/api/admin/users/${userId}`, { method: 'DELETE' });
+    loadAdminUsers();
+  } catch (err) {
+    console.error('Failed to delete user:', err);
+  }
+}
+
+// ==================== Profile Settings ====================
+
+function openProfileSettings() {
+  const modal = document.createElement('div');
+  modal.id = 'profile-modal';
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Profile Settings</h2>
+        <button class="close-btn" onclick="closeProfileSettings()">&times;</button>
+      </div>
+      <div class="profile-info">
+        <p><strong>Username:</strong> ${escapeHtml(currentUser.username)}</p>
+        <p><strong>Role:</strong> <span class="role-badge ${currentUser.role}">${currentUser.role}</span></p>
+      </div>
+      <form id="password-form" onsubmit="changePassword(event)">
+        <h3>Change Password</h3>
+        <div class="form-group">
+          <label for="current-password">Current Password</label>
+          <input type="password" id="current-password" required>
+        </div>
+        <div class="form-group">
+          <label for="new-password">New Password</label>
+          <input type="password" id="new-password" required minlength="8">
+        </div>
+        <div class="form-group">
+          <label for="confirm-password">Confirm New Password</label>
+          <input type="password" id="confirm-password" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Update Password</button>
+      </form>
+    </div>
+  `;
+  modal.style.display = 'flex';
+  document.body.appendChild(modal);
+  
+  modal.onclick = (e) => {
+    if (e.target.id === 'profile-modal') closeProfileSettings();
+  };
+}
+
+function closeProfileSettings() {
+  const modal = document.getElementById('profile-modal');
+  if (modal) modal.remove();
+}
+
+async function changePassword(event) {
+  event.preventDefault();
+  
+  const currentPassword = document.getElementById('current-password').value;
+  const newPassword = document.getElementById('new-password').value;
+  const confirmPassword = document.getElementById('confirm-password').value;
+  
+  if (newPassword !== confirmPassword) {
+    alert('New passwords do not match');
+    return;
+  }
+  
+  try {
+    await apiRequest('/api/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    alert('Password updated successfully');
+    closeProfileSettings();
+  } catch (err) {
+    console.error('Failed to change password:', err);
+  }
+}

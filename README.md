@@ -37,6 +37,18 @@ MServerController is a modern, user-friendly web application for creating, runni
 - Manage and delete old backups
 - Backups organized by server
 
+### 🆕 Easy Server Creation
+- **Create Fresh Server** with automatic JAR download:
+  - Vanilla (Official Minecraft Server)
+  - Paper (High-performance Spigot fork)
+  - Purpur (Paper fork with extra features)
+  - BungeeCord (Proxy server)
+  - Forge (Mod loader)
+  - NeoForge (Modern Forge fork)
+- **Upload Custom JAR** - Use your own server JAR file
+- **Import Existing Server** - Import from ZIP file
+- Automatic version selection with latest builds
+
 ### ⚙️ Server Configuration
 - Configure server executable path
 - Set Java memory allocation per server
@@ -264,16 +276,25 @@ This only copies the application files (server.py, public/) without reinstalling
 
 ## API Reference
 
+### Server Types & Versions
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/server-types` | List available server types |
+| GET | `/api/server-types/<type>/versions` | List versions for a server type |
+
 ### Server Management
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/servers` | List all servers |
-| POST | `/api/servers` | Create new server |
+| POST | `/api/servers` | Create new server (with optional JAR download) |
+| POST | `/api/servers/import` | Import server from ZIP file |
 | GET | `/api/servers/<id>` | Get server details |
 | PUT | `/api/servers/<id>` | Update server config |
 | DELETE | `/api/servers/<id>` | Delete server config |
 | POST | `/api/servers/<id>/start` | Start server |
 | POST | `/api/servers/<id>/stop` | Stop server |
+| POST | `/api/servers/<id>/upload-jar` | Upload custom JAR file |
+| POST | `/api/servers/<id>/download-jar` | Download JAR for existing server |
 
 ### File Management
 | Method | Endpoint | Description |

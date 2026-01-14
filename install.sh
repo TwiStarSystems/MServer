@@ -314,6 +314,11 @@ do_update() {
         cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
         cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
         
+        # Copy configs directory
+        if [ -d "$(dirname "$0")/configs" ]; then
+            cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
+        fi
+        
         # Copy docs if exists
         if [ -d "$(dirname "$0")/docs" ]; then
             cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
@@ -396,6 +401,9 @@ do_quick_update() {
         fi
         if [ -f "$(dirname "$0")/nginx.conf" ]; then
             cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
+        fi
+        if [ -d "$(dirname "$0")/configs" ]; then
+            cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
         fi
         
         print_success "Application files updated"

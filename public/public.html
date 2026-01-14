@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Status - Minecraft Server Controller</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+        
+        .public-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .public-header {
+            text-align: center;
+            padding: 40px 20px;
+            margin-bottom: 30px;
+        }
+        
+        .public-header h1 {
+            color: var(--text-primary, #fff);
+            font-size: 2rem;
+            margin-bottom: 8px;
+        }
+        
+        .public-header p {
+            color: var(--text-secondary, #aaa);
+            font-size: 1rem;
+        }
+        
+        .logo-icon {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #4caf50, #2e7d32);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .logo-icon svg {
+            width: 48px;
+            height: 48px;
+            fill: white;
+        }
+        
+        .servers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+            padding: 0 20px;
+        }
+        
+        .server-card {
+            background: var(--card-bg, #1e1e2e);
+            border-radius: 12px;
+            padding: 24px;
+            border: 1px solid var(--border-color, #333);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .server-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+        
+        .server-name {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary, #fff);
+            margin-bottom: 8px;
+        }
+        
+        .server-type {
+            font-size: 0.9rem;
+            color: var(--text-secondary, #aaa);
+            margin-bottom: 16px;
+        }
+        
+        .server-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-indicator.online {
+            background: #4caf50;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+        
+        .status-indicator.offline {
+            background: #666;
+            animation: none;
+        }
+        
+        .status-text {
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+        
+        .status-text.online {
+            color: #4caf50;
+        }
+        
+        .status-text.offline {
+            color: #888;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .server-info {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-color, #333);
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .info-label {
+            color: var(--text-secondary, #aaa);
+            font-size: 0.85rem;
+        }
+        
+        .info-value {
+            color: var(--text-primary, #fff);
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .no-servers {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary, #aaa);
+        }
+        
+        .no-servers h3 {
+            margin-bottom: 8px;
+            color: var(--text-primary, #fff);
+        }
+        
+        .login-link {
+            text-align: center;
+            margin-top: 40px;
+            padding: 20px;
+        }
+        
+        .login-link a {
+            color: var(--accent-color, #4caf50);
+            text-decoration: none;
+            font-size: 0.95rem;
+        }
+        
+        .login-link a:hover {
+            text-decoration: underline;
+        }
+        
+        .refresh-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: transparent;
+            border: 1px solid var(--border-color, #333);
+            color: var(--text-secondary, #aaa);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 20px;
+        }
+        
+        .refresh-btn:hover {
+            border-color: var(--accent-color, #4caf50);
+            color: var(--accent-color, #4caf50);
+        }
+        
+        .refresh-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary, #aaa);
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color, #333);
+            border-top-color: var(--accent-color, #4caf50);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .last-updated {
+            text-align: center;
+            color: var(--text-secondary, #666);
+            font-size: 0.85rem;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="public-container">
+        <div class="public-header">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L2 7v10l10 5 10-5V7L12 2zm0 2.18l7.23 3.61-7.23 3.62-7.23-3.62L12 4.18zM4 8.67l7 3.5v6.66l-7-3.5V8.67zm9 10.16v-6.66l7-3.5v6.66l-7 3.5z"/>
+                </svg>
+            </div>
+            <h1>Server Status</h1>
+            <p>Public view of Minecraft server availability</p>
+            <button class="refresh-btn" onclick="loadServers()">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                Refresh
+            </button>
+        </div>
+        
+        <div id="servers-container" class="servers-grid">
+            <div class="loading">
+                <div class="loading-spinner"></div>
+                <p>Loading servers...</p>
+            </div>
+        </div>
+        
+        <div id="last-updated" class="last-updated"></div>
+        
+        <div class="login-link">
+            <a href="/login.html">Login to manage servers →</a>
+        </div>
+    </div>
+    
+    <script src="public.js"></script>
+</body>
+</html>

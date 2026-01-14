@@ -22,6 +22,13 @@
           <small>Click "Add" to create one</small>
         </div>
       </div>
+      
+      <!-- User Info Section -->
+      <div class="sidebar-footer">
+        <div id="user-info" class="user-info">
+          <!-- Populated by JavaScript -->
+        </div>
+      </div>
     </aside>
 
     <!-- Main Content -->
@@ -148,12 +155,112 @@
 
     <!-- Add/Edit Server Modal -->
     <div id="server-modal" class="modal">
-      <div class="modal-content">
+      <div class="modal-content modal-medium">
         <div class="modal-header">
           <h2 id="modal-title">Add Server</h2>
           <button class="close-btn" onclick="closeServerModal()">&times;</button>
         </div>
-        <form id="server-form">
+        
+        <!-- Creation Type Selection (only shown when adding) -->
+        <div id="creation-type-section" class="creation-type-section">
+          <h3>Choose how to create your server:</h3>
+          <div class="creation-type-buttons">
+            <button type="button" class="creation-type-btn" onclick="selectCreationType('fresh')">
+              <span class="creation-icon">🆕</span>
+              <span class="creation-label">Create Fresh Server</span>
+              <span class="creation-desc">Download a new server JAR</span>
+            </button>
+            <button type="button" class="creation-type-btn" onclick="selectCreationType('import')">
+              <span class="creation-icon">📦</span>
+              <span class="creation-label">Import Existing Server</span>
+              <span class="creation-desc">Import from a ZIP file</span>
+            </button>
+            <button type="button" class="creation-type-btn" onclick="selectCreationType('manual')">
+              <span class="creation-icon">⚙️</span>
+              <span class="creation-label">Manual Configuration</span>
+              <span class="creation-desc">Point to existing server directory</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Fresh Server Form -->
+        <form id="fresh-server-form" class="server-form" style="display: none;">
+          <div class="form-group">
+            <label for="fresh-name">Server Name:</label>
+            <input type="text" id="fresh-name" class="form-control" placeholder="My Minecraft Server" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="fresh-type">Server Type:</label>
+            <select id="fresh-type" class="form-control" onchange="loadVersions()">
+              <option value="">Select server type...</option>
+            </select>
+            <small id="type-description" class="type-desc"></small>
+          </div>
+          
+          <div class="form-group">
+            <label for="fresh-version">Version:</label>
+            <select id="fresh-version" class="form-control" disabled>
+              <option value="">Select server type first...</option>
+            </select>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group half">
+              <label for="fresh-jar-name">JAR File Name:</label>
+              <input type="text" id="fresh-jar-name" class="form-control" value="server.jar">
+            </div>
+            <div class="form-group half">
+              <label for="fresh-java-args">Java Arguments:</label>
+              <input type="text" id="fresh-java-args" class="form-control" value="-Xmx2G -Xms1G">
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="fresh-upload-jar"> Upload my own JAR file instead
+            </label>
+          </div>
+          
+          <div id="custom-jar-upload" class="form-group" style="display: none;">
+            <label for="fresh-jar-file">Custom JAR File:</label>
+            <input type="file" id="fresh-jar-file" class="form-control" accept=".jar">
+            <small>Upload your own server JAR file</small>
+          </div>
+          
+          <div class="modal-footer">
+            <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
+            <button type="submit" class="btn btn-success">Create Server</button>
+          </div>
+        </form>
+
+        <!-- Import Server Form -->
+        <form id="import-server-form" class="server-form" style="display: none;">
+          <div class="form-group">
+            <label for="import-name">Server Name:</label>
+            <input type="text" id="import-name" class="form-control" placeholder="Imported Server" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="import-file">Server ZIP File:</label>
+            <input type="file" id="import-file" class="form-control" accept=".zip" required>
+            <small>Upload a ZIP file containing your existing server files</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="import-java-args">Java Arguments:</label>
+            <input type="text" id="import-java-args" class="form-control" value="-Xmx2G -Xms1G">
+            <small>JVM arguments for memory allocation</small>
+          </div>
+          
+          <div class="modal-footer">
+            <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
+            <button type="submit" class="btn btn-success">Import Server</button>
+          </div>
+        </form>
+
+        <!-- Manual Configuration Form (Edit mode uses this too) -->
+        <form id="manual-server-form" class="server-form" style="display: none;">
           <div class="form-group">
             <label for="input-name">Server Name:</label>
             <input type="text" id="input-name" class="form-control" placeholder="My Minecraft Server" required>
@@ -178,6 +285,7 @@
           </div>
           
           <div class="modal-footer">
+            <button type="button" class="btn back-btn" onclick="backToCreationType()">← Back</button>
             <button type="submit" class="btn btn-success">Save</button>
             <button type="button" class="btn" onclick="closeServerModal()">Cancel</button>
           </div>
