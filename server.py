@@ -1121,15 +1121,12 @@ def api_current_user():
     user_id, user = get_current_user()
     
     if not user:
-        return jsonify({'authenticated': False})
+        return jsonify({'error': 'Not authenticated'}), 401
     
     return jsonify({
-        'authenticated': True,
-        'user': {
-            'id': user_id,
-            'username': user['username'],
-            'role': user['role']
-        }
+        'id': user_id,
+        'username': user['username'],
+        'role': user['role']
     })
 
 @app.route('/api/auth/password', methods=['POST'])
