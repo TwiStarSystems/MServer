@@ -50,11 +50,226 @@ BACKUPS_DIR = BASE_DIR / 'backups'
 UPLOADS_DIR = BASE_DIR / 'uploads'
 CONFIG_PATH = BASE_DIR / 'config.json'
 USERS_PATH = BASE_DIR / 'users.json'
+SETTINGS_PATH = BASE_DIR / 'settings.json'
+STATS_PATH = BASE_DIR / 'stats.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
+TOOLS_DIR = BASE_DIR / 'tools'
 
 # Ensure directories exist
-for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR]:
+for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, TOOLS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
+
+
+# ==================== Settings Manager ====================
+
+class SettingsManager:
+    """Manages application settings including branding"""
+    
+    DEFAULT_SETTINGS = {
+        'branding': {
+            'siteTitle': 'MServerController',
+            'siteIcon': '',
+            'footerAddition': ''
+        }
+    }
+    
+    def __init__(self):
+        self.settings = self._load_settings()
+    
+    def _load_settings(self):
+        """Load settings from file"""
+        if SETTINGS_PATH.exists():
+            try:
+                with open(SETTINGS_PATH, 'r') as f:
+                    settings = json.load(f)
+                    # Merge with defaults to ensure all keys exist
+                    for key, value in self.DEFAULT_SETTINGS.items():
+                        if key not in settings:
+                            settings[key] = value
+                        elif isinstance(value, dict):
+                            for k, v in value.items():
+                                if k not in settings[key]:
+                                    settings[key][k] = v
+                    return settings
+            except Exception:
+                pass
+        return self.DEFAULT_SETTINGS.copy()
+    
+    def _save_settings(self):
+        """Save settings to file"""
+        with open(SETTINGS_PATH, 'w') as f:
+            json.dump(self.settings, f, indent=2)
+    
+    def get_settings(self):
+        """Get all settings"""
+        return self.settings
+    
+    def get_branding(self):
+        """Get branding settings"""
+        return self.settings.get('branding', self.DEFAULT_SETTINGS['branding'])
+    
+    def update_branding(self, branding_data):
+        """Update branding settings"""
+        if 'branding' not in self.settings:
+            self.settings['branding'] = {}
+        
+        for key in ['siteTitle', 'siteIcon', 'footerAddition']:
+            if key in branding_data:
+                self.settings['branding'][key] = branding_data[key]
+        
+        self._save_settings()
+        return self.settings['branding']
+
+
+# ==================== System Stats Manager ====================
+
+class StatsManager:
+    """Manages system statistics collection and storage"""
+    
+    RETENTION_DAYS = 7
+    
+    def __init__(self):
+        self.stats = self._load_stats()
+        self._start_collection()
+    
+    def _load_stats(self):
+        """Load stats from file"""
+        if STATS_PATH.exists():
+            try:
+                with open(STATS_PATH, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {'history': []}
+    
+    def _save_stats(self):
+        """Save stats to file"""
+        try:
+            with open(STATS_PATH, 'w') as f:
+                json.dump(self.stats, f)
+        except Exception as e:
+            print(f"Failed to save stats: {e}")
+    
+    def _cleanup_old_stats(self):
+        """Remove stats older than retention period"""
+        cutoff = datetime.now() - timedelta(days=self.RETENTION_DAYS)
+        cutoff_ts = cutoff.isoformat()
+        self.stats['history'] = [
+            s for s in self.stats['history']
+            if s.get('timestamp', '') > cutoff_ts
+        ]
+    
+    def _get_system_stats(self):
+        """Get current system statistics"""
+        stats = {
+            'timestamp': datetime.now().isoformat(),
+            'cpu': 0,
+            'memory': {'used': 0, 'total': 0, 'percent': 0},
+            'disk': {'used': 0, 'total': 0, 'percent': 0}
+        }
+        
+        try:
+            # Try to use psutil if available
+            import psutil
+            stats['cpu'] = psutil.cpu_percent(interval=1)
+            
+            mem = psutil.virtual_memory()
+            stats['memory'] = {
+                'used': mem.used,
+                'total': mem.total,
+                'percent': mem.percent
+            }
+            
+            disk = psutil.disk_usage('/')
+            stats['disk'] = {
+                'used': disk.used,
+                'total': disk.total,
+                'percent': disk.percent
+            }
+        except ImportError:
+            # Fallback to reading from /proc on Linux
+            try:
+                # CPU usage from /proc/stat
+                with open('/proc/stat', 'r') as f:
+                    cpu_line = f.readline()
+                    cpu_times = list(map(int, cpu_line.split()[1:8]))
+                    idle = cpu_times[3]
+                    total = sum(cpu_times)
+                    # Store for next calculation
+                    if hasattr(self, '_last_cpu'):
+                        idle_delta = idle - self._last_cpu[0]
+                        total_delta = total - self._last_cpu[1]
+                        if total_delta > 0:
+                            stats['cpu'] = round(100 * (1 - idle_delta / total_delta), 1)
+                    self._last_cpu = (idle, total)
+                
+                # Memory from /proc/meminfo
+                with open('/proc/meminfo', 'r') as f:
+                    meminfo = {}
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            key = parts[0].rstrip(':')
+                            value = int(parts[1]) * 1024  # Convert KB to bytes
+                            meminfo[key] = value
+                    
+                    total = meminfo.get('MemTotal', 0)
+                    available = meminfo.get('MemAvailable', meminfo.get('MemFree', 0))
+                    used = total - available
+                    stats['memory'] = {
+                        'used': used,
+                        'total': total,
+                        'percent': round(100 * used / total, 1) if total > 0 else 0
+                    }
+                
+                # Disk usage
+                statvfs = os.statvfs('/')
+                total = statvfs.f_blocks * statvfs.f_frsize
+                free = statvfs.f_bavail * statvfs.f_frsize
+                used = total - free
+                stats['disk'] = {
+                    'used': used,
+                    'total': total,
+                    'percent': round(100 * used / total, 1) if total > 0 else 0
+                }
+            except Exception as e:
+                print(f"Failed to get system stats: {e}")
+        
+        return stats
+    
+    def _collect_stats(self):
+        """Background thread to collect stats every 10 seconds"""
+        while True:
+            try:
+                stats = self._get_system_stats()
+                self.stats['history'].append(stats)
+                self._cleanup_old_stats()
+                self._save_stats()
+                
+                # Emit to connected clients
+                socketio.emit('stats_update', stats)
+            except Exception as e:
+                print(f"Stats collection error: {e}")
+            
+            time.sleep(10)
+    
+    def _start_collection(self):
+        """Start the stats collection thread"""
+        thread = threading.Thread(target=self._collect_stats, daemon=True)
+        thread.start()
+    
+    def get_current_stats(self):
+        """Get the most recent stats"""
+        return self._get_system_stats()
+    
+    def get_history(self, hours=24):
+        """Get stats history for the specified number of hours"""
+        cutoff = datetime.now() - timedelta(hours=hours)
+        cutoff_ts = cutoff.isoformat()
+        return [
+            s for s in self.stats['history']
+            if s.get('timestamp', '') > cutoff_ts
+        ]
 
 
 # ==================== User Management & RBAC ====================
@@ -234,8 +449,10 @@ class UserManager:
         return self.ROLES.get(role, 0)
 
 
-# Initialize user manager
+# Initialize managers
 user_manager = UserManager()
+settings_manager = SettingsManager()
+stats_manager = StatsManager()
 
 
 # ==================== Authentication Decorators ====================
@@ -816,11 +1033,20 @@ def public_page():
     """Serve public status page (no auth required)"""
     return send_from_directory('public', 'public.html')
 
+@app.route('/settings.html')
+@login_required
+def settings_page():
+    """Serve settings page (admin only)"""
+    user_id, user = get_current_user()
+    if user.get('role') != 'admin':
+        return redirect('/')
+    return send_from_directory('public', 'settings.html')
+
 @app.route('/<path:path>')
 def static_files(path):
     """Serve static files"""
     # Allow certain files without auth (CSS, JS, and public pages)
-    public_files = ['styles.css', 'app.js', 'login.js', 'public.js']
+    public_files = ['styles.css', 'app.js', 'login.js', 'public.js', 'settings.js']
     if path in public_files or path.startswith('assets/'):
         return send_from_directory('public', path)
     
@@ -1541,6 +1767,119 @@ def restore_backup(server_id):
             zipf.extractall(server_path)
         
         return jsonify({'success': True, 'message': 'Backup restored successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== Settings API ====================
+
+@app.route('/api/settings', methods=['GET'])
+@login_required
+def get_settings():
+    """Get application settings"""
+    return jsonify(settings_manager.get_settings())
+
+@app.route('/api/settings/branding', methods=['GET'])
+def get_branding():
+    """Get branding settings (public)"""
+    return jsonify(settings_manager.get_branding())
+
+@app.route('/api/settings/branding', methods=['PUT'])
+@admin_required
+def update_branding():
+    """Update branding settings (admin only)"""
+    data = request.get_json()
+    branding = settings_manager.update_branding(data)
+    return jsonify({'success': True, 'branding': branding})
+
+
+# ==================== System Stats API ====================
+
+@app.route('/api/stats/current', methods=['GET'])
+@admin_required
+def get_current_stats():
+    """Get current system stats"""
+    return jsonify(stats_manager.get_current_stats())
+
+@app.route('/api/stats/history', methods=['GET'])
+@admin_required
+def get_stats_history():
+    """Get stats history"""
+    hours = request.args.get('hours', 24, type=int)
+    # Limit to 7 days max
+    hours = min(hours, 24 * 7)
+    history = stats_manager.get_history(hours)
+    return jsonify({'history': history})
+
+
+# ==================== Tools API ====================
+
+@app.route('/api/tools', methods=['GET'])
+@admin_required
+def list_tools():
+    """List available tools in the tools directory"""
+    tools = []
+    if TOOLS_DIR.exists():
+        for item in TOOLS_DIR.iterdir():
+            if item.suffix == '.py' and item.is_file():
+                # Read first line for description
+                description = ''
+                try:
+                    with open(item, 'r') as f:
+                        first_lines = f.readlines()[:5]
+                        for line in first_lines:
+                            if line.startswith('#') and not line.startswith('#!'):
+                                description = line[1:].strip()
+                                break
+                            elif line.startswith('"""') or line.startswith("'''"):
+                                description = line.strip().strip('"\'')
+                                break
+                except Exception:
+                    pass
+                
+                tools.append({
+                    'name': item.stem,
+                    'filename': item.name,
+                    'description': description or 'No description'
+                })
+    
+    return jsonify({'tools': tools})
+
+@app.route('/api/tools/<tool_name>/run', methods=['POST'])
+@admin_required
+def run_tool(tool_name):
+    """Run a tool from the tools directory"""
+    tool_path = TOOLS_DIR / f'{tool_name}.py'
+    
+    if not tool_path.exists():
+        return jsonify({'error': 'Tool not found'}), 404
+    
+    # Security: ensure path is within tools directory
+    try:
+        tool_path = tool_path.resolve()
+        if not str(tool_path).startswith(str(TOOLS_DIR.resolve())):
+            return jsonify({'error': 'Invalid tool path'}), 400
+    except Exception:
+        return jsonify({'error': 'Invalid tool'}), 400
+    
+    try:
+        # Run the tool and capture output
+        result = subprocess.run(
+            ['python3', str(tool_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,  # 60 second timeout
+            cwd=str(BASE_DIR)
+        )
+        
+        return jsonify({
+            'success': result.returncode == 0,
+            'output': result.stdout,
+            'error': result.stderr,
+            'returnCode': result.returncode
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Tool execution timed out (60s limit)'}), 408
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

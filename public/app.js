@@ -39,11 +39,54 @@ function updateUserUI() {
         <span class="user-role ${currentUser.role}">${currentUser.role}</span>
       </div>
       <div class="user-actions">
-        ${currentUser.role === 'admin' ? '<button class="btn-icon" onclick="openAdminPanel()" title="Admin Panel">⚙️</button>' : ''}
-        <button class="btn-icon" onclick="openProfileSettings()" title="Settings">👤</button>
+        ${currentUser.role === 'admin' ? '<a href="/settings.html" class="btn-icon" title="Settings">⚙️</a>' : ''}
+        ${currentUser.role === 'admin' ? '<button class="btn-icon" onclick="openAdminPanel()" title="User Management">👥</button>' : ''}
+        <button class="btn-icon" onclick="openProfileSettings()" title="Profile">👤</button>
         <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
       </div>
     `;
+  }
+}
+
+async function loadBranding() {
+  try {
+    const response = await fetch('/api/settings/branding');
+    if (response.ok) {
+      const branding = await response.json();
+      
+      // Update page title
+      if (branding.siteTitle) {
+        document.title = branding.siteTitle;
+        const headerTitle = document.querySelector('.sidebar-header h1');
+        if (headerTitle) {
+          headerTitle.textContent = branding.siteTitle.length > 10 ? branding.siteTitle.substring(0, 10) : branding.siteTitle;
+        }
+      }
+      
+      // Update favicon if provided
+      if (branding.siteIcon) {
+        let favicon = document.querySelector('link[rel="icon"]');
+        if (!favicon) {
+          favicon = document.createElement('link');
+          favicon.rel = 'icon';
+          document.head.appendChild(favicon);
+        }
+        favicon.href = branding.siteIcon;
+      }
+      
+      // Update footer
+      const footer = document.getElementById('app-footer');
+      if (footer) {
+        let footerContent = '';
+        if (branding.footerAddition) {
+          footerContent = branding.footerAddition + ' | ';
+        }
+        footerContent += 'Made By TwiStarSystems © All Rights Reserved';
+        footer.innerHTML = footerContent;
+      }
+    }
+  } catch (err) {
+    console.log('Failed to load branding:', err);
   }
 }
 
@@ -57,6 +100,7 @@ async function logout() {
   }
   window.location.href = '/login.html';
 }
+
 
 // ==================== Socket.IO Connection ====================
 
@@ -746,6 +790,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Check authentication first
   const isAuthenticated = await checkAuth();
   if (!isAuthenticated) return;
+  
+  // Load branding settings
+  loadBranding();
   
   // Connect WebSocket
   connectWebSocket();
