@@ -21,6 +21,8 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
 from flask_socketio import SocketIO, emit
@@ -54,6 +56,7 @@ UPLOADS_DIR = BASE_DIR / 'uploads'
 CONFIG_PATH = BASE_DIR / 'config.json'
 USERS_PATH = BASE_DIR / 'users.json'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
+SCHEDULES_PATH = BASE_DIR / 'schedules.json'
 STATS_PATH = BASE_DIR / 'stats.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 TOOLS_DIR = BASE_DIR / 'tools'
@@ -294,6 +297,283 @@ class StatsManager:
             s for s in self.stats['history']
             if s.get('timestamp', '') > cutoff_ts
         ]
+
+
+# ==================== Backup Scheduler ====================
+
+class BackupScheduler:
+    """Manages scheduled automated backups for servers"""
+    
+    def __init__(self):
+        self.schedules = self._load_schedules()
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        self._restore_schedules()
+    
+    def _load_schedules(self):
+        """Load schedules from file"""
+        if SCHEDULES_PATH.exists():
+            try:
+                with open(SCHEDULES_PATH, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {'schedules': {}}
+    
+    def _save_schedules(self):
+        """Save schedules to file"""
+        with open(SCHEDULES_PATH, 'w') as f:
+            json.dump(self.schedules, f, indent=2)
+    
+    def _restore_schedules(self):
+        """Restore all schedules from saved config on startup"""
+        for server_id, schedule in self.schedules.get('schedules', {}).items():
+            if schedule.get('enabled', False):
+                self._add_job(server_id, schedule)
+    
+    def _add_job(self, server_id, schedule):
+        """Add a scheduled backup job"""
+        job_id = f"backup_{server_id}"
+        
+        # Remove existing job if any
+        try:
+            self.scheduler.remove_job(job_id)
+        except:
+            pass
+        
+        # Create cron trigger based on schedule type
+        schedule_type = schedule.get('type', 'daily')
+        hour = schedule.get('hour', 3)
+        minute = schedule.get('minute', 0)
+        
+        if schedule_type == 'hourly':
+            trigger = CronTrigger(minute=minute)
+        elif schedule_type == 'daily':
+            trigger = CronTrigger(hour=hour, minute=minute)
+        elif schedule_type == 'weekly':
+            day_of_week = schedule.get('dayOfWeek', 0)  # 0 = Monday
+            trigger = CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute)
+        elif schedule_type == 'custom':
+            # Custom cron expression
+            cron_expr = schedule.get('cron', '0 3 * * *')
+            parts = cron_expr.split()
+            if len(parts) == 5:
+                trigger = CronTrigger(
+                    minute=parts[0],
+                    hour=parts[1],
+                    day=parts[2],
+                    month=parts[3],
+                    day_of_week=parts[4]
+                )
+            else:
+                trigger = CronTrigger(hour=3, minute=0)
+        else:
+            trigger = CronTrigger(hour=hour, minute=minute)
+        
+        self.scheduler.add_job(
+            self._execute_backup,
+            trigger,
+            args=[server_id],
+            id=job_id,
+            replace_existing=True,
+            max_instances=1
+        )
+    
+    def _execute_backup(self, server_id):
+        """Execute a scheduled backup for a server"""
+        print(f"[Scheduler] Starting scheduled backup for server: {server_id}")
+        
+        try:
+            # Get server config
+            server_config = server_manager.get_server_config(server_id)
+            if not server_config:
+                print(f"[Scheduler] Server {server_id} not found")
+                return
+            
+            server_path = Path(server_config.get('serverPath', SERVERS_DIR))
+            if not server_path.exists():
+                print(f"[Scheduler] Server path not found for {server_id}")
+                return
+            
+            # Check if server is running and stop it if configured to do so
+            schedule = self.schedules['schedules'].get(server_id, {})
+            was_running = False
+            instance = server_manager.servers.get(server_id)
+            
+            if instance and instance.is_running():
+                if schedule.get('stopServer', True):
+                    print(f"[Scheduler] Stopping server {server_id} for backup")
+                    was_running = True
+                    
+                    # Send warning to players
+                    server_manager.send_command(server_id, "say [Backup] Server will restart in 30 seconds for scheduled backup!")
+                    time.sleep(10)
+                    server_manager.send_command(server_id, "say [Backup] Server restarting in 20 seconds...")
+                    time.sleep(10)
+                    server_manager.send_command(server_id, "say [Backup] Server restarting in 10 seconds...")
+                    time.sleep(10)
+                    
+                    # Stop the server gracefully
+                    server_manager.stop_server(server_id)
+                    
+                    # Wait for server to stop (max 60 seconds)
+                    for _ in range(60):
+                        if server_id not in server_manager.servers or not server_manager.servers[server_id].is_running():
+                            break
+                        time.sleep(1)
+                    
+                    # Force kill if still running
+                    if server_id in server_manager.servers and server_manager.servers[server_id].is_running():
+                        server_manager.kill_server(server_id)
+                        time.sleep(2)
+                else:
+                    print(f"[Scheduler] Server {server_id} is running, backup may be inconsistent (stopServer=False)")
+            
+            # Create backup directory for this server
+            backup_dir = BACKUPS_DIR / server_id
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+            backup_name = f'scheduled-backup-{timestamp}.zip'
+            backup_path = backup_dir / backup_name
+            
+            # Create the backup
+            print(f"[Scheduler] Creating backup: {backup_name}")
+            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(server_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        arcname = file_path.relative_to(server_path)
+                        zipf.write(file_path, arcname)
+            
+            size = backup_path.stat().st_size
+            print(f"[Scheduler] Backup created: {backup_name} ({size} bytes)")
+            
+            # Update last backup time
+            self.schedules['schedules'][server_id]['lastBackup'] = datetime.now().isoformat()
+            self._save_schedules()
+            
+            # Clean up old backups if retention is set
+            max_backups = schedule.get('maxBackups', 0)
+            if max_backups > 0:
+                self._cleanup_old_backups(server_id, max_backups)
+            
+            # Restart server if it was running
+            if was_running and schedule.get('restartAfter', True):
+                print(f"[Scheduler] Restarting server {server_id}")
+                server_manager.start_server(server_id)
+            
+            # Emit notification to connected clients
+            socketio.emit('backup_completed', {
+                'serverId': server_id,
+                'backup': backup_name,
+                'size': size,
+                'scheduled': True
+            })
+            
+            print(f"[Scheduler] Scheduled backup completed for server: {server_id}")
+            
+        except Exception as e:
+            print(f"[Scheduler] Backup failed for server {server_id}: {e}")
+            socketio.emit('backup_failed', {
+                'serverId': server_id,
+                'error': str(e),
+                'scheduled': True
+            })
+    
+    def _cleanup_old_backups(self, server_id, max_backups):
+        """Remove old scheduled backups exceeding the maximum count"""
+        backup_dir = BACKUPS_DIR / server_id
+        if not backup_dir.exists():
+            return
+        
+        # Get all scheduled backups sorted by date
+        backups = []
+        for item in backup_dir.iterdir():
+            if item.name.startswith('scheduled-backup-') and item.suffix == '.zip':
+                backups.append((item, item.stat().st_mtime))
+        
+        backups.sort(key=lambda x: x[1], reverse=True)
+        
+        # Remove backups exceeding max count
+        for backup_file, _ in backups[max_backups:]:
+            try:
+                backup_file.unlink()
+                print(f"[Scheduler] Removed old backup: {backup_file.name}")
+            except Exception as e:
+                print(f"[Scheduler] Failed to remove old backup {backup_file.name}: {e}")
+    
+    def set_schedule(self, server_id, schedule_config):
+        """Set or update a backup schedule for a server"""
+        if 'schedules' not in self.schedules:
+            self.schedules['schedules'] = {}
+        
+        self.schedules['schedules'][server_id] = {
+            'enabled': schedule_config.get('enabled', True),
+            'type': schedule_config.get('type', 'daily'),
+            'hour': schedule_config.get('hour', 3),
+            'minute': schedule_config.get('minute', 0),
+            'dayOfWeek': schedule_config.get('dayOfWeek', 0),
+            'cron': schedule_config.get('cron', ''),
+            'stopServer': schedule_config.get('stopServer', True),
+            'restartAfter': schedule_config.get('restartAfter', True),
+            'maxBackups': schedule_config.get('maxBackups', 7),
+            'lastBackup': self.schedules.get('schedules', {}).get(server_id, {}).get('lastBackup'),
+            'createdAt': datetime.now().isoformat()
+        }
+        
+        self._save_schedules()
+        
+        if schedule_config.get('enabled', True):
+            self._add_job(server_id, self.schedules['schedules'][server_id])
+        else:
+            # Remove job if disabled
+            try:
+                self.scheduler.remove_job(f"backup_{server_id}")
+            except:
+                pass
+        
+        return self.schedules['schedules'][server_id]
+    
+    def get_schedule(self, server_id):
+        """Get the backup schedule for a server"""
+        schedule = self.schedules.get('schedules', {}).get(server_id)
+        if schedule:
+            # Add next run time if job exists
+            try:
+                job = self.scheduler.get_job(f"backup_{server_id}")
+                if job and job.next_run_time:
+                    schedule['nextRun'] = job.next_run_time.isoformat()
+            except:
+                pass
+        return schedule
+    
+    def delete_schedule(self, server_id):
+        """Delete a backup schedule for a server"""
+        if server_id in self.schedules.get('schedules', {}):
+            del self.schedules['schedules'][server_id]
+            self._save_schedules()
+            
+            try:
+                self.scheduler.remove_job(f"backup_{server_id}")
+            except:
+                pass
+            
+            return True
+        return False
+    
+    def get_all_schedules(self):
+        """Get all backup schedules"""
+        schedules = {}
+        for server_id, schedule in self.schedules.get('schedules', {}).items():
+            schedules[server_id] = schedule.copy()
+            try:
+                job = self.scheduler.get_job(f"backup_{server_id}")
+                if job and job.next_run_time:
+                    schedules[server_id]['nextRun'] = job.next_run_time.isoformat()
+            except:
+                pass
+        return schedules
 
 
 # ==================== User Management & RBAC ====================
@@ -1586,6 +1866,9 @@ class ServerInstance:
 
 # Initialize server manager
 server_manager = ServerManager()
+
+# Initialize backup scheduler
+backup_scheduler = BackupScheduler()
 
 
 def is_safe_path(base_path, requested_path):
@@ -2944,6 +3227,70 @@ def restore_backup(server_id):
         return jsonify({'success': True, 'message': 'Backup restored successfully'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== Backup Schedule API ====================
+
+@app.route('/api/servers/<server_id>/backups/schedule', methods=['GET'])
+@server_access_required
+def get_backup_schedule(server_id):
+    """Get the backup schedule for a server"""
+    schedule = backup_scheduler.get_schedule(server_id)
+    if schedule:
+        return jsonify({'schedule': schedule})
+    return jsonify({'schedule': None})
+
+@app.route('/api/servers/<server_id>/backups/schedule', methods=['POST'])
+@server_access_required
+def set_backup_schedule(server_id):
+    """Set or update the backup schedule for a server"""
+    data = request.get_json()
+    
+    # Validate server exists
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    schedule = backup_scheduler.set_schedule(server_id, {
+        'enabled': data.get('enabled', True),
+        'type': data.get('type', 'daily'),
+        'hour': data.get('hour', 3),
+        'minute': data.get('minute', 0),
+        'dayOfWeek': data.get('dayOfWeek', 0),
+        'cron': data.get('cron', ''),
+        'stopServer': data.get('stopServer', True),
+        'restartAfter': data.get('restartAfter', True),
+        'maxBackups': data.get('maxBackups', 7)
+    })
+    
+    return jsonify({'success': True, 'schedule': schedule})
+
+@app.route('/api/servers/<server_id>/backups/schedule', methods=['DELETE'])
+@server_access_required
+def delete_backup_schedule(server_id):
+    """Delete the backup schedule for a server"""
+    if backup_scheduler.delete_schedule(server_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'No schedule found for this server'}), 404
+
+@app.route('/api/backups/schedules', methods=['GET'])
+@login_required
+def get_all_backup_schedules():
+    """Get all backup schedules (admin sees all, users see their own)"""
+    user = user_manager.get_user(session['user_id'])
+    all_schedules = backup_scheduler.get_all_schedules()
+    
+    if user.get('role') == 'admin':
+        return jsonify({'schedules': all_schedules})
+    
+    # Filter to only user's servers
+    user_schedules = {}
+    for server_id, schedule in all_schedules.items():
+        server_config = server_manager.get_server_config(server_id)
+        if server_config and server_config.get('owner') == session['user_id']:
+            user_schedules[server_id] = schedule
+    
+    return jsonify({'schedules': user_schedules})
 
 
 # ==================== Settings API ====================

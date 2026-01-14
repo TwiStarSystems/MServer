@@ -243,7 +243,21 @@
         <div id="backups-tab" class="tab-content">
           <div class="backup-controls">
             <button id="create-backup-btn" class="btn btn-success">Create Backup</button>
+            <button id="schedule-backup-btn" class="btn btn-primary">📅 Schedule Backup</button>
             <button id="refresh-backups-btn" class="btn">Refresh</button>
+          </div>
+          
+          <!-- Schedule Status Banner -->
+          <div id="schedule-status" class="schedule-status" style="display: none;">
+            <div class="schedule-info">
+              <span class="schedule-icon">📅</span>
+              <span id="schedule-text">Scheduled: Daily at 3:00 AM</span>
+              <span id="next-backup-text" class="next-backup"></span>
+            </div>
+            <div class="schedule-actions">
+              <button class="btn btn-small" onclick="openScheduleModal()">Edit</button>
+              <button class="btn btn-danger btn-small" onclick="deleteSchedule()">Disable</button>
+            </div>
           </div>
           
           <div class="backup-list">
@@ -421,7 +435,7 @@
 
     <!-- NBT Editor Modal -->
     <div id="nbt-editor-modal" class="modal">
-      <div class="modal-content modal-large">
+      <div class="modal-content modal-xlarge">
         <div class="modal-header">
           <h2 id="nbt-editor-title">NBT Editor</h2>
           <button class="close-btn" onclick="closeNbtEditor()">&times;</button>
@@ -598,6 +612,86 @@
         <div class="modal-footer">
           <button class="btn btn-danger" onclick="banPlayer()">Ban Player</button>
           <button class="btn" onclick="closeBanPlayerModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backup Schedule Modal -->
+    <div id="schedule-modal" class="modal">
+      <div class="modal-content modal-medium">
+        <div class="modal-header">
+          <h2>📅 Schedule Automatic Backups</h2>
+          <button class="close-btn" onclick="closeScheduleModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px;">
+          <div class="schedule-info-box">
+            <p>⚠️ <strong>Note:</strong> By default, the server will be stopped before backup and restarted after. Players will receive a 30-second warning before shutdown.</p>
+          </div>
+          
+          <div class="form-group">
+            <label>Backup Frequency</label>
+            <select id="schedule-type" class="form-control" onchange="updateScheduleOptions()">
+              <option value="hourly">Hourly</option>
+              <option value="daily" selected>Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="custom">Custom (Cron)</option>
+            </select>
+          </div>
+          
+          <div id="schedule-time-options">
+            <div class="form-row">
+              <div class="form-group" id="schedule-day-group" style="display: none;">
+                <label>Day of Week</label>
+                <select id="schedule-day" class="form-control">
+                  <option value="0">Monday</option>
+                  <option value="1">Tuesday</option>
+                  <option value="2">Wednesday</option>
+                  <option value="3">Thursday</option>
+                  <option value="4">Friday</option>
+                  <option value="5">Saturday</option>
+                  <option value="6">Sunday</option>
+                </select>
+              </div>
+              <div class="form-group" id="schedule-hour-group">
+                <label>Hour (0-23)</label>
+                <input type="number" id="schedule-hour" class="form-control" min="0" max="23" value="3">
+              </div>
+              <div class="form-group">
+                <label>Minute (0-59)</label>
+                <input type="number" id="schedule-minute" class="form-control" min="0" max="59" value="0">
+              </div>
+            </div>
+          </div>
+          
+          <div id="schedule-cron-group" class="form-group" style="display: none;">
+            <label>Cron Expression</label>
+            <input type="text" id="schedule-cron" class="form-control" placeholder="0 3 * * *">
+            <small class="form-help">Format: minute hour day month day-of-week</small>
+          </div>
+          
+          <div class="form-group">
+            <label>Maximum Backups to Keep</label>
+            <input type="number" id="schedule-max-backups" class="form-control" min="1" max="100" value="7">
+            <small class="form-help">Older scheduled backups will be automatically deleted</small>
+          </div>
+          
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="schedule-stop-server" checked>
+              Stop server before backup (recommended for data integrity)
+            </label>
+          </div>
+          
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="schedule-restart-after" checked>
+              Restart server after backup completes
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="saveSchedule()">Save Schedule</button>
+          <button class="btn" onclick="closeScheduleModal()">Cancel</button>
         </div>
       </div>
     </div>

@@ -19,6 +19,9 @@ Werkzeug>=3.0.0
 # HTTP requests for JAR downloads
 requests>=2.31.0
 
+# Task scheduling for automated backups
+APScheduler>=3.10.0
+
 # WSGI server for production
 gunicorn>=21.2.0
 eventlet>=0.33.3

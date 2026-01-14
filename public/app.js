@@ -168,6 +168,23 @@ function connectWebSocket() {
   socket.on('connect_error', (error) => {
     console.error('Socket.IO error:', error);
   });
+  
+  // Listen for scheduled backup events
+  socket.on('backup_completed', (data) => {
+    if (data.scheduled) {
+      showNotification(`📅 Scheduled backup completed for server: ${data.backup}`, 'success');
+      // Refresh backup list if we're on that server
+      if (data.serverId === currentServerId) {
+        loadBackups();
+      }
+    }
+  });
+  
+  socket.on('backup_failed', (data) => {
+    if (data.scheduled) {
+      showNotification(`❌ Scheduled backup failed: ${data.error}`, 'error');
+    }
+  });
 }
 
 // ==================== API Functions ====================
@@ -1699,6 +1716,9 @@ async function uploadFile(file) {
 async function loadBackups() {
   if (!currentServerId) return;
   
+  // Load schedule status
+  loadBackupSchedule();
+  
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/backups`);
     const backupList = document.getElementById('backup-list');
@@ -1711,8 +1731,9 @@ async function loadBackups() {
     
     data.backups.forEach(backup => {
       const row = document.createElement('tr');
+      const isScheduled = backup.name.startsWith('scheduled-backup-');
       row.innerHTML = `
-        <td>${escapeHtml(backup.name)}</td>
+        <td>${isScheduled ? '📅 ' : ''}${escapeHtml(backup.name)}</td>
         <td>${formatBytes(backup.size)}</td>
         <td>${new Date(backup.created).toLocaleString()}</td>
         <td>
@@ -1788,6 +1809,170 @@ async function deleteBackup(name) {
     loadBackups();
   } catch (error) {
     console.error('Failed to delete backup:', error);
+  }
+}
+
+// ==================== Backup Scheduling ====================
+
+async function loadBackupSchedule() {
+  if (!currentServerId) return;
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/backups/schedule`);
+    const statusBanner = document.getElementById('schedule-status');
+    
+    if (data.schedule && data.schedule.enabled) {
+      const schedule = data.schedule;
+      let scheduleText = '';
+      
+      switch (schedule.type) {
+        case 'hourly':
+          scheduleText = `Every hour at :${String(schedule.minute).padStart(2, '0')}`;
+          break;
+        case 'daily':
+          scheduleText = `Daily at ${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`;
+          break;
+        case 'weekly':
+          const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+          scheduleText = `Every ${days[schedule.dayOfWeek]} at ${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`;
+          break;
+        case 'custom':
+          scheduleText = `Custom: ${schedule.cron}`;
+          break;
+      }
+      
+      document.getElementById('schedule-text').textContent = `Scheduled: ${scheduleText}`;
+      
+      if (schedule.nextRun) {
+        const nextRun = new Date(schedule.nextRun);
+        document.getElementById('next-backup-text').textContent = `Next: ${nextRun.toLocaleString()}`;
+      } else {
+        document.getElementById('next-backup-text').textContent = '';
+      }
+      
+      statusBanner.style.display = 'flex';
+    } else {
+      statusBanner.style.display = 'none';
+    }
+  } catch (error) {
+    console.error('Failed to load backup schedule:', error);
+    document.getElementById('schedule-status').style.display = 'none';
+  }
+}
+
+function openScheduleModal() {
+  const modal = document.getElementById('schedule-modal');
+  modal.classList.add('active');
+  
+  // Load current schedule if exists
+  loadScheduleIntoModal();
+}
+
+function closeScheduleModal() {
+  document.getElementById('schedule-modal').classList.remove('active');
+}
+
+async function loadScheduleIntoModal() {
+  if (!currentServerId) return;
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/backups/schedule`);
+    
+    if (data.schedule) {
+      const s = data.schedule;
+      document.getElementById('schedule-type').value = s.type || 'daily';
+      document.getElementById('schedule-hour').value = s.hour || 3;
+      document.getElementById('schedule-minute').value = s.minute || 0;
+      document.getElementById('schedule-day').value = s.dayOfWeek || 0;
+      document.getElementById('schedule-cron').value = s.cron || '';
+      document.getElementById('schedule-max-backups').value = s.maxBackups || 7;
+      document.getElementById('schedule-stop-server').checked = s.stopServer !== false;
+      document.getElementById('schedule-restart-after').checked = s.restartAfter !== false;
+      
+      updateScheduleOptions();
+    }
+  } catch (error) {
+    console.error('Failed to load schedule into modal:', error);
+  }
+}
+
+function updateScheduleOptions() {
+  const type = document.getElementById('schedule-type').value;
+  const dayGroup = document.getElementById('schedule-day-group');
+  const hourGroup = document.getElementById('schedule-hour-group');
+  const timeOptions = document.getElementById('schedule-time-options');
+  const cronGroup = document.getElementById('schedule-cron-group');
+  
+  // Reset visibility
+  dayGroup.style.display = 'none';
+  hourGroup.style.display = 'block';
+  timeOptions.style.display = 'block';
+  cronGroup.style.display = 'none';
+  
+  switch (type) {
+    case 'hourly':
+      hourGroup.style.display = 'none';
+      break;
+    case 'daily':
+      // Default - hour and minute shown
+      break;
+    case 'weekly':
+      dayGroup.style.display = 'block';
+      break;
+    case 'custom':
+      timeOptions.style.display = 'none';
+      cronGroup.style.display = 'block';
+      break;
+  }
+}
+
+async function saveSchedule() {
+  if (!currentServerId) return;
+  
+  const type = document.getElementById('schedule-type').value;
+  const scheduleData = {
+    enabled: true,
+    type: type,
+    hour: parseInt(document.getElementById('schedule-hour').value) || 3,
+    minute: parseInt(document.getElementById('schedule-minute').value) || 0,
+    dayOfWeek: parseInt(document.getElementById('schedule-day').value) || 0,
+    cron: document.getElementById('schedule-cron').value,
+    maxBackups: parseInt(document.getElementById('schedule-max-backups').value) || 7,
+    stopServer: document.getElementById('schedule-stop-server').checked,
+    restartAfter: document.getElementById('schedule-restart-after').checked
+  };
+  
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/schedule`, {
+      method: 'POST',
+      body: JSON.stringify(scheduleData)
+    });
+    
+    if (result.success) {
+      showNotification('Backup schedule saved successfully!', 'success');
+      closeScheduleModal();
+      loadBackupSchedule();
+    }
+  } catch (error) {
+    console.error('Failed to save schedule:', error);
+    showNotification('Failed to save backup schedule', 'error');
+  }
+}
+
+async function deleteSchedule() {
+  if (!currentServerId) return;
+  if (!confirm('Are you sure you want to disable the backup schedule?')) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/backups/schedule`, {
+      method: 'DELETE'
+    });
+    
+    showNotification('Backup schedule disabled', 'info');
+    loadBackupSchedule();
+  } catch (error) {
+    console.error('Failed to delete schedule:', error);
+    showNotification('Failed to disable backup schedule', 'error');
   }
 }
 
@@ -2262,6 +2447,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Backup controls
   document.getElementById('create-backup-btn').onclick = createBackup;
+  document.getElementById('schedule-backup-btn').onclick = openScheduleModal;
   document.getElementById('refresh-backups-btn').onclick = loadBackups;
   
   // Close modals on background click
@@ -2271,6 +2457,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   document.getElementById('file-editor-modal').onclick = (e) => {
     if (e.target.id === 'file-editor-modal') closeFileEditor();
+  };
+  
+  document.getElementById('schedule-modal').onclick = (e) => {
+    if (e.target.id === 'schedule-modal') closeScheduleModal();
   };
 });
 
