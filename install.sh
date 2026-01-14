@@ -80,7 +80,7 @@ install_dependencies() {
     apt-get upgrade -y
 
     print_info "Installing required packages..."
-    apt-get install -y curl wget git nginx openjdk-17-jre-headless python3 python3-pip python3-venv
+    apt-get install -y curl wget git nginx openjdk-21-jre-headless python3 python3-pip python3-venv
 
     echo ""
     print_success "Dependencies installed"
