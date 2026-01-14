@@ -1122,7 +1122,7 @@ class ServerManager:
                 return False, str(e)
     
     def stop_server(self, server_id):
-        """Stop a Minecraft server"""
+        """Stop a Minecraft server gracefully"""
         with self.lock:
             if server_id not in self.servers:
                 return False, "Server is not running"
@@ -1134,6 +1134,21 @@ class ServerManager:
             
             instance.stop()
             return True, "Server stopping..."
+    
+    def kill_server(self, server_id):
+        """Forcefully kill a Minecraft server process"""
+        with self.lock:
+            if server_id not in self.servers:
+                return False, "Server is not running"
+            
+            instance = self.servers[server_id]
+            if not instance.is_running():
+                del self.servers[server_id]
+                return False, "Server is not running"
+            
+            instance.kill()
+            del self.servers[server_id]
+            return True, "Server killed"
     
     def send_command(self, server_id, command):
         """Send a command to a running server"""
@@ -1174,32 +1189,54 @@ class ServerInstance:
         
         args = ['java'] + self.java_args.split() + ['-jar', self.executable, 'nogui']
         
+        # Set environment to reduce buffering
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        
         self.process = subprocess.Popen(
             args,
             cwd=str(self.server_path),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
+            stderr=subprocess.STDOUT,  # Merge stderr into stdout for unified output
+            text=False,  # Use binary mode for better control
+            bufsize=0,  # Unbuffered
+            env=env
         )
         
-        # Start output reader threads
-        threading.Thread(target=self._read_output, args=('stdout',), daemon=True).start()
-        threading.Thread(target=self._read_output, args=('stderr',), daemon=True).start()
+        # Start single unified output reader thread
+        threading.Thread(target=self._read_output_unbuffered, daemon=True).start()
         threading.Thread(target=self._monitor_process, daemon=True).start()
     
-    def _read_output(self, stream_type):
-        """Read output from the process and broadcast to clients"""
-        stream = self.process.stdout if stream_type == 'stdout' else self.process.stderr
+    def _read_output_unbuffered(self):
+        """Read output from the process in real-time and broadcast to clients"""
         try:
-            for line in iter(stream.readline, ''):
+            buffer = b''
+            while self.process.poll() is None:
+                # Read available data (non-blocking style with small chunks)
+                chunk = self.process.stdout.read(1)
+                if chunk:
+                    buffer += chunk
+                    # Check for newline to send complete lines
+                    if chunk == b'\n':
+                        try:
+                            line = buffer.decode('utf-8', errors='replace')
+                        except:
+                            line = buffer.decode('latin-1', errors='replace')
+                        self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
+                        self._add_to_buffer(line)
+                        buffer = b''
+            
+            # Read any remaining output after process exits
+            remaining = self.process.stdout.read()
+            if remaining:
+                try:
+                    line = remaining.decode('utf-8', errors='replace')
+                except:
+                    line = remaining.decode('latin-1', errors='replace')
                 if line:
-                    msg_type = 'output' if stream_type == 'stdout' else 'error'
-                    self._broadcast({'type': msg_type, 'data': line, 'serverId': self.server_id})
+                    self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
                     self._add_to_buffer(line)
-                if self.process.poll() is not None:
-                    break
         except Exception as e:
             self._broadcast({'type': 'error', 'data': f'Stream error: {str(e)}\n', 'serverId': self.server_id})
     
@@ -1228,20 +1265,27 @@ class ServerInstance:
     def send_command(self, command):
         """Send a command to the server"""
         if self.is_running():
-            self.process.stdin.write(command + '\n')
+            # Write as bytes since we're using binary mode
+            self.process.stdin.write((command + '\n').encode('utf-8'))
             self.process.stdin.flush()
     
     def stop(self):
-        """Stop the server gracefully"""
+        """Stop the server gracefully by sending 'stop' command"""
         if self.is_running():
             self.send_command('stop')
             
             def force_kill():
-                time.sleep(15)
+                time.sleep(30)
                 if self.is_running():
                     self.process.kill()
             
             threading.Thread(target=force_kill, daemon=True).start()
+    
+    def kill(self):
+        """Forcefully kill the server process immediately"""
+        if self.is_running():
+            self.process.kill()
+            self.process.wait()
     
     def get_recent_output(self, lines=100):
         """Get recent output from the buffer"""
@@ -1812,8 +1856,17 @@ def start_server(server_id):
 @app.route('/api/servers/<server_id>/stop', methods=['POST'])
 @server_access_required
 def stop_server(server_id):
-    """Stop a server"""
+    """Stop a server gracefully"""
     success, message = server_manager.stop_server(server_id)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 400
+
+@app.route('/api/servers/<server_id>/kill', methods=['POST'])
+@server_access_required
+def kill_server(server_id):
+    """Forcefully kill a server process"""
+    success, message = server_manager.kill_server(server_id)
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 400

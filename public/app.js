@@ -140,7 +140,7 @@ function connectWebSocket() {
     // Subscribe to current server if selected
     if (currentServerId) {
       // Clear terminal before re-subscribing to avoid duplicate logs
-      document.getElementById('terminal-output').textContent = '';
+      clearTerminal();
       socket.emit('subscribe', { serverId: currentServerId });
     }
   });
@@ -260,7 +260,7 @@ async function selectServer(serverId) {
   renderServerList();
   
   // Clear terminal
-  document.getElementById('terminal-output').textContent = '';
+  clearTerminal();
   
   // Subscribe to server output
   if (socket && socket.connected) {
@@ -293,6 +293,7 @@ function updateServerStatus(isRunning) {
   const text = document.getElementById('status-text');
   const startBtn = document.getElementById('start-btn');
   const stopBtn = document.getElementById('stop-btn');
+  const killBtn = document.getElementById('kill-btn');
   const terminalInput = document.getElementById('terminal-input');
   const sendBtn = document.getElementById('send-btn');
   
@@ -301,6 +302,7 @@ function updateServerStatus(isRunning) {
     text.textContent = 'Running';
     startBtn.disabled = true;
     stopBtn.disabled = false;
+    killBtn.disabled = false;
     terminalInput.disabled = false;
     sendBtn.disabled = false;
   } else {
@@ -308,6 +310,7 @@ function updateServerStatus(isRunning) {
     text.textContent = 'Stopped';
     startBtn.disabled = false;
     stopBtn.disabled = true;
+    killBtn.disabled = true;
     terminalInput.disabled = true;
     sendBtn.disabled = true;
   }
@@ -342,7 +345,7 @@ async function startServer() {
     
     // All checks passed, start the server
     // Clear terminal before starting
-    document.getElementById('terminal-output').textContent = '';
+    clearTerminal();
     
     const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
     if (result.success) {
@@ -496,8 +499,26 @@ async function stopServer() {
   try {
     const result = await apiRequest(`/api/servers/${currentServerId}/stop`, { method: 'POST' });
     if (result.success) {
-      appendTerminalOutput('Stopping server...\n');
+      appendTerminalOutput('Stopping server gracefully...\n');
       setTimeout(() => loadServerDetails(), 2000);
+    }
+  } catch (error) {
+    // Error already shown by apiRequest
+  }
+}
+
+async function killServer() {
+  if (!currentServerId) return;
+  
+  if (!confirm('Are you sure you want to forcefully kill the server?\n\nThis will immediately terminate the process without saving. Use only if the server is unresponsive.')) {
+    return;
+  }
+  
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/kill`, { method: 'POST' });
+    if (result.success) {
+      appendTerminalOutput('Server process killed.\n');
+      updateServerStatus(false);
     }
   } catch (error) {
     // Error already shown by apiRequest
@@ -1015,10 +1036,31 @@ async function confirmDeleteServer(deleteFiles) {
 
 // ==================== Terminal Functions ====================
 
+// Use requestAnimationFrame to batch DOM updates and prevent flickering
+let terminalBuffer = '';
+let terminalUpdatePending = false;
+
 function appendTerminalOutput(text) {
+  terminalBuffer += text;
+  
+  if (!terminalUpdatePending) {
+    terminalUpdatePending = true;
+    requestAnimationFrame(() => {
+      const terminal = document.getElementById('terminal-output');
+      // Append text directly without re-rendering entire content
+      terminal.textContent += terminalBuffer;
+      terminal.scrollTop = terminal.scrollHeight;
+      terminalBuffer = '';
+      terminalUpdatePending = false;
+    });
+  }
+}
+
+function clearTerminal() {
   const terminal = document.getElementById('terminal-output');
-  terminal.textContent += text;
-  terminal.scrollTop = terminal.scrollHeight;
+  terminal.textContent = '';
+  terminalBuffer = '';
+  terminalUpdatePending = false;
 }
 
 function sendCommand(command) {
@@ -1423,6 +1465,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Server actions
   document.getElementById('start-btn').onclick = startServer;
   document.getElementById('stop-btn').onclick = stopServer;
+  document.getElementById('kill-btn').onclick = killServer;
   document.getElementById('edit-server-btn').onclick = openEditServerModal;
   document.getElementById('delete-server-btn').onclick = deleteServer;
   
