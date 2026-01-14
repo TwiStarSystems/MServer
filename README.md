@@ -179,11 +179,16 @@ sudo journalctl -u mservercontroller -f
 
 - The application runs on localhost by default and should be accessed through Nginx
 - File operations are restricted to the configured server directory
-- Path traversal attacks are prevented
+- Path traversal attacks are prevented with security checks
+- Rate limiting is enabled on all API endpoints:
+  - General API: 100 requests per 15 minutes per IP
+  - Upload endpoint: 10 requests per 15 minutes per IP
+  - Backup creation: 5 requests per 15 minutes per IP
 - Consider setting up SSL/TLS certificates for production use
 - Implement firewall rules to restrict access to the web interface
 - Change default ports if needed
 - Regular backups are recommended
+- All dependencies are regularly updated to patched versions
 
 ## Troubleshooting
 
