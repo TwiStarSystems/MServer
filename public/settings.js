@@ -2,6 +2,7 @@
 
 let socket = null;
 let statsChart = null;
+let currentUser = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Check authentication
@@ -11,15 +12,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       window.location.href = '/login.html';
       return;
     }
-    const user = await response.json();
-    if (user.role !== 'admin') {
+    currentUser = await response.json();
+    if (currentUser.role !== 'admin') {
       window.location.href = '/';
       return;
     }
+    // Update user UI in top bar
+    updateUserUI();
   } catch (err) {
     window.location.href = '/login.html';
     return;
   }
+  
+  // Load branding for page
+  loadPageBranding();
   
   // Initialize Socket.IO for real-time stats
   socket = io();
@@ -51,13 +57,66 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('branding-form').addEventListener('submit', saveBranding);
   
   // Live preview for branding
-  document.getElementById('site-title').addEventListener('input', updateBrandingPreview);
+  document.getElementById('branding-site-title').addEventListener('input', updateBrandingPreview);
   document.getElementById('site-icon').addEventListener('input', updateBrandingPreview);
   document.getElementById('footer-addition').addEventListener('input', updateBrandingPreview);
   
   // Initialize chart
   initChart();
 });
+
+// ==================== User UI Functions ====================
+
+function updateUserUI() {
+  const userInfo = document.getElementById('user-info');
+  if (userInfo && currentUser) {
+    userInfo.innerHTML = `
+      <div class="user-display">
+        <span class="user-name">${escapeHtml(currentUser.username)}</span>
+        <span class="user-role ${currentUser.role}">${currentUser.role}</span>
+      </div>
+      <div class="user-actions">
+        <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
+      </div>
+    `;
+  }
+}
+
+async function loadPageBranding() {
+  try {
+    const response = await fetch('/api/settings/branding');
+    if (response.ok) {
+      const branding = await response.json();
+      
+      // Update page title
+      const siteTitle = branding.siteTitle || '🎮 MServerController';
+      document.getElementById('site-title').textContent = siteTitle;
+      document.title = `Settings - ${siteTitle.replace(/^🎮\s*/, '')}`;
+      
+      // Update favicon
+      if (branding.siteIcon) {
+        let favicon = document.querySelector("link[rel~='icon']");
+        if (!favicon) {
+          favicon = document.createElement('link');
+          favicon.rel = 'icon';
+          document.head.appendChild(favicon);
+        }
+        favicon.href = branding.siteIcon;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load page branding:', err);
+  }
+}
+
+async function logout() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch (err) {
+    console.error('Logout error:', err);
+  }
+  window.location.href = '/login.html';
+}
 
 // ==================== Stats Functions ====================
 
@@ -221,7 +280,7 @@ async function loadBranding() {
     if (response.ok) {
       const branding = await response.json();
       
-      document.getElementById('site-title').value = branding.siteTitle || '';
+      document.getElementById('branding-site-title').value = branding.siteTitle || '';
       document.getElementById('site-icon').value = branding.siteIcon || '';
       document.getElementById('footer-addition').value = branding.footerAddition || '';
       
@@ -233,7 +292,7 @@ async function loadBranding() {
 }
 
 function updateBrandingPreview() {
-  const title = document.getElementById('site-title').value || 'MServerController';
+  const title = document.getElementById('branding-site-title').value || 'MServerController';
   const icon = document.getElementById('site-icon').value;
   const footerAddition = document.getElementById('footer-addition').value;
   
@@ -258,7 +317,7 @@ async function saveBranding(e) {
   e.preventDefault();
   
   const data = {
-    siteTitle: document.getElementById('site-title').value,
+    siteTitle: document.getElementById('branding-site-title').value,
     siteIcon: document.getElementById('site-icon').value,
     footerAddition: document.getElementById('footer-addition').value
   };
@@ -272,8 +331,10 @@ async function saveBranding(e) {
     
     if (response.ok) {
       alert('Branding saved successfully!');
-      // Update page title
-      document.title = data.siteTitle || 'Settings - MServerController';
+      // Update page title and header
+      const siteTitle = data.siteTitle || '🎮 MServerController';
+      document.getElementById('site-title').textContent = siteTitle;
+      document.title = `Settings - ${siteTitle.replace(/^🎮\s*/, '')}`;
     } else {
       const err = await response.json();
       alert('Failed to save branding: ' + (err.error || 'Unknown error'));
