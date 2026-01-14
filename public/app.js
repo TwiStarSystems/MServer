@@ -1175,6 +1175,12 @@ function createFileRow(file, filePath) {
 async function openFileEditor(filePath) {
   if (!currentServerId) return;
   
+  // Check if this is an NBT file
+  if (isNbtFile(filePath)) {
+    await openNbtEditor(filePath);
+    return;
+  }
+  
   try {
     currentEditingFile = filePath;
     const data = await apiRequest(`/api/servers/${currentServerId}/files/read?path=${encodeURIComponent(filePath)}`);
@@ -1207,6 +1213,400 @@ async function saveFile() {
 function closeFileEditor() {
   document.getElementById('file-editor-modal').classList.remove('active');
   currentEditingFile = '';
+}
+
+// ==================== NBT Editor ====================
+
+let currentNbtFile = '';
+let currentNbtData = null;
+let currentNbtCompression = 'gzip';
+let currentNbtEditPath = [];
+let currentNbtAddParentPath = [];
+
+const NBT_TYPE_NAMES = {
+  0: 'End', 1: 'Byte', 2: 'Short', 3: 'Int', 4: 'Long',
+  5: 'Float', 6: 'Double', 7: 'ByteArray', 8: 'String',
+  9: 'List', 10: 'Compound', 11: 'IntArray', 12: 'LongArray'
+};
+
+const NBT_TYPE_ICONS = {
+  1: '🔢', 2: '🔢', 3: '🔢', 4: '🔢', 5: '🔢', 6: '🔢',
+  7: '📊', 8: '📝', 9: '📋', 10: '📦', 11: '📊', 12: '📊'
+};
+
+function isNbtFile(filename) {
+  const ext = filename.toLowerCase().split('.').pop();
+  return ['dat', 'dat_old', 'dat_mcr', 'nbt', 'schematic'].includes(ext);
+}
+
+async function openNbtEditor(filePath) {
+  if (!currentServerId) return;
+  
+  try {
+    currentNbtFile = filePath;
+    const response = await apiRequest(`/api/servers/${currentServerId}/nbt/read?path=${encodeURIComponent(filePath)}`);
+    
+    if (response.success) {
+      currentNbtData = response.data;
+      currentNbtCompression = response.compression || 'gzip';
+      
+      document.getElementById('nbt-editor-title').textContent = `NBT Editor: ${filePath}`;
+      document.getElementById('nbt-compression-info').textContent = `Compression: ${currentNbtCompression || 'none'}`;
+      
+      renderNbtTree();
+      document.getElementById('nbt-editor-modal').classList.add('active');
+    }
+  } catch (error) {
+    console.error('Failed to open NBT file:', error);
+    showNotification('Failed to open NBT file: ' + error.message, 'error');
+  }
+}
+
+function renderNbtTree() {
+  const container = document.getElementById('nbt-tree');
+  container.innerHTML = '';
+  
+  if (currentNbtData) {
+    container.appendChild(createNbtNode(currentNbtData, []));
+  }
+}
+
+function createNbtNode(tag, path) {
+  const node = document.createElement('div');
+  node.className = 'nbt-node';
+  
+  const header = document.createElement('div');
+  header.className = 'nbt-node-header';
+  
+  const isExpandable = tag.type === 10 || tag.type === 9; // Compound or List
+  
+  if (isExpandable) {
+    const toggle = document.createElement('span');
+    toggle.className = 'nbt-toggle expanded';
+    toggle.textContent = '▼';
+    toggle.onclick = (e) => {
+      e.stopPropagation();
+      const children = node.querySelector('.nbt-children');
+      if (children) {
+        children.classList.toggle('collapsed');
+        toggle.textContent = children.classList.contains('collapsed') ? '▶' : '▼';
+        toggle.classList.toggle('expanded', !children.classList.contains('collapsed'));
+      }
+    };
+    header.appendChild(toggle);
+  } else {
+    const spacer = document.createElement('span');
+    spacer.className = 'nbt-toggle-spacer';
+    header.appendChild(spacer);
+  }
+  
+  const icon = document.createElement('span');
+  icon.className = 'nbt-icon';
+  icon.textContent = NBT_TYPE_ICONS[tag.type] || '❓';
+  header.appendChild(icon);
+  
+  const name = document.createElement('span');
+  name.className = 'nbt-name';
+  name.textContent = tag.name || '(unnamed)';
+  header.appendChild(name);
+  
+  const type = document.createElement('span');
+  type.className = 'nbt-type';
+  type.textContent = `[${NBT_TYPE_NAMES[tag.type] || 'Unknown'}]`;
+  header.appendChild(type);
+  
+  // Show value preview for simple types
+  if (!isExpandable && tag.type !== 7 && tag.type !== 11 && tag.type !== 12) {
+    const value = document.createElement('span');
+    value.className = 'nbt-value';
+    value.textContent = `: ${formatNbtValue(tag.value, tag.type)}`;
+    header.appendChild(value);
+    
+    // Make editable
+    header.classList.add('nbt-editable');
+    header.onclick = () => openNbtValueEditor(tag, path);
+  } else if (tag.type === 7 || tag.type === 11 || tag.type === 12) {
+    // Array types - show count
+    const value = document.createElement('span');
+    value.className = 'nbt-value nbt-array-info';
+    const arrLen = Array.isArray(tag.value) ? tag.value.length : 0;
+    value.textContent = `: [${arrLen} entries]`;
+    header.appendChild(value);
+  }
+  
+  // Action buttons
+  const actions = document.createElement('div');
+  actions.className = 'nbt-actions';
+  
+  if (isExpandable) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-small nbt-action-btn';
+    addBtn.textContent = '+';
+    addBtn.title = 'Add child tag';
+    addBtn.onclick = (e) => {
+      e.stopPropagation();
+      openNbtAddModal(path);
+    };
+    actions.appendChild(addBtn);
+  }
+  
+  if (path.length > 0) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn btn-danger btn-small nbt-action-btn';
+    deleteBtn.textContent = '×';
+    deleteBtn.title = 'Delete tag';
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      deleteNbtTag(path);
+    };
+    actions.appendChild(deleteBtn);
+  }
+  
+  header.appendChild(actions);
+  node.appendChild(header);
+  
+  // Render children for compound and list
+  if (tag.type === 10 && Array.isArray(tag.value)) {
+    const children = document.createElement('div');
+    children.className = 'nbt-children';
+    tag.value.forEach((child, index) => {
+      children.appendChild(createNbtNode(child, [...path, child.name]));
+    });
+    node.appendChild(children);
+  } else if (tag.type === 9 && tag.value && tag.value.items) {
+    const children = document.createElement('div');
+    children.className = 'nbt-children';
+    tag.value.items.forEach((item, index) => {
+      const listItem = {
+        type: item.type,
+        name: `[${index}]`,
+        value: item.value
+      };
+      children.appendChild(createNbtNode(listItem, [...path, index.toString()]));
+    });
+    node.appendChild(children);
+  }
+  
+  return node;
+}
+
+function formatNbtValue(value, type) {
+  if (type === 8) return `"${value}"`;
+  if (type === 5 || type === 6) return value.toFixed(4);
+  return String(value);
+}
+
+function openNbtValueEditor(tag, path) {
+  currentNbtEditPath = path;
+  
+  document.getElementById('nbt-value-label').textContent = tag.name || 'Value';
+  document.getElementById('nbt-value-type').textContent = `Type: ${NBT_TYPE_NAMES[tag.type]}`;
+  document.getElementById('nbt-value-input').value = tag.value;
+  document.getElementById('nbt-value-input').dataset.type = tag.type;
+  
+  document.getElementById('nbt-value-modal').classList.add('active');
+}
+
+function closeNbtValueModal() {
+  document.getElementById('nbt-value-modal').classList.remove('active');
+  currentNbtEditPath = [];
+}
+
+function saveNbtValue() {
+  const input = document.getElementById('nbt-value-input');
+  let value = input.value;
+  const type = parseInt(input.dataset.type);
+  
+  // Convert value based on type
+  switch (type) {
+    case 1: value = parseInt(value); break; // Byte
+    case 2: value = parseInt(value); break; // Short
+    case 3: value = parseInt(value); break; // Int
+    case 4: value = parseInt(value); break; // Long (may lose precision)
+    case 5: value = parseFloat(value); break; // Float
+    case 6: value = parseFloat(value); break; // Double
+    case 8: value = String(value); break; // String
+  }
+  
+  // Update the value in the data structure
+  updateNbtDataValue(currentNbtData, currentNbtEditPath, value);
+  
+  // Re-render and close modal
+  renderNbtTree();
+  closeNbtValueModal();
+  showNotification('Value updated (save to apply)', 'info');
+}
+
+function updateNbtDataValue(data, path, newValue) {
+  if (path.length === 0) return;
+  
+  let current = data;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    if (current.type === 10) { // Compound
+      current = current.value.find(c => c.name === key);
+    } else if (current.type === 9) { // List
+      current = current.value.items[parseInt(key)];
+    }
+  }
+  
+  const finalKey = path[path.length - 1];
+  if (current.type === 10) {
+    const target = current.value.find(c => c.name === finalKey);
+    if (target) target.value = newValue;
+  } else if (current.type === 9) {
+    current.value.items[parseInt(finalKey)].value = newValue;
+  } else {
+    current.value = newValue;
+  }
+}
+
+function openNbtAddModal(parentPath) {
+  currentNbtAddParentPath = parentPath;
+  document.getElementById('nbt-add-name').value = '';
+  document.getElementById('nbt-add-value').value = '';
+  document.getElementById('nbt-add-type').value = '8'; // Default to String
+  updateNbtAddValue();
+  document.getElementById('nbt-add-modal').classList.add('active');
+}
+
+function closeNbtAddModal() {
+  document.getElementById('nbt-add-modal').classList.remove('active');
+  currentNbtAddParentPath = [];
+}
+
+function updateNbtAddValue() {
+  const type = parseInt(document.getElementById('nbt-add-type').value);
+  const valueGroup = document.getElementById('nbt-add-value-group');
+  
+  // Hide value input for compound type
+  valueGroup.style.display = type === 10 ? 'none' : 'block';
+}
+
+function confirmAddNbtTag() {
+  const name = document.getElementById('nbt-add-name').value.trim();
+  const type = parseInt(document.getElementById('nbt-add-type').value);
+  let value = document.getElementById('nbt-add-value').value;
+  
+  if (!name) {
+    alert('Please enter a tag name');
+    return;
+  }
+  
+  // Create the new tag
+  let newTag = { type, name };
+  
+  switch (type) {
+    case 1: case 2: case 3: case 4: newTag.value = parseInt(value) || 0; break;
+    case 5: case 6: newTag.value = parseFloat(value) || 0.0; break;
+    case 8: newTag.value = value || ''; break;
+    case 10: newTag.value = []; break; // Empty compound
+  }
+  
+  // Find parent and add tag
+  addNbtTagToData(currentNbtData, currentNbtAddParentPath, newTag);
+  
+  renderNbtTree();
+  closeNbtAddModal();
+  showNotification('Tag added (save to apply)', 'info');
+}
+
+function addNbtTagToData(data, parentPath, newTag) {
+  let current = data;
+  
+  for (const key of parentPath) {
+    if (current.type === 10) {
+      current = current.value.find(c => c.name === key);
+    } else if (current.type === 9) {
+      current = current.value.items[parseInt(key)];
+    }
+  }
+  
+  if (current.type === 10) {
+    current.value.push(newTag);
+  } else if (current.type === 9) {
+    current.value.items.push({ type: newTag.type, value: newTag.value });
+  }
+}
+
+function deleteNbtTag(path) {
+  if (!confirm('Are you sure you want to delete this tag?')) return;
+  
+  deleteNbtTagFromData(currentNbtData, path);
+  renderNbtTree();
+  showNotification('Tag deleted (save to apply)', 'info');
+}
+
+function deleteNbtTagFromData(data, path) {
+  if (path.length === 0) return;
+  
+  let current = data;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    if (current.type === 10) {
+      current = current.value.find(c => c.name === key);
+    } else if (current.type === 9) {
+      current = current.value.items[parseInt(key)];
+    }
+  }
+  
+  const finalKey = path[path.length - 1];
+  if (current.type === 10) {
+    current.value = current.value.filter(c => c.name !== finalKey);
+  } else if (current.type === 9) {
+    current.value.items.splice(parseInt(finalKey), 1);
+  }
+}
+
+async function saveNbtFile() {
+  if (!currentServerId || !currentNbtFile || !currentNbtData) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/nbt/write`, {
+      method: 'POST',
+      body: JSON.stringify({
+        path: currentNbtFile,
+        data: currentNbtData,
+        compression: currentNbtCompression
+      })
+    });
+    
+    closeNbtEditor();
+    showNotification('NBT file saved successfully', 'success');
+  } catch (error) {
+    console.error('Failed to save NBT file:', error);
+    showNotification('Failed to save NBT file: ' + error.message, 'error');
+  }
+}
+
+function closeNbtEditor() {
+  document.getElementById('nbt-editor-modal').classList.remove('active');
+  currentNbtFile = '';
+  currentNbtData = null;
+}
+
+function expandAllNbt() {
+  document.querySelectorAll('.nbt-children').forEach(el => {
+    el.classList.remove('collapsed');
+  });
+  document.querySelectorAll('.nbt-toggle').forEach(el => {
+    el.textContent = '▼';
+    el.classList.add('expanded');
+  });
+}
+
+function collapseAllNbt() {
+  document.querySelectorAll('.nbt-children').forEach(el => {
+    el.classList.add('collapsed');
+  });
+  document.querySelectorAll('.nbt-toggle').forEach(el => {
+    el.textContent = '▶';
+    el.classList.remove('expanded');
+  });
+}
+
+function addNbtTag() {
+  openNbtAddModal([]);
 }
 
 async function createNewFile() {
@@ -1409,7 +1809,364 @@ function switchTab(tabName) {
     loadFiles(currentPath);
   } else if (tabName === 'backups') {
     loadBackups();
+  } else if (tabName === 'players') {
+    loadAllPlayerData();
   }
+}
+
+// ==================== Player Management ====================
+
+let currentEditingOpUuid = null;
+
+async function loadAllPlayerData() {
+  if (!currentServerId) return;
+  
+  await Promise.all([
+    loadOperators(),
+    loadPlayerData(),
+    loadWhitelist(),
+    loadBannedPlayers()
+  ]);
+}
+
+async function loadOperators() {
+  if (!currentServerId) return;
+  
+  const tbody = document.getElementById('ops-list');
+  tbody.innerHTML = '<tr><td colspan="5" class="empty-message">Loading...</td></tr>';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/ops`);
+    const ops = data.operators || [];
+    
+    if (ops.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-message">No operators configured</td></tr>';
+      return;
+    }
+    
+    tbody.innerHTML = ops.map(op => `
+      <tr>
+        <td><strong>${escapeHtml(op.name)}</strong></td>
+        <td class="uuid-cell">${escapeHtml(op.uuid)}</td>
+        <td>
+          <span class="level-badge level-${op.level}">Level ${op.level}</span>
+        </td>
+        <td>${op.bypassesPlayerLimit ? '✅' : '❌'}</td>
+        <td class="actions-cell">
+          <button class="btn btn-small" onclick="editOperator('${op.uuid}', '${escapeHtml(op.name)}', ${op.level}, ${op.bypassesPlayerLimit})">Edit</button>
+          <button class="btn btn-danger btn-small" onclick="removeOperator('${op.uuid}', '${escapeHtml(op.name)}')">Remove</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-message error">Failed to load operators</td></tr>';
+  }
+}
+
+async function loadPlayerData() {
+  if (!currentServerId) return;
+  
+  const tbody = document.getElementById('playerdata-list');
+  tbody.innerHTML = '<tr><td colspan="4" class="empty-message">Loading...</td></tr>';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/playerdata`);
+    const players = data.players || [];
+    
+    if (players.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-message">No player data found</td></tr>';
+      return;
+    }
+    
+    tbody.innerHTML = players.map(player => `
+      <tr>
+        <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
+        <td>${new Date(player.modified).toLocaleString()}</td>
+        <td>${formatBytes(player.size)}</td>
+        <td class="actions-cell">
+          <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}')">Edit NBT</button>
+          <button class="btn btn-small btn-success" onclick="makePlayerOp('${player.uuid}')">Make OP</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load player data</td></tr>';
+  }
+}
+
+async function loadWhitelist() {
+  if (!currentServerId) return;
+  
+  const tbody = document.getElementById('whitelist-list');
+  tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Loading...</td></tr>';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/whitelist`);
+    const whitelist = data.whitelist || [];
+    
+    if (whitelist.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Whitelist is empty</td></tr>';
+      return;
+    }
+    
+    tbody.innerHTML = whitelist.map(player => `
+      <tr>
+        <td><strong>${escapeHtml(player.name)}</strong></td>
+        <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
+        <td class="actions-cell">
+          <button class="btn btn-danger btn-small" onclick="removeFromWhitelist('${player.uuid}', '${escapeHtml(player.name)}')">Remove</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-message error">Failed to load whitelist</td></tr>';
+  }
+}
+
+async function loadBannedPlayers() {
+  if (!currentServerId) return;
+  
+  const tbody = document.getElementById('banned-list');
+  tbody.innerHTML = '<tr><td colspan="5" class="empty-message">Loading...</td></tr>';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/banned`);
+    const banned = data.banned || [];
+    
+    if (banned.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-message">No banned players</td></tr>';
+      return;
+    }
+    
+    tbody.innerHTML = banned.map(player => `
+      <tr>
+        <td><strong>${escapeHtml(player.name)}</strong></td>
+        <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
+        <td>${escapeHtml(player.reason || 'No reason')}</td>
+        <td>${escapeHtml(player.source || 'Unknown')}</td>
+        <td class="actions-cell">
+          <button class="btn btn-success btn-small" onclick="unbanPlayer('${player.uuid}', '${escapeHtml(player.name)}')">Unban</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-message error">Failed to load banned players</td></tr>';
+  }
+}
+
+// Operator Functions
+function openAddOpModal() {
+  document.getElementById('op-player-name').value = '';
+  document.getElementById('op-level').value = '4';
+  document.getElementById('op-bypass-limit').checked = false;
+  document.getElementById('add-op-modal').classList.add('active');
+}
+
+function closeAddOpModal() {
+  document.getElementById('add-op-modal').classList.remove('active');
+}
+
+async function addOperator() {
+  const name = document.getElementById('op-player-name').value.trim();
+  const level = parseInt(document.getElementById('op-level').value);
+  const bypassLimit = document.getElementById('op-bypass-limit').checked;
+  
+  if (!name) {
+    alert('Please enter a player name');
+    return;
+  }
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/ops`, {
+      method: 'POST',
+      body: JSON.stringify({ name, level, bypassesPlayerLimit: bypassLimit })
+    });
+    
+    closeAddOpModal();
+    showNotification(`${name} added as operator`, 'success');
+    loadOperators();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+function editOperator(uuid, name, level, bypassLimit) {
+  currentEditingOpUuid = uuid;
+  document.getElementById('edit-op-name').value = name;
+  document.getElementById('edit-op-level').value = level;
+  document.getElementById('edit-op-bypass').checked = bypassLimit;
+  document.getElementById('edit-op-modal').classList.add('active');
+}
+
+function closeEditOpModal() {
+  document.getElementById('edit-op-modal').classList.remove('active');
+  currentEditingOpUuid = null;
+}
+
+async function saveOperator() {
+  if (!currentEditingOpUuid) return;
+  
+  const level = parseInt(document.getElementById('edit-op-level').value);
+  const bypassLimit = document.getElementById('edit-op-bypass').checked;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/ops/${currentEditingOpUuid}`, {
+      method: 'PUT',
+      body: JSON.stringify({ level, bypassesPlayerLimit: bypassLimit })
+    });
+    
+    closeEditOpModal();
+    showNotification('Operator updated', 'success');
+    loadOperators();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function removeOperator(uuid, name) {
+  if (!confirm(`Remove ${name} from operators?`)) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/ops/${uuid}`, {
+      method: 'DELETE'
+    });
+    
+    showNotification(`${name} removed from operators`, 'success');
+    loadOperators();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function makePlayerOp(uuid) {
+  const name = prompt('Enter player name to make OP:');
+  if (!name) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/ops`, {
+      method: 'POST',
+      body: JSON.stringify({ name, level: 4, bypassesPlayerLimit: false })
+    });
+    
+    showNotification(`${name} added as operator`, 'success');
+    loadOperators();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// Whitelist Functions
+function openAddWhitelistModal() {
+  document.getElementById('whitelist-player-name').value = '';
+  document.getElementById('add-whitelist-modal').classList.add('active');
+}
+
+function closeAddWhitelistModal() {
+  document.getElementById('add-whitelist-modal').classList.remove('active');
+}
+
+async function addToWhitelist() {
+  const name = document.getElementById('whitelist-player-name').value.trim();
+  
+  if (!name) {
+    alert('Please enter a player name');
+    return;
+  }
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/whitelist`, {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+    
+    closeAddWhitelistModal();
+    showNotification(`${name} added to whitelist`, 'success');
+    loadWhitelist();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function removeFromWhitelist(uuid, name) {
+  if (!confirm(`Remove ${name} from whitelist?`)) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/whitelist/${uuid}`, {
+      method: 'DELETE'
+    });
+    
+    showNotification(`${name} removed from whitelist`, 'success');
+    loadWhitelist();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// Ban Functions
+function openBanPlayerModal() {
+  document.getElementById('ban-player-name').value = '';
+  document.getElementById('ban-reason').value = '';
+  document.getElementById('ban-player-modal').classList.add('active');
+}
+
+function closeBanPlayerModal() {
+  document.getElementById('ban-player-modal').classList.remove('active');
+}
+
+async function banPlayer() {
+  const name = document.getElementById('ban-player-name').value.trim();
+  const reason = document.getElementById('ban-reason').value.trim() || 'Banned by server administrator';
+  
+  if (!name) {
+    alert('Please enter a player name');
+    return;
+  }
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/banned`, {
+      method: 'POST',
+      body: JSON.stringify({ name, reason })
+    });
+    
+    closeBanPlayerModal();
+    showNotification(`${name} has been banned`, 'success');
+    loadBannedPlayers();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function unbanPlayer(uuid, name) {
+  if (!confirm(`Unban ${name}?`)) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/banned/${uuid}`, {
+      method: 'DELETE'
+    });
+    
+    showNotification(`${name} has been unbanned`, 'success');
+    loadBannedPlayers();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// Player NBT Editor
+async function openPlayerNbtEditor(uuid) {
+  // Find the world folder with playerdata
+  const worldFolders = ['world', 'world_nether', 'world_the_end'];
+  
+  for (const world of worldFolders) {
+    const path = `${world}/playerdata/${uuid}.dat`;
+    try {
+      await openNbtEditor(path);
+      return;
+    } catch (e) {
+      // Try next folder
+    }
+  }
+  
+  showNotification('Could not find player data file', 'error');
 }
 
 // ==================== Utility Functions ====================

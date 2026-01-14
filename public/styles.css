@@ -831,6 +831,164 @@ select.form-control:disabled {
   outline: none;
 }
 
+/* ==================== NBT Editor ==================== */
+
+.nbt-editor-container {
+  display: flex;
+  flex-direction: column;
+  height: 500px;
+  background: #0d0d0d;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.nbt-toolbar {
+  display: flex;
+  gap: 10px;
+  padding: 10px 15px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  align-items: center;
+}
+
+.nbt-compression-info {
+  margin-left: auto;
+  color: #888;
+  font-size: 12px;
+}
+
+.nbt-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 15px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.nbt-node {
+  margin-left: 0;
+}
+
+.nbt-node .nbt-node {
+  margin-left: 20px;
+}
+
+.nbt-node-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: default;
+  transition: background 0.15s;
+}
+
+.nbt-node-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nbt-node-header.nbt-editable {
+  cursor: pointer;
+}
+
+.nbt-node-header.nbt-editable:hover {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.nbt-toggle {
+  width: 16px;
+  text-align: center;
+  cursor: pointer;
+  color: #666;
+  font-size: 10px;
+  user-select: none;
+}
+
+.nbt-toggle:hover {
+  color: #999;
+}
+
+.nbt-toggle-spacer {
+  width: 16px;
+}
+
+.nbt-icon {
+  font-size: 14px;
+}
+
+.nbt-name {
+  color: #3b82f6;
+  font-weight: 500;
+}
+
+.nbt-type {
+  color: #666;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.nbt-value {
+  color: #10b981;
+  margin-left: 4px;
+}
+
+.nbt-array-info {
+  color: #f59e0b;
+}
+
+.nbt-children {
+  border-left: 1px dashed #333;
+  margin-left: 8px;
+  padding-left: 8px;
+}
+
+.nbt-children.collapsed {
+  display: none;
+}
+
+.nbt-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.nbt-node-header:hover .nbt-actions {
+  opacity: 1;
+}
+
+.nbt-action-btn {
+  padding: 2px 8px !important;
+  font-size: 12px !important;
+  min-width: auto !important;
+}
+
+/* NBT Value Modal */
+#nbt-value-modal .modal-content,
+#nbt-add-modal .modal-content {
+  max-width: 400px;
+}
+
+#nbt-value-input,
+#nbt-add-name,
+#nbt-add-value,
+#nbt-add-type {
+  width: 100%;
+  padding: 10px;
+  background: #0d0d0d;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #fff;
+  font-family: 'Courier New', monospace;
+}
+
+#nbt-value-type {
+  display: block;
+  margin-top: 5px;
+  color: #666;
+}
+
 /* ==================== Status Indicators ==================== */
 
 .status-stopped {
@@ -2506,4 +2664,204 @@ select.form-control:disabled {
   background: rgba(102, 126, 234, 0.1);
   border-radius: 6px;
   border-left: 3px solid #667eea;
+}
+
+/* ==================== Players Management ==================== */
+
+.players-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 15px;
+}
+
+.players-section {
+  background: #1e1e2e;
+  border-radius: 8px;
+  padding: 20px;
+  border: 1px solid #333;
+}
+
+.players-section h3 {
+  margin: 0 0 15px 0;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.players-section h3 i {
+  color: #667eea;
+}
+
+.players-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.players-header h3 {
+  margin: 0;
+}
+
+.players-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.players-table th,
+.players-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #333;
+}
+
+.players-table th {
+  color: #667eea;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.players-table tr:hover {
+  background: rgba(102, 126, 234, 0.05);
+}
+
+.players-table .uuid-cell {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.players-table .actions-cell {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.players-table .actions-cell .btn {
+  margin-left: 8px;
+}
+
+.players-table .empty-message {
+  text-align: center;
+  color: #666;
+  padding: 30px;
+}
+
+.players-table .empty-message.error {
+  color: #ef4444;
+}
+
+/* Level Badges */
+.level-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.level-badge.level-1 {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+}
+
+.level-badge.level-2 {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.level-badge.level-3 {
+  background: rgba(249, 115, 22, 0.2);
+  color: #f97316;
+}
+
+.level-badge.level-4 {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+/* Permission Levels Info */
+.level-info {
+  background: #252536;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 15px;
+}
+
+.level-info h4 {
+  margin: 0 0 12px 0;
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+.level-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.level-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #1e1e2e;
+  border-radius: 6px;
+}
+
+.level-item .level-badge {
+  min-width: 70px;
+  text-align: center;
+}
+
+.level-item span:last-child {
+  color: #ccc;
+  font-size: 0.85rem;
+}
+
+/* Player Modal Specific */
+#add-op-modal .form-group,
+#edit-op-modal .form-group,
+#add-whitelist-modal .form-group,
+#ban-player-modal .form-group {
+  margin-bottom: 15px;
+}
+
+#add-op-modal .checkbox-group,
+#edit-op-modal .checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+#add-op-modal .checkbox-group input[type="checkbox"],
+#edit-op-modal .checkbox-group input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+/* Player Data Grid Layout */
+.players-grid-layout {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.players-grid-layout .players-section {
+  min-height: 300px;
+}
+
+@media (max-width: 1200px) {
+  .players-grid-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Small buttons for tables */
+.btn-small {
+  padding: 6px 12px;
+  font-size: 0.8rem;
 }

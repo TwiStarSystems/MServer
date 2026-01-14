@@ -5,6 +5,8 @@ Python/Flask implementation with multi-server support and RBAC
 """
 
 import os
+import io
+import gzip
 import json
 import shutil
 import zipfile
@@ -12,6 +14,7 @@ import subprocess
 import threading
 import uuid
 import time
+import struct
 import requests
 import hashlib
 import secrets
@@ -753,6 +756,295 @@ class JarVersionManager:
 
 # Initialize JAR manager
 jar_manager = JarVersionManager()
+
+
+# ==================== NBT Parser/Editor ====================
+
+class NBTEditor:
+    """
+    Pure Python NBT (Named Binary Tag) parser and editor for Minecraft .dat files.
+    Supports both compressed (gzip) and uncompressed NBT files.
+    """
+    
+    # Tag type constants
+    TAG_END = 0
+    TAG_BYTE = 1
+    TAG_SHORT = 2
+    TAG_INT = 3
+    TAG_LONG = 4
+    TAG_FLOAT = 5
+    TAG_DOUBLE = 6
+    TAG_BYTE_ARRAY = 7
+    TAG_STRING = 8
+    TAG_LIST = 9
+    TAG_COMPOUND = 10
+    TAG_INT_ARRAY = 11
+    TAG_LONG_ARRAY = 12
+    
+    TAG_NAMES = {
+        0: 'End', 1: 'Byte', 2: 'Short', 3: 'Int', 4: 'Long',
+        5: 'Float', 6: 'Double', 7: 'ByteArray', 8: 'String',
+        9: 'List', 10: 'Compound', 11: 'IntArray', 12: 'LongArray'
+    }
+    
+    def __init__(self):
+        self.compression = None  # 'gzip' or None
+    
+    def read_file(self, filepath):
+        """Read and parse an NBT file, returns tree structure"""
+        filepath = Path(filepath)
+        
+        with open(filepath, 'rb') as f:
+            data = f.read()
+        
+        # Try gzip first
+        try:
+            decompressed = gzip.decompress(data)
+            self.compression = 'gzip'
+            data = decompressed
+        except:
+            self.compression = None
+        
+        reader = io.BytesIO(data)
+        return self._read_named_tag(reader)
+    
+    def write_file(self, filepath, nbt_data):
+        """Write NBT data back to file"""
+        filepath = Path(filepath)
+        
+        writer = io.BytesIO()
+        self._write_named_tag(writer, nbt_data)
+        
+        data = writer.getvalue()
+        
+        if self.compression == 'gzip':
+            data = gzip.compress(data)
+        
+        with open(filepath, 'wb') as f:
+            f.write(data)
+    
+    def _read_named_tag(self, reader):
+        """Read a named tag from the stream"""
+        tag_type = struct.unpack('>B', reader.read(1))[0]
+        
+        if tag_type == self.TAG_END:
+            return None
+        
+        name_length = struct.unpack('>H', reader.read(2))[0]
+        name = reader.read(name_length).decode('utf-8')
+        
+        value = self._read_tag_payload(reader, tag_type)
+        
+        return {
+            'type': tag_type,
+            'typeName': self.TAG_NAMES.get(tag_type, 'Unknown'),
+            'name': name,
+            'value': value
+        }
+    
+    def _read_tag_payload(self, reader, tag_type):
+        """Read tag payload based on type"""
+        if tag_type == self.TAG_BYTE:
+            return struct.unpack('>b', reader.read(1))[0]
+        
+        elif tag_type == self.TAG_SHORT:
+            return struct.unpack('>h', reader.read(2))[0]
+        
+        elif tag_type == self.TAG_INT:
+            return struct.unpack('>i', reader.read(4))[0]
+        
+        elif tag_type == self.TAG_LONG:
+            return struct.unpack('>q', reader.read(8))[0]
+        
+        elif tag_type == self.TAG_FLOAT:
+            return struct.unpack('>f', reader.read(4))[0]
+        
+        elif tag_type == self.TAG_DOUBLE:
+            return struct.unpack('>d', reader.read(8))[0]
+        
+        elif tag_type == self.TAG_BYTE_ARRAY:
+            length = struct.unpack('>i', reader.read(4))[0]
+            return list(struct.unpack(f'>{length}b', reader.read(length)))
+        
+        elif tag_type == self.TAG_STRING:
+            length = struct.unpack('>H', reader.read(2))[0]
+            return reader.read(length).decode('utf-8')
+        
+        elif tag_type == self.TAG_LIST:
+            list_type = struct.unpack('>B', reader.read(1))[0]
+            length = struct.unpack('>i', reader.read(4))[0]
+            items = []
+            for _ in range(length):
+                items.append({
+                    'type': list_type,
+                    'typeName': self.TAG_NAMES.get(list_type, 'Unknown'),
+                    'value': self._read_tag_payload(reader, list_type)
+                })
+            return {'listType': list_type, 'items': items}
+        
+        elif tag_type == self.TAG_COMPOUND:
+            children = []
+            while True:
+                child = self._read_named_tag(reader)
+                if child is None:
+                    break
+                children.append(child)
+            return children
+        
+        elif tag_type == self.TAG_INT_ARRAY:
+            length = struct.unpack('>i', reader.read(4))[0]
+            return list(struct.unpack(f'>{length}i', reader.read(length * 4)))
+        
+        elif tag_type == self.TAG_LONG_ARRAY:
+            length = struct.unpack('>i', reader.read(4))[0]
+            return list(struct.unpack(f'>{length}q', reader.read(length * 8)))
+        
+        return None
+    
+    def _write_named_tag(self, writer, tag):
+        """Write a named tag to the stream"""
+        tag_type = tag['type']
+        name = tag['name']
+        
+        writer.write(struct.pack('>B', tag_type))
+        name_bytes = name.encode('utf-8')
+        writer.write(struct.pack('>H', len(name_bytes)))
+        writer.write(name_bytes)
+        
+        self._write_tag_payload(writer, tag_type, tag['value'])
+    
+    def _write_tag_payload(self, writer, tag_type, value):
+        """Write tag payload based on type"""
+        if tag_type == self.TAG_BYTE:
+            writer.write(struct.pack('>b', int(value)))
+        
+        elif tag_type == self.TAG_SHORT:
+            writer.write(struct.pack('>h', int(value)))
+        
+        elif tag_type == self.TAG_INT:
+            writer.write(struct.pack('>i', int(value)))
+        
+        elif tag_type == self.TAG_LONG:
+            writer.write(struct.pack('>q', int(value)))
+        
+        elif tag_type == self.TAG_FLOAT:
+            writer.write(struct.pack('>f', float(value)))
+        
+        elif tag_type == self.TAG_DOUBLE:
+            writer.write(struct.pack('>d', float(value)))
+        
+        elif tag_type == self.TAG_BYTE_ARRAY:
+            writer.write(struct.pack('>i', len(value)))
+            writer.write(struct.pack(f'>{len(value)}b', *value))
+        
+        elif tag_type == self.TAG_STRING:
+            value_bytes = value.encode('utf-8')
+            writer.write(struct.pack('>H', len(value_bytes)))
+            writer.write(value_bytes)
+        
+        elif tag_type == self.TAG_LIST:
+            list_type = value['listType']
+            items = value['items']
+            writer.write(struct.pack('>B', list_type))
+            writer.write(struct.pack('>i', len(items)))
+            for item in items:
+                self._write_tag_payload(writer, list_type, item['value'])
+        
+        elif tag_type == self.TAG_COMPOUND:
+            for child in value:
+                self._write_named_tag(writer, child)
+            writer.write(struct.pack('>B', self.TAG_END))
+        
+        elif tag_type == self.TAG_INT_ARRAY:
+            writer.write(struct.pack('>i', len(value)))
+            writer.write(struct.pack(f'>{len(value)}i', *value))
+        
+        elif tag_type == self.TAG_LONG_ARRAY:
+            writer.write(struct.pack('>i', len(value)))
+            writer.write(struct.pack(f'>{len(value)}q', *value))
+    
+    def to_json(self, nbt_data):
+        """Convert NBT data to JSON-serializable format"""
+        return json.dumps(nbt_data, indent=2)
+    
+    def update_value(self, nbt_data, path, new_value):
+        """
+        Update a value at a specific path in the NBT tree.
+        Path is a list of keys/indices like ['Data', 'Player', 'Pos', 0]
+        """
+        if not path:
+            return nbt_data
+        
+        current = nbt_data
+        for i, key in enumerate(path[:-1]):
+            if current['type'] == self.TAG_COMPOUND:
+                for child in current['value']:
+                    if child['name'] == key:
+                        current = child
+                        break
+            elif current['type'] == self.TAG_LIST:
+                current = current['value']['items'][int(key)]
+        
+        # Set the final value
+        final_key = path[-1]
+        if current['type'] == self.TAG_COMPOUND:
+            for child in current['value']:
+                if child['name'] == final_key:
+                    child['value'] = new_value
+                    break
+        elif current['type'] == self.TAG_LIST:
+            current['value']['items'][int(final_key)]['value'] = new_value
+        else:
+            current['value'] = new_value
+        
+        return nbt_data
+    
+    def add_tag(self, nbt_data, parent_path, new_tag):
+        """Add a new tag to a compound or list"""
+        current = nbt_data
+        for key in parent_path:
+            if current['type'] == self.TAG_COMPOUND:
+                for child in current['value']:
+                    if child['name'] == key:
+                        current = child
+                        break
+            elif current['type'] == self.TAG_LIST:
+                current = current['value']['items'][int(key)]
+        
+        if current['type'] == self.TAG_COMPOUND:
+            current['value'].append(new_tag)
+        elif current['type'] == self.TAG_LIST:
+            current['value']['items'].append(new_tag)
+        
+        return nbt_data
+    
+    def delete_tag(self, nbt_data, path):
+        """Delete a tag at the specified path"""
+        if not path:
+            return nbt_data
+        
+        current = nbt_data
+        for key in path[:-1]:
+            if current['type'] == self.TAG_COMPOUND:
+                for child in current['value']:
+                    if child['name'] == key:
+                        current = child
+                        break
+            elif current['type'] == self.TAG_LIST:
+                current = current['value']['items'][int(key)]
+        
+        final_key = path[-1]
+        if current['type'] == self.TAG_COMPOUND:
+            current['value'] = [c for c in current['value'] if c['name'] != final_key]
+        elif current['type'] == self.TAG_LIST:
+            del current['value']['items'][int(final_key)]
+        
+        return nbt_data
+
+
+# Initialize NBT editor
+nbt_editor = NBTEditor()
+
 
 # Multi-server state management
 class ServerManager:
@@ -1968,6 +2260,476 @@ def write_server_file(server_id):
     try:
         full_path.write_text(content, encoding='utf-8')
         return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ==================== NBT File Endpoints ====================
+
+@app.route('/api/servers/<server_id>/nbt/read', methods=['GET'])
+@server_access_required
+def read_nbt_file(server_id):
+    """Read and parse an NBT file (.dat)"""
+    requested_path = request.args.get('path', '')
+    server_path = server_manager.get_server_path(server_id)
+    
+    if not is_safe_path(server_path, requested_path):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    full_path = server_path / requested_path
+    
+    if not full_path.exists():
+        return jsonify({'error': 'File not found'}), 404
+    
+    try:
+        nbt_data = nbt_editor.read_file(full_path)
+        return jsonify({
+            'success': True,
+            'data': nbt_data,
+            'compression': nbt_editor.compression
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to parse NBT file: {str(e)}'}), 500
+
+@app.route('/api/servers/<server_id>/nbt/write', methods=['POST'])
+@server_access_required
+def write_nbt_file(server_id):
+    """Write modified NBT data back to file"""
+    data = request.get_json()
+    file_path = data.get('path', '')
+    nbt_data = data.get('data')
+    compression = data.get('compression', 'gzip')
+    server_path = server_manager.get_server_path(server_id)
+    
+    if not is_safe_path(server_path, file_path):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    full_path = server_path / file_path
+    
+    try:
+        nbt_editor.compression = compression
+        nbt_editor.write_file(full_path, nbt_data)
+        return jsonify({'success': True, 'message': 'NBT file saved'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to write NBT file: {str(e)}'}), 500
+
+@app.route('/api/servers/<server_id>/nbt/update', methods=['POST'])
+@server_access_required
+def update_nbt_value(server_id):
+    """Update a single value in an NBT file"""
+    data = request.get_json()
+    file_path = data.get('path', '')
+    tag_path = data.get('tagPath', [])
+    new_value = data.get('value')
+    server_path = server_manager.get_server_path(server_id)
+    
+    if not is_safe_path(server_path, file_path):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    full_path = server_path / file_path
+    
+    try:
+        nbt_data = nbt_editor.read_file(full_path)
+        nbt_data = nbt_editor.update_value(nbt_data, tag_path, new_value)
+        nbt_editor.write_file(full_path, nbt_data)
+        return jsonify({'success': True, 'message': 'Value updated'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to update NBT value: {str(e)}'}), 500
+
+@app.route('/api/servers/<server_id>/nbt/add', methods=['POST'])
+@server_access_required
+def add_nbt_tag(server_id):
+    """Add a new tag to an NBT file"""
+    data = request.get_json()
+    file_path = data.get('path', '')
+    parent_path = data.get('parentPath', [])
+    new_tag = data.get('tag')
+    server_path = server_manager.get_server_path(server_id)
+    
+    if not is_safe_path(server_path, file_path):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    full_path = server_path / file_path
+    
+    try:
+        nbt_data = nbt_editor.read_file(full_path)
+        nbt_data = nbt_editor.add_tag(nbt_data, parent_path, new_tag)
+        nbt_editor.write_file(full_path, nbt_data)
+        return jsonify({'success': True, 'message': 'Tag added'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to add NBT tag: {str(e)}'}), 500
+
+@app.route('/api/servers/<server_id>/nbt/delete', methods=['POST'])
+@server_access_required
+def delete_nbt_tag(server_id):
+    """Delete a tag from an NBT file"""
+    data = request.get_json()
+    file_path = data.get('path', '')
+    tag_path = data.get('tagPath', [])
+    server_path = server_manager.get_server_path(server_id)
+    
+    if not is_safe_path(server_path, file_path):
+        return jsonify({'error': 'Access denied'}), 403
+    
+    full_path = server_path / file_path
+    
+    try:
+        nbt_data = nbt_editor.read_file(full_path)
+        nbt_data = nbt_editor.delete_tag(nbt_data, tag_path)
+        nbt_editor.write_file(full_path, nbt_data)
+        return jsonify({'success': True, 'message': 'Tag deleted'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete NBT tag: {str(e)}'}), 500
+
+
+# ==================== Player Management Endpoints ====================
+
+def get_player_uuid(player_name):
+    """Lookup player UUID from Mojang API"""
+    try:
+        response = requests.get(f'https://api.mojang.com/users/profiles/minecraft/{player_name}', timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            # Format UUID with dashes
+            uuid_raw = data.get('id', '')
+            if len(uuid_raw) == 32:
+                uuid_formatted = f"{uuid_raw[:8]}-{uuid_raw[8:12]}-{uuid_raw[12:16]}-{uuid_raw[16:20]}-{uuid_raw[20:]}"
+                return uuid_formatted, data.get('name', player_name)
+        return None, None
+    except:
+        return None, None
+
+@app.route('/api/servers/<server_id>/players/ops', methods=['GET'])
+@server_access_required
+def get_operators(server_id):
+    """Get list of operators from ops.json"""
+    server_path = server_manager.get_server_path(server_id)
+    ops_file = server_path / 'ops.json'
+    
+    try:
+        if ops_file.exists():
+            with open(ops_file, 'r') as f:
+                ops = json.load(f)
+            return jsonify({'operators': ops})
+        return jsonify({'operators': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/ops', methods=['POST'])
+@server_access_required
+def add_operator(server_id):
+    """Add a player as operator"""
+    data = request.get_json()
+    player_name = data.get('name', '').strip()
+    level = data.get('level', 4)
+    bypass_limit = data.get('bypassesPlayerLimit', False)
+    
+    if not player_name:
+        return jsonify({'error': 'Player name is required'}), 400
+    
+    # Get UUID from Mojang API
+    uuid, actual_name = get_player_uuid(player_name)
+    if not uuid:
+        return jsonify({'error': f'Could not find player "{player_name}". Make sure the name is correct.'}), 404
+    
+    server_path = server_manager.get_server_path(server_id)
+    ops_file = server_path / 'ops.json'
+    
+    try:
+        ops = []
+        if ops_file.exists():
+            with open(ops_file, 'r') as f:
+                ops = json.load(f)
+        
+        # Check if player already exists
+        for op in ops:
+            if op.get('uuid') == uuid:
+                return jsonify({'error': f'{actual_name} is already an operator'}), 400
+        
+        # Add new operator
+        ops.append({
+            'uuid': uuid,
+            'name': actual_name,
+            'level': int(level),
+            'bypassesPlayerLimit': bool(bypass_limit)
+        })
+        
+        with open(ops_file, 'w') as f:
+            json.dump(ops, f, indent=2)
+        
+        return jsonify({'success': True, 'message': f'{actual_name} added as operator'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['PUT'])
+@server_access_required
+def update_operator(server_id, uuid):
+    """Update an operator's settings"""
+    data = request.get_json()
+    level = data.get('level', 4)
+    bypass_limit = data.get('bypassesPlayerLimit', False)
+    
+    server_path = server_manager.get_server_path(server_id)
+    ops_file = server_path / 'ops.json'
+    
+    try:
+        if not ops_file.exists():
+            return jsonify({'error': 'Ops file not found'}), 404
+        
+        with open(ops_file, 'r') as f:
+            ops = json.load(f)
+        
+        found = False
+        for op in ops:
+            if op.get('uuid') == uuid:
+                op['level'] = int(level)
+                op['bypassesPlayerLimit'] = bool(bypass_limit)
+                found = True
+                break
+        
+        if not found:
+            return jsonify({'error': 'Operator not found'}), 404
+        
+        with open(ops_file, 'w') as f:
+            json.dump(ops, f, indent=2)
+        
+        return jsonify({'success': True, 'message': 'Operator updated'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['DELETE'])
+@server_access_required
+def remove_operator(server_id, uuid):
+    """Remove an operator"""
+    server_path = server_manager.get_server_path(server_id)
+    ops_file = server_path / 'ops.json'
+    
+    try:
+        if not ops_file.exists():
+            return jsonify({'error': 'Ops file not found'}), 404
+        
+        with open(ops_file, 'r') as f:
+            ops = json.load(f)
+        
+        original_len = len(ops)
+        ops = [op for op in ops if op.get('uuid') != uuid]
+        
+        if len(ops) == original_len:
+            return jsonify({'error': 'Operator not found'}), 404
+        
+        with open(ops_file, 'w') as f:
+            json.dump(ops, f, indent=2)
+        
+        return jsonify({'success': True, 'message': 'Operator removed'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/whitelist', methods=['GET'])
+@server_access_required
+def get_whitelist(server_id):
+    """Get whitelist"""
+    server_path = server_manager.get_server_path(server_id)
+    whitelist_file = server_path / 'whitelist.json'
+    
+    try:
+        if whitelist_file.exists():
+            with open(whitelist_file, 'r') as f:
+                whitelist = json.load(f)
+            return jsonify({'whitelist': whitelist})
+        return jsonify({'whitelist': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/whitelist', methods=['POST'])
+@server_access_required
+def add_to_whitelist(server_id):
+    """Add a player to whitelist"""
+    data = request.get_json()
+    player_name = data.get('name', '').strip()
+    
+    if not player_name:
+        return jsonify({'error': 'Player name is required'}), 400
+    
+    uuid, actual_name = get_player_uuid(player_name)
+    if not uuid:
+        return jsonify({'error': f'Could not find player "{player_name}"'}), 404
+    
+    server_path = server_manager.get_server_path(server_id)
+    whitelist_file = server_path / 'whitelist.json'
+    
+    try:
+        whitelist = []
+        if whitelist_file.exists():
+            with open(whitelist_file, 'r') as f:
+                whitelist = json.load(f)
+        
+        for player in whitelist:
+            if player.get('uuid') == uuid:
+                return jsonify({'error': f'{actual_name} is already whitelisted'}), 400
+        
+        whitelist.append({'uuid': uuid, 'name': actual_name})
+        
+        with open(whitelist_file, 'w') as f:
+            json.dump(whitelist, f, indent=2)
+        
+        return jsonify({'success': True, 'message': f'{actual_name} added to whitelist'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/whitelist/<uuid>', methods=['DELETE'])
+@server_access_required
+def remove_from_whitelist(server_id, uuid):
+    """Remove a player from whitelist"""
+    server_path = server_manager.get_server_path(server_id)
+    whitelist_file = server_path / 'whitelist.json'
+    
+    try:
+        if not whitelist_file.exists():
+            return jsonify({'error': 'Whitelist file not found'}), 404
+        
+        with open(whitelist_file, 'r') as f:
+            whitelist = json.load(f)
+        
+        original_len = len(whitelist)
+        whitelist = [p for p in whitelist if p.get('uuid') != uuid]
+        
+        if len(whitelist) == original_len:
+            return jsonify({'error': 'Player not found in whitelist'}), 404
+        
+        with open(whitelist_file, 'w') as f:
+            json.dump(whitelist, f, indent=2)
+        
+        return jsonify({'success': True, 'message': 'Player removed from whitelist'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/banned', methods=['GET'])
+@server_access_required
+def get_banned_players(server_id):
+    """Get banned players list"""
+    server_path = server_manager.get_server_path(server_id)
+    banned_file = server_path / 'banned-players.json'
+    
+    try:
+        if banned_file.exists():
+            with open(banned_file, 'r') as f:
+                banned = json.load(f)
+            return jsonify({'banned': banned})
+        return jsonify({'banned': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/banned', methods=['POST'])
+@server_access_required
+def ban_player(server_id):
+    """Ban a player"""
+    data = request.get_json()
+    player_name = data.get('name', '').strip()
+    reason = data.get('reason', 'Banned by server administrator')
+    
+    if not player_name:
+        return jsonify({'error': 'Player name is required'}), 400
+    
+    uuid, actual_name = get_player_uuid(player_name)
+    if not uuid:
+        return jsonify({'error': f'Could not find player "{player_name}"'}), 404
+    
+    server_path = server_manager.get_server_path(server_id)
+    banned_file = server_path / 'banned-players.json'
+    
+    try:
+        banned = []
+        if banned_file.exists():
+            with open(banned_file, 'r') as f:
+                banned = json.load(f)
+        
+        for player in banned:
+            if player.get('uuid') == uuid:
+                return jsonify({'error': f'{actual_name} is already banned'}), 400
+        
+        banned.append({
+            'uuid': uuid,
+            'name': actual_name,
+            'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S +0000'),
+            'source': 'MServerController',
+            'expires': 'forever',
+            'reason': reason
+        })
+        
+        with open(banned_file, 'w') as f:
+            json.dump(banned, f, indent=2)
+        
+        return jsonify({'success': True, 'message': f'{actual_name} has been banned'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/banned/<uuid>', methods=['DELETE'])
+@server_access_required
+def unban_player(server_id, uuid):
+    """Unban a player"""
+    server_path = server_manager.get_server_path(server_id)
+    banned_file = server_path / 'banned-players.json'
+    
+    try:
+        if not banned_file.exists():
+            return jsonify({'error': 'Banned players file not found'}), 404
+        
+        with open(banned_file, 'r') as f:
+            banned = json.load(f)
+        
+        original_len = len(banned)
+        banned = [p for p in banned if p.get('uuid') != uuid]
+        
+        if len(banned) == original_len:
+            return jsonify({'error': 'Player not found in ban list'}), 404
+        
+        with open(banned_file, 'w') as f:
+            json.dump(banned, f, indent=2)
+        
+        return jsonify({'success': True, 'message': 'Player unbanned'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/playerdata', methods=['GET'])
+@server_access_required
+def get_playerdata(server_id):
+    """Get list of player data files"""
+    server_path = server_manager.get_server_path(server_id)
+    
+    # Try different world folder names
+    world_folders = ['world', 'world_nether', 'world_the_end']
+    playerdata_path = None
+    
+    for world in world_folders:
+        path = server_path / world / 'playerdata'
+        if path.exists():
+            playerdata_path = path
+            break
+    
+    if not playerdata_path:
+        # Try to find any folder with playerdata
+        for item in server_path.iterdir():
+            if item.is_dir():
+                pd_path = item / 'playerdata'
+                if pd_path.exists():
+                    playerdata_path = pd_path
+                    break
+    
+    if not playerdata_path or not playerdata_path.exists():
+        return jsonify({'players': [], 'message': 'No playerdata folder found'})
+    
+    try:
+        players = []
+        for item in playerdata_path.iterdir():
+            if item.suffix == '.dat':
+                stat = item.stat()
+                players.append({
+                    'uuid': item.stem,
+                    'filename': item.name,
+                    'size': stat.st_size,
+                    'modified': datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+        
+        return jsonify({'players': players})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

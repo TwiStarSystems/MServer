@@ -93,6 +93,7 @@
         <nav class="tabs">
           <button class="tab-button active" data-tab="terminal">Terminal</button>
           <button class="tab-button" data-tab="files">Files</button>
+          <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
         </nav>
 
@@ -135,6 +136,106 @@
               <tbody id="file-list">
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- Players Tab -->
+        <div id="players-tab" class="tab-content">
+          <div class="players-container">
+            <!-- Operators Section -->
+            <div class="players-section">
+              <div class="players-section-header">
+                <h3>👑 Operators (OPs)</h3>
+                <button class="btn btn-small btn-success" onclick="openAddOpModal()">+ Add OP</button>
+              </div>
+              <div class="players-info-box">
+                <p><strong>Permission Levels:</strong></p>
+                <ul>
+                  <li><strong>Level 1 - Moderator:</strong> Bypass spawn protection</li>
+                  <li><strong>Level 2 - Gamemaster:</strong> Use command blocks, debug keys, change difficulty</li>
+                  <li><strong>Level 3 - Admin:</strong> Multiplayer management commands</li>
+                  <li><strong>Level 4 - Owner:</strong> All commands including server management</li>
+                </ul>
+              </div>
+              <table class="players-table">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>UUID</th>
+                    <th>Level</th>
+                    <th>Bypass Limit</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="ops-list">
+                  <tr><td colspan="5" class="empty-message">Loading operators...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Player Data Section -->
+            <div class="players-section">
+              <div class="players-section-header">
+                <h3>📋 Player Data Files</h3>
+                <button class="btn btn-small" onclick="loadPlayerData()">Refresh</button>
+              </div>
+              <p class="players-info">Players who have joined the server. Click to edit their NBT data.</p>
+              <table class="players-table">
+                <thead>
+                  <tr>
+                    <th>UUID</th>
+                    <th>Last Modified</th>
+                    <th>Size</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="playerdata-list">
+                  <tr><td colspan="4" class="empty-message">Loading player data...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Whitelist Section -->
+            <div class="players-section">
+              <div class="players-section-header">
+                <h3>📝 Whitelist</h3>
+                <button class="btn btn-small btn-success" onclick="openAddWhitelistModal()">+ Add Player</button>
+              </div>
+              <table class="players-table">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>UUID</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="whitelist-list">
+                  <tr><td colspan="3" class="empty-message">Loading whitelist...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Banned Players Section -->
+            <div class="players-section">
+              <div class="players-section-header">
+                <h3>🚫 Banned Players</h3>
+                <button class="btn btn-small btn-danger" onclick="openBanPlayerModal()">+ Ban Player</button>
+              </div>
+              <table class="players-table">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>UUID</th>
+                    <th>Reason</th>
+                    <th>Banned By</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="banned-list">
+                  <tr><td colspan="5" class="empty-message">Loading banned players...</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -314,6 +415,189 @@
         <div class="modal-footer">
           <button id="save-file-btn" class="btn btn-success">Save</button>
           <button class="btn" onclick="closeFileEditor()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- NBT Editor Modal -->
+    <div id="nbt-editor-modal" class="modal">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2 id="nbt-editor-title">NBT Editor</h2>
+          <button class="close-btn" onclick="closeNbtEditor()">&times;</button>
+        </div>
+        <div class="nbt-editor-container">
+          <div class="nbt-toolbar">
+            <button class="btn btn-small" onclick="expandAllNbt()">Expand All</button>
+            <button class="btn btn-small" onclick="collapseAllNbt()">Collapse All</button>
+            <button class="btn btn-small btn-success" onclick="addNbtTag()">+ Add Tag</button>
+            <span class="nbt-compression-info" id="nbt-compression-info"></span>
+          </div>
+          <div id="nbt-tree" class="nbt-tree"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="saveNbtFile()">Save Changes</button>
+          <button class="btn" onclick="closeNbtEditor()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- NBT Edit Value Modal -->
+    <div id="nbt-value-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Edit Value</h2>
+          <button class="close-btn" onclick="closeNbtValueModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label id="nbt-value-label">Value</label>
+          <input type="text" id="nbt-value-input" class="form-control">
+          <small id="nbt-value-type" class="text-muted"></small>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="saveNbtValue()">Save</button>
+          <button class="btn" onclick="closeNbtValueModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- NBT Add Tag Modal -->
+    <div id="nbt-add-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Add New Tag</h2>
+          <button class="close-btn" onclick="closeNbtAddModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>Tag Name</label>
+          <input type="text" id="nbt-add-name" class="form-control" placeholder="Tag name">
+        </div>
+        <div class="form-group">
+          <label>Tag Type</label>
+          <select id="nbt-add-type" class="form-control" onchange="updateNbtAddValue()">
+            <option value="1">Byte</option>
+            <option value="2">Short</option>
+            <option value="3">Int</option>
+            <option value="4">Long</option>
+            <option value="5">Float</option>
+            <option value="6">Double</option>
+            <option value="8">String</option>
+            <option value="10">Compound</option>
+          </select>
+        </div>
+        <div class="form-group" id="nbt-add-value-group">
+          <label>Value</label>
+          <input type="text" id="nbt-add-value" class="form-control" placeholder="Initial value">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="confirmAddNbtTag()">Add</button>
+          <button class="btn" onclick="closeNbtAddModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add OP Modal -->
+    <div id="add-op-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Add Operator</h2>
+          <button class="close-btn" onclick="closeAddOpModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>Player Name</label>
+          <input type="text" id="op-player-name" class="form-control" placeholder="Enter player name">
+        </div>
+        <div class="form-group">
+          <label>Permission Level</label>
+          <select id="op-level" class="form-control">
+            <option value="1">Level 1 - Moderator (Bypass spawn protection)</option>
+            <option value="2">Level 2 - Gamemaster (Command blocks, debug)</option>
+            <option value="3">Level 3 - Admin (Multiplayer management)</option>
+            <option value="4" selected>Level 4 - Owner (All commands)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="op-bypass-limit">
+            Bypass Player Limit
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="addOperator()">Add OP</button>
+          <button class="btn" onclick="closeAddOpModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit OP Modal -->
+    <div id="edit-op-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Edit Operator</h2>
+          <button class="close-btn" onclick="closeEditOpModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>Player Name</label>
+          <input type="text" id="edit-op-name" class="form-control" readonly>
+        </div>
+        <div class="form-group">
+          <label>Permission Level</label>
+          <select id="edit-op-level" class="form-control">
+            <option value="1">Level 1 - Moderator</option>
+            <option value="2">Level 2 - Gamemaster</option>
+            <option value="3">Level 3 - Admin</option>
+            <option value="4">Level 4 - Owner</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="edit-op-bypass">
+            Bypass Player Limit
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="saveOperator()">Save</button>
+          <button class="btn" onclick="closeEditOpModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Whitelist Modal -->
+    <div id="add-whitelist-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Add to Whitelist</h2>
+          <button class="close-btn" onclick="closeAddWhitelistModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>Player Name</label>
+          <input type="text" id="whitelist-player-name" class="form-control" placeholder="Enter player name">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="addToWhitelist()">Add</button>
+          <button class="btn" onclick="closeAddWhitelistModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ban Player Modal -->
+    <div id="ban-player-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Ban Player</h2>
+          <button class="close-btn" onclick="closeBanPlayerModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>Player Name</label>
+          <input type="text" id="ban-player-name" class="form-control" placeholder="Enter player name">
+        </div>
+        <div class="form-group">
+          <label>Reason</label>
+          <input type="text" id="ban-reason" class="form-control" placeholder="Reason for ban">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-danger" onclick="banPlayer()">Ban Player</button>
+          <button class="btn" onclick="closeBanPlayerModal()">Cancel</button>
         </div>
       </div>
     </div>
