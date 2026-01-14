@@ -203,9 +203,77 @@
         
         <!-- Tools Section -->
         <section id="tools-section" class="settings-section">
-          <div id="tools-container" class="tools-grid">
-            <div class="no-tools">
-              <h3>Loading tools...</h3>
+          <!-- JAR URL Fetcher Tool -->
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>📥 JAR URL Fetcher</h3>
+              <span class="tool-description">Fetch download URLs for Minecraft server JARs from official sources</span>
+            </div>
+            <div class="tool-panel-body">
+              <div class="jar-fetcher-controls">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Server Type</label>
+                    <select id="jar-server-type" class="form-control" onchange="loadJarVersions()">
+                      <option value="">Select server type...</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Version</label>
+                    <select id="jar-version" class="form-control">
+                      <option value="">Select version...</option>
+                    </select>
+                  </div>
+
+                  <div class="form-group">
+                    <label>&nbsp;</label>
+                    <button id="fetch-url-btn" class="btn btn-primary" onclick="fetchJarUrl()" disabled>
+                      Fetch URL
+                    </button>
+                  </div>
+                </div>
+              </div>
+              
+              <div id="jar-result" class="jar-result" style="display: none;">
+                <div class="jar-result-header">
+                  <h4>Download URL</h4>
+                  <div class="jar-result-actions">
+                    <button class="btn btn-small" onclick="copyJarUrl()">📋 Copy</button>
+                    <button class="btn btn-success btn-small" onclick="addToConfig()">➕ Add to Config</button>
+                  </div>
+                </div>
+                <div class="jar-url-display">
+                  <code id="jar-url-output"></code>
+                </div>
+                <div id="jar-build-info" class="jar-build-info" style="display: none;"></div>
+                <div id="jar-note" class="jar-note" style="display: none;"></div>
+              </div>
+              
+              <div id="jar-status" class="jar-status"></div>
+            </div>
+          </div>
+          
+          <!-- Current JAR Config Viewer -->
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>📄 Current JAR URLs Config</h3>
+              <button class="btn btn-small" onclick="loadJarConfig()">🔄 Refresh</button>
+            </div>
+            <div class="tool-panel-body">
+              <pre id="jar-config-content" class="config-viewer">Loading...</pre>
+            </div>
+          </div>
+          
+          <!-- Other Tools -->
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>🛠️ Custom Tools</h3>
+              <span class="tool-description">Python scripts from the ./tools folder</span>
+            </div>
+            <div id="tools-container" class="tools-grid">
+              <div class="no-tools">
+                <h3>Loading tools...</h3>
+              </div>
             </div>
           </div>
         </section>

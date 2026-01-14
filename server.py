@@ -3348,6 +3348,351 @@ def get_stats_history():
     return jsonify({'history': history})
 
 
+# ==================== JAR URL Fetcher API ====================
+
+# API endpoints for fetching Minecraft server JARs
+MINECRAFT_APIS = {
+    'vanilla': 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json',
+    'bedrock': 'https://raw.githubusercontent.com/AlexxIT/BedrockDedicatedServer/master/versions.json',
+    'paper': 'https://api.papermc.io/v2/projects/paper',
+    'purpur': 'https://api.purpurmc.org/v2/purpur',
+    'fabric': 'https://meta.fabricmc.net/v2/versions',
+    'velocity': 'https://api.papermc.io/v2/projects/velocity',
+    'waterfall': 'https://api.papermc.io/v2/projects/waterfall',
+    'folia': 'https://api.papermc.io/v2/projects/folia'
+}
+
+@app.route('/api/tools/jarfetcher/types', methods=['GET'])
+@admin_required
+def get_jar_types():
+    """Get available server types for JAR fetching"""
+    return jsonify({
+        'types': [
+            {'id': 'vanilla', 'name': 'Vanilla (Java)', 'description': 'Official Minecraft Java Edition Server'},
+            {'id': 'bedrock', 'name': 'Vanilla (Bedrock)', 'description': 'Official Minecraft Bedrock Dedicated Server'},
+            {'id': 'paper', 'name': 'Paper', 'description': 'High performance Spigot fork'},
+            {'id': 'purpur', 'name': 'Purpur', 'description': 'Paper fork with extra features'},
+            {'id': 'fabric', 'name': 'Fabric', 'description': 'Lightweight mod loader'},
+            {'id': 'folia', 'name': 'Folia', 'description': 'Paper fork for multi-threaded regions'},
+            {'id': 'velocity', 'name': 'Velocity', 'description': 'Modern Minecraft proxy'},
+            {'id': 'waterfall', 'name': 'Waterfall', 'description': 'BungeeCord fork by PaperMC'}
+        ]
+    })
+
+@app.route('/api/tools/jarfetcher/versions/<server_type>', methods=['GET'])
+@admin_required
+def get_jar_versions(server_type):
+    """Fetch available versions for a server type"""
+    try:
+        if server_type == 'vanilla':
+            return fetch_vanilla_versions()
+        elif server_type == 'bedrock':
+            return fetch_bedrock_versions()
+        elif server_type == 'paper':
+            return fetch_papermc_versions('paper')
+        elif server_type == 'purpur':
+            return fetch_purpur_versions()
+        elif server_type == 'fabric':
+            return fetch_fabric_versions()
+        elif server_type == 'folia':
+            return fetch_papermc_versions('folia')
+        elif server_type == 'velocity':
+            return fetch_papermc_versions('velocity')
+        elif server_type == 'waterfall':
+            return fetch_papermc_versions('waterfall')
+        else:
+            return jsonify({'error': 'Unknown server type'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def fetch_bedrock_versions():
+    """Fetch Bedrock Dedicated Server versions"""
+    # Try the community-maintained version list first
+    try:
+        response = requests.get(MINECRAFT_APIS['bedrock'], timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            versions = []
+            # The API returns a dict with version numbers as keys
+            for version in list(data.keys())[:30]:  # Get latest 30
+                versions.append({
+                    'version': version,
+                    'type': 'release',
+                    'url': 'API'
+                })
+            return jsonify({'versions': versions})
+    except Exception:
+        pass
+    
+    # Fallback: return known recent versions
+    known_versions = [
+        '1.21.51.02', '1.21.50.07', '1.21.44.01', '1.21.43.01',
+        '1.21.42.01', '1.21.41.01', '1.21.40.01', '1.21.31.04',
+        '1.21.30.03', '1.21.23.01', '1.21.22.01', '1.21.21.01',
+        '1.21.20.03', '1.21.2.02', '1.21.1.03', '1.21.0.03',
+        '1.20.81.01', '1.20.80.05', '1.20.73.01', '1.20.72.01'
+    ]
+    versions = [{'version': v, 'type': 'release', 'url': 'API'} for v in known_versions]
+    return jsonify({'versions': versions})
+
+def fetch_vanilla_versions():
+    """Fetch Vanilla Minecraft versions from Mojang"""
+    response = requests.get(MINECRAFT_APIS['vanilla'], timeout=30)
+    if response.status_code != 200:
+        return jsonify({'error': 'Failed to fetch from Mojang API'}), 502
+    
+    data = response.json()
+    versions = []
+    
+    for version in data.get('versions', []):
+        if version.get('type') == 'release':
+            versions.append({
+                'version': version['id'],
+                'type': 'release',
+                'url': version['url']  # This is the version manifest URL, not direct download
+            })
+    
+    return jsonify({'versions': versions[:30]})  # Limit to recent 30 versions
+
+def fetch_vanilla_download_url(version_url):
+    """Fetch the actual server.jar download URL from a version manifest"""
+    try:
+        response = requests.get(version_url, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            server_download = data.get('downloads', {}).get('server', {})
+            return server_download.get('url')
+    except Exception:
+        pass
+    return None
+
+def fetch_papermc_versions(project):
+    """Fetch versions from PaperMC API (works for paper, folia, velocity, waterfall)"""
+    base_url = f'https://api.papermc.io/v2/projects/{project}'
+    response = requests.get(base_url, timeout=30)
+    if response.status_code != 200:
+        return jsonify({'error': f'Failed to fetch from PaperMC API for {project}'}), 502
+    
+    data = response.json()
+    versions = []
+    
+    for version in reversed(data.get('versions', [])[-30:]):  # Get last 30 versions, newest first
+        versions.append({
+            'version': version,
+            'type': 'release',
+            'url': 'API'  # Will be resolved dynamically
+        })
+    
+    return jsonify({'versions': versions})
+
+def fetch_purpur_versions():
+    """Fetch versions from Purpur API"""
+    response = requests.get(MINECRAFT_APIS['purpur'], timeout=30)
+    if response.status_code != 200:
+        return jsonify({'error': 'Failed to fetch from Purpur API'}), 502
+    
+    data = response.json()
+    versions = []
+    
+    for version in reversed(data.get('versions', [])[-30:]):
+        versions.append({
+            'version': version,
+            'type': 'release',
+            'url': 'API'
+        })
+    
+    return jsonify({'versions': versions})
+
+def fetch_fabric_versions():
+    """Fetch versions from Fabric API"""
+    # Get game versions
+    response = requests.get('https://meta.fabricmc.net/v2/versions/game', timeout=30)
+    if response.status_code != 200:
+        return jsonify({'error': 'Failed to fetch from Fabric API'}), 502
+    
+    data = response.json()
+    versions = []
+    
+    for version in data[:30]:  # Already sorted newest first
+        if version.get('stable', False):
+            versions.append({
+                'version': version['version'],
+                'type': 'release',
+                'url': 'API'
+            })
+    
+    return jsonify({'versions': versions})
+
+@app.route('/api/tools/jarfetcher/download-url', methods=['POST'])
+@admin_required
+def get_jar_download_url():
+    """Get the direct download URL for a specific version"""
+    data = request.get_json()
+    server_type = data.get('type')
+    version = data.get('version')
+    platform = data.get('platform', 'linux')  # Default to Linux for Bedrock
+    
+    if not server_type or not version:
+        return jsonify({'error': 'Missing type or version'}), 400
+    
+    try:
+        if server_type == 'vanilla':
+            # First get the version manifest URL
+            manifest_response = requests.get(MINECRAFT_APIS['vanilla'], timeout=30)
+            if manifest_response.status_code != 200:
+                return jsonify({'error': 'Failed to fetch manifest'}), 502
+            
+            manifest_data = manifest_response.json()
+            version_url = None
+            for v in manifest_data.get('versions', []):
+                if v['id'] == version:
+                    version_url = v['url']
+                    break
+            
+            if not version_url:
+                return jsonify({'error': 'Version not found'}), 404
+            
+            download_url = fetch_vanilla_download_url(version_url)
+            if download_url:
+                return jsonify({'url': download_url})
+            return jsonify({'error': 'No server JAR available for this version'}), 404
+        
+        elif server_type == 'bedrock':
+            # Bedrock Dedicated Server download URLs (Linux only)
+            # Format: https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip
+            url = f'https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip'
+            return jsonify({
+                'url': url,
+                'note': 'Bedrock servers are .zip files, not .jar files'
+            })
+        
+        elif server_type == 'paper':
+            return get_papermc_download_url('paper', version)
+        
+        elif server_type == 'purpur':
+            # Purpur API: /v2/purpur/{version}/latest/download
+            url = f'https://api.purpurmc.org/v2/purpur/{version}/latest/download'
+            return jsonify({'url': url})
+        
+        elif server_type == 'fabric':
+            # Get latest loader and installer versions
+            loader_resp = requests.get('https://meta.fabricmc.net/v2/versions/loader', timeout=30)
+            installer_resp = requests.get('https://meta.fabricmc.net/v2/versions/installer', timeout=30)
+            
+            if loader_resp.status_code == 200 and installer_resp.status_code == 200:
+                loader_version = loader_resp.json()[0]['version']
+                installer_version = installer_resp.json()[0]['version']
+                url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar'
+                return jsonify({'url': url})
+            return jsonify({'error': 'Failed to fetch Fabric loader info'}), 502
+        
+        elif server_type == 'folia':
+            return get_papermc_download_url('folia', version)
+        
+        elif server_type == 'velocity':
+            return get_papermc_download_url('velocity', version)
+        
+        elif server_type == 'waterfall':
+            return get_papermc_download_url('waterfall', version)
+        
+        else:
+            return jsonify({'error': 'Unknown server type'}), 400
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def get_papermc_download_url(project, version):
+    """Get download URL from PaperMC API"""
+    # Get builds for version
+    builds_url = f'https://api.papermc.io/v2/projects/{project}/versions/{version}/builds'
+    response = requests.get(builds_url, timeout=30)
+    
+    if response.status_code != 200:
+        return jsonify({'error': f'Failed to fetch builds for {project} {version}'}), 502
+    
+    builds_data = response.json()
+    builds = builds_data.get('builds', [])
+    
+    if not builds:
+        return jsonify({'error': 'No builds available'}), 404
+    
+    # Get latest build
+    latest_build = builds[-1]
+    build_number = latest_build['build']
+    downloads = latest_build.get('downloads', {})
+    application = downloads.get('application', {})
+    filename = application.get('name', f'{project}-{version}.jar')
+    
+    download_url = f'https://api.papermc.io/v2/projects/{project}/versions/{version}/builds/{build_number}/downloads/{filename}'
+    return jsonify({'url': download_url, 'build': build_number})
+
+@app.route('/api/tools/jarfetcher/config', methods=['GET'])
+@admin_required
+def get_jar_config():
+    """Get current jarurls.conf content"""
+    if JAR_URLS_PATH.exists():
+        with open(JAR_URLS_PATH, 'r') as f:
+            return jsonify({'content': f.read()})
+    return jsonify({'content': ''})
+
+@app.route('/api/tools/jarfetcher/config', methods=['PUT'])
+@admin_required
+def update_jar_config():
+    """Update jarurls.conf with new entry"""
+    data = request.get_json()
+    server_type = data.get('type')
+    version = data.get('version')
+    url = data.get('url')
+    
+    if not server_type or not version or not url:
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    # Read existing config
+    lines = []
+    if JAR_URLS_PATH.exists():
+        with open(JAR_URLS_PATH, 'r') as f:
+            lines = f.readlines()
+    
+    # Check if entry already exists and update it
+    entry = f'{server_type}:{version}={url}\n'
+    entry_prefix = f'{server_type}:{version}='
+    
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(entry_prefix):
+            lines[i] = entry
+            found = True
+            break
+    
+    if not found:
+        # Find the right section to add the entry
+        section_header = f'# === {server_type.upper()}'
+        insert_index = len(lines)
+        
+        for i, line in enumerate(lines):
+            if line.startswith(section_header):
+                # Find the end of this section (next section or end of file)
+                for j in range(i + 1, len(lines)):
+                    if lines[j].startswith('# ==='):
+                        insert_index = j
+                        break
+                else:
+                    insert_index = len(lines)
+                break
+        
+        # Insert before the next section or at end
+        if insert_index == len(lines):
+            lines.append('\n' + entry)
+        else:
+            lines.insert(insert_index, entry)
+    
+    # Write back
+    with open(JAR_URLS_PATH, 'w') as f:
+        f.writelines(lines)
+    
+    return jsonify({'success': True, 'message': f'Added/updated {server_type}:{version}'})
+
+
 # ==================== Tools API ====================
 
 @app.route('/api/tools', methods=['GET'])

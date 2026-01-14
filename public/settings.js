@@ -67,6 +67,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadStatsHistory();
   loadBranding();
   loadTools();
+  loadJarFetcherTypes();
+  loadJarConfig();
   
   // Time range change handler
   document.getElementById('time-range').addEventListener('change', loadStatsHistory);
@@ -432,6 +434,206 @@ async function runTool(toolName) {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Run Tool';
+  }
+}
+
+// ==================== JAR URL Fetcher Functions ====================
+
+let currentJarType = '';
+let currentJarVersion = '';
+let currentJarUrl = '';
+
+async function loadJarFetcherTypes() {
+  const select = document.getElementById('jar-server-type');
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/types');
+    if (response.ok) {
+      const data = await response.json();
+      
+      select.innerHTML = '<option value="">Select server type...</option>';
+      data.types.forEach(type => {
+        const option = document.createElement('option');
+        option.value = type.id;
+        option.textContent = `${type.name} - ${type.description}`;
+        select.appendChild(option);
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load JAR types:', err);
+  }
+}
+
+async function loadJarVersions() {
+  const typeSelect = document.getElementById('jar-server-type');
+  const versionSelect = document.getElementById('jar-version');
+  const fetchBtn = document.getElementById('fetch-url-btn');
+  const resultDiv = document.getElementById('jar-result');
+  const statusDiv = document.getElementById('jar-status');
+  
+  currentJarType = typeSelect.value;
+  currentJarVersion = '';
+  currentJarUrl = '';
+  
+  // Reset
+  versionSelect.innerHTML = '<option value="">Select version...</option>';
+  fetchBtn.disabled = true;
+  resultDiv.style.display = 'none';
+  statusDiv.textContent = '';
+  
+  if (!currentJarType) return;
+  
+  statusDiv.innerHTML = '<span class="loading-text">Loading versions...</span>';
+  
+  try {
+    const response = await fetch(`/api/tools/jarfetcher/versions/${currentJarType}`);
+    if (response.ok) {
+      const data = await response.json();
+      
+      versionSelect.innerHTML = '<option value="">Select version...</option>';
+      data.versions.forEach(v => {
+        const option = document.createElement('option');
+        option.value = v.version;
+        option.textContent = v.version;
+        versionSelect.appendChild(option);
+      });
+      
+      statusDiv.innerHTML = `<span class="success-text">✓ Loaded ${data.versions.length} versions</span>`;
+    } else {
+      const error = await response.json();
+      statusDiv.innerHTML = `<span class="error-text">✗ ${error.error}</span>`;
+    }
+  } catch (err) {
+    statusDiv.innerHTML = `<span class="error-text">✗ Failed to load versions: ${err.message}</span>`;
+  }
+}
+
+
+
+async function fetchJarUrl() {
+  const versionSelect = document.getElementById('jar-version');
+  const fetchBtn = document.getElementById('fetch-url-btn');
+  const resultDiv = document.getElementById('jar-result');
+  const urlOutput = document.getElementById('jar-url-output');
+  const buildInfo = document.getElementById('jar-build-info');
+  const noteDiv = document.getElementById('jar-note');
+  const statusDiv = document.getElementById('jar-status');
+  
+  currentJarVersion = versionSelect.value;
+  
+  // Enable/disable fetch button based on selection
+  fetchBtn.disabled = !currentJarType || !currentJarVersion;
+  
+  if (!currentJarType || !currentJarVersion) {
+    resultDiv.style.display = 'none';
+    return;
+  }
+  
+  statusDiv.innerHTML = '<span class="loading-text">Fetching download URL...</span>';
+  fetchBtn.disabled = true;
+  
+  try {
+    const requestBody = { type: currentJarType, version: currentJarVersion };
+    
+    const response = await fetch('/api/tools/jarfetcher/download-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok && data.url) {
+      currentJarUrl = data.url;
+      urlOutput.textContent = data.url;
+      resultDiv.style.display = 'block';
+      
+      if (data.build) {
+        buildInfo.textContent = `Build: ${data.build}`;
+        buildInfo.style.display = 'block';
+      } else {
+        buildInfo.style.display = 'none';
+      }
+      
+      // Show note for Bedrock (.zip file)
+      if (noteDiv) {
+        if (currentJarType === 'bedrock') {
+          noteDiv.innerHTML = '<strong>Note:</strong> Bedrock Dedicated Server is a .zip archive, not a .jar file. Extract the contents to your server directory.';
+          noteDiv.style.display = 'block';
+        } else {
+          noteDiv.style.display = 'none';
+        }
+      }
+      
+      statusDiv.innerHTML = '<span class="success-text">✓ URL fetched successfully</span>';
+    } else {
+      statusDiv.innerHTML = `<span class="error-text">✗ ${data.error || 'Failed to fetch URL'}</span>`;
+      resultDiv.style.display = 'none';
+    }
+  } catch (err) {
+    statusDiv.innerHTML = `<span class="error-text">✗ Error: ${err.message}</span>`;
+    resultDiv.style.display = 'none';
+  } finally {
+    fetchBtn.disabled = false;
+  }
+}
+
+function copyJarUrl() {
+  if (currentJarUrl) {
+    navigator.clipboard.writeText(currentJarUrl).then(() => {
+      const statusDiv = document.getElementById('jar-status');
+      statusDiv.innerHTML = '<span class="success-text">✓ URL copied to clipboard!</span>';
+    }).catch(err => {
+      console.error('Failed to copy:', err);
+    });
+  }
+}
+
+async function addToConfig() {
+  if (!currentJarType || !currentJarVersion || !currentJarUrl) {
+    return;
+  }
+  
+  const statusDiv = document.getElementById('jar-status');
+  statusDiv.innerHTML = '<span class="loading-text">Adding to config...</span>';
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: currentJarType,
+        version: currentJarVersion,
+        url: currentJarUrl
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok && data.success) {
+      statusDiv.innerHTML = `<span class="success-text">✓ ${data.message}</span>`;
+      loadJarConfig(); // Refresh config display
+    } else {
+      statusDiv.innerHTML = `<span class="error-text">✗ ${data.error || 'Failed to update config'}</span>`;
+    }
+  } catch (err) {
+    statusDiv.innerHTML = `<span class="error-text">✗ Error: ${err.message}</span>`;
+  }
+}
+
+async function loadJarConfig() {
+  const configDisplay = document.getElementById('jar-config-content');
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/config');
+    if (response.ok) {
+      const data = await response.json();
+      configDisplay.textContent = data.content || '# No configuration yet';
+    } else {
+      configDisplay.textContent = '# Failed to load configuration';
+    }
+  } catch (err) {
+    configDisplay.textContent = `# Error loading config: ${err.message}`;
   }
 }
 

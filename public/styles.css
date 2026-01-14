@@ -1607,6 +1607,141 @@ select.form-control:disabled {
   gap: 20px;
 }
 
+/* Tool Panels */
+.tool-panel {
+  background: #1e1e2e;
+  border-radius: 12px;
+  border: 1px solid #333;
+  margin-bottom: 20px;
+}
+
+.tool-panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #333;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tool-panel-header h3 {
+  font-size: 1.1rem;
+  color: #fff;
+  margin: 0;
+}
+
+.tool-description {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.tool-panel-body {
+  padding: 20px;
+}
+
+/* JAR Fetcher Specific */
+.jar-fetcher-controls .form-row {
+  display: flex;
+  gap: 15px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.jar-fetcher-controls .form-group {
+  flex: 1;
+  min-width: 180px;
+}
+
+.jar-result {
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 20px;
+  border: 1px solid #30363d;
+}
+
+.jar-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.jar-result-header h4 {
+  font-size: 0.95rem;
+  color: #8b949e;
+  margin: 0;
+}
+
+.jar-result-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.jar-url-display {
+  background: #161b22;
+  border-radius: 6px;
+  padding: 12px 15px;
+  overflow-x: auto;
+}
+
+.jar-url-display code {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.85rem;
+  color: #58a6ff;
+  word-break: break-all;
+}
+
+.jar-build-info {
+  font-size: 0.85rem;
+  color: #7ee787;
+  margin-top: 8px;
+}
+
+.jar-note {
+  font-size: 0.85rem;
+  color: #f5a524;
+  background: rgba(245, 165, 36, 0.1);
+  border: 1px solid rgba(245, 165, 36, 0.3);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+
+.jar-status {
+  margin-top: 15px;
+  font-size: 0.9rem;
+  min-height: 20px;
+}
+
+.loading-text {
+  color: #58a6ff;
+}
+
+.success-text {
+  color: #7ee787;
+}
+
+.error-text {
+  color: #f85149;
+}
+
+/* Config Viewer */
+.config-viewer {
+  background: #0d1117;
+  border-radius: 8px;
+  padding: 15px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.8rem;
+  color: #8b949e;
+  white-space: pre-wrap;
+  max-height: 400px;
+  overflow-y: auto;
+  margin: 0;
+  border: 1px solid #30363d;
+}
+
 .tool-card {
   background: #1e1e2e;
   border-radius: 12px;

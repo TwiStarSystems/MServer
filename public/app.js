@@ -1299,8 +1299,8 @@ function createNbtNode(tag, path) {
   
   if (isExpandable) {
     const toggle = document.createElement('span');
-    toggle.className = 'nbt-toggle expanded';
-    toggle.textContent = '▼';
+    toggle.className = 'nbt-toggle';
+    toggle.textContent = '▶';
     toggle.onclick = (e) => {
       e.stopPropagation();
       const children = node.querySelector('.nbt-children');
@@ -1385,14 +1385,14 @@ function createNbtNode(tag, path) {
   // Render children for compound and list
   if (tag.type === 10 && Array.isArray(tag.value)) {
     const children = document.createElement('div');
-    children.className = 'nbt-children';
+    children.className = 'nbt-children collapsed';
     tag.value.forEach((child, index) => {
       children.appendChild(createNbtNode(child, [...path, child.name]));
     });
     node.appendChild(children);
   } else if (tag.type === 9 && tag.value && tag.value.items) {
     const children = document.createElement('div');
-    children.className = 'nbt-children';
+    children.className = 'nbt-children collapsed';
     tag.value.items.forEach((item, index) => {
       const listItem = {
         type: item.type,
