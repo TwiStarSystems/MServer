@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MServerController - Minecraft Server Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎮 MServerController</h1>
+      <div class="server-status">
+        <span id="status-indicator" class="status-stopped">●</span>
+        <span id="status-text">Stopped</span>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab-button active" data-tab="terminal">Terminal</button>
+      <button class="tab-button" data-tab="files">File Explorer</button>
+      <button class="tab-button" data-tab="backups">Backups</button>
+      <button class="tab-button" data-tab="config">Configuration</button>
+    </nav>
+
+    <!-- Terminal Tab -->
+    <div id="terminal-tab" class="tab-content active">
+      <div class="controls">
+        <button id="start-btn" class="btn btn-success">Start Server</button>
+        <button id="stop-btn" class="btn btn-danger" disabled>Stop Server</button>
+      </div>
+      
+      <div class="terminal-container">
+        <div id="terminal-output" class="terminal"></div>
+        <div class="terminal-input-container">
+          <input type="text" id="terminal-input" class="terminal-input" placeholder="Enter command..." disabled>
+          <button id="send-btn" class="btn" disabled>Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- File Explorer Tab -->
+    <div id="files-tab" class="tab-content">
+      <div class="file-controls">
+        <div class="breadcrumb">
+          <span id="current-path">/</span>
+        </div>
+        <div class="file-actions">
+          <button id="new-file-btn" class="btn btn-small">New File</button>
+          <button id="new-folder-btn" class="btn btn-small">New Folder</button>
+          <label for="file-upload" class="btn btn-small">Upload</label>
+          <input type="file" id="file-upload" style="display: none;">
+          <button id="refresh-files-btn" class="btn btn-small">Refresh</button>
+        </div>
+      </div>
+      
+      <div class="file-explorer">
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="file-list">
+          </tbody>
+        </table>
+      </div>
+
+      <!-- File Editor Modal -->
+      <div id="file-editor-modal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 id="editor-title">Edit File</h2>
+            <button class="close-btn">&times;</button>
+          </div>
+          <textarea id="file-content" class="file-editor"></textarea>
+          <div class="modal-footer">
+            <button id="save-file-btn" class="btn btn-success">Save</button>
+            <button class="close-btn btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backups Tab -->
+    <div id="backups-tab" class="tab-content">
+      <div class="backup-controls">
+        <button id="create-backup-btn" class="btn btn-success">Create Backup</button>
+        <button id="refresh-backups-btn" class="btn">Refresh</button>
+      </div>
+      
+      <div class="backup-list">
+        <table class="backup-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="backup-list">
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Configuration Tab -->
+    <div id="config-tab" class="tab-content">
+      <div class="config-form">
+        <h2>Server Configuration</h2>
+        
+        <div class="form-group">
+          <label for="server-path">Server Directory Path:</label>
+          <input type="text" id="server-path" class="form-control" placeholder="/path/to/minecraft/server">
+          <small>Full path to your Minecraft server directory</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="executable">Server Executable:</label>
+          <input type="text" id="executable" class="form-control" placeholder="server.jar">
+          <small>Name of the server JAR file</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="java-args">Java Arguments:</label>
+          <input type="text" id="java-args" class="form-control" placeholder="-Xmx2G -Xms1G">
+          <small>JVM arguments for memory allocation</small>
+        </div>
+        
+        <div class="form-actions">
+          <button id="save-config-btn" class="btn btn-success">Save Configuration</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
