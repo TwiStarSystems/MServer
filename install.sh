@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # MServerController Installation Script for Debian 13+
-# This script installs and configures MServerController with Nginx
+# This script installs and configures MServerController with Nginx (Python version)
 
 set -e
 
@@ -40,18 +40,13 @@ apt-get upgrade -y
 
 # Install required packages
 echo "Installing required packages..."
-apt-get install -y curl wget git nginx openjdk-17-jre-headless
-
-# Install Node.js (LTS version)
-echo "Installing Node.js..."
-curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
-apt-get install -y nodejs
+apt-get install -y curl wget git nginx openjdk-17-jre-headless python3 python3-pip python3-venv
 
 # Verify installations
 echo ""
 echo "Verifying installations..."
-echo "Node.js version: $(node --version)"
-echo "npm version: $(npm --version)"
+echo "Python version: $(python3 --version)"
+echo "pip version: $(pip3 --version)"
 echo "Java version: $(java -version 2>&1 | head -n 1)"
 echo "Nginx version: $(nginx -v 2>&1)"
 echo ""
@@ -74,7 +69,7 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 # Check if we're running from the repository
-if [ -f "$(dirname "$0")/package.json" ]; then
+if [ -f "$(dirname "$0")/server.py" ]; then
     echo "Copying files from current directory..."
     mkdir -p "$INSTALL_DIR"
     cp -r "$(dirname "$0")"/* "$INSTALL_DIR/"
@@ -85,9 +80,18 @@ fi
 
 cd "$INSTALL_DIR"
 
-# Install Node.js dependencies
-echo "Installing Node.js dependencies..."
-npm install --production
+# Create Python virtual environment
+echo "Creating Python virtual environment..."
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Python dependencies
+echo "Installing Python dependencies..."
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Deactivate virtual environment
+deactivate
 
 # Create necessary directories
 echo "Creating directories..."
@@ -120,13 +124,12 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/node server.js
+ExecStart=$INSTALL_DIR/venv/bin/python server.py
 Restart=always
 RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=mservercontroller
-Environment=NODE_ENV=production
 Environment=PORT=3000
 
 [Install]

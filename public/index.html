@@ -7,137 +7,201 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>🎮 MServerController</h1>
-      <div class="server-status">
-        <span id="status-indicator" class="status-stopped">●</span>
-        <span id="status-text">Stopped</span>
-      </div>
-    </header>
-
-    <nav class="tabs">
-      <button class="tab-button active" data-tab="terminal">Terminal</button>
-      <button class="tab-button" data-tab="files">File Explorer</button>
-      <button class="tab-button" data-tab="backups">Backups</button>
-      <button class="tab-button" data-tab="config">Configuration</button>
-    </nav>
-
-    <!-- Terminal Tab -->
-    <div id="terminal-tab" class="tab-content active">
-      <div class="controls">
-        <button id="start-btn" class="btn btn-success">Start Server</button>
-        <button id="stop-btn" class="btn btn-danger" disabled>Stop Server</button>
+  <div class="app-container">
+    <!-- Sidebar - Server List -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>🎮 MSC</h1>
+        <button id="add-server-btn" class="btn btn-success btn-small" title="Add Server">+ Add</button>
       </div>
       
-      <div class="terminal-container">
-        <div id="terminal-output" class="terminal"></div>
-        <div class="terminal-input-container">
-          <input type="text" id="terminal-input" class="terminal-input" placeholder="Enter command..." disabled>
-          <button id="send-btn" class="btn" disabled>Send</button>
+      <div class="server-list" id="server-list">
+        <!-- Server items will be populated by JavaScript -->
+        <div class="empty-state">
+          <p>No servers configured</p>
+          <small>Click "Add" to create one</small>
         </div>
       </div>
-    </div>
+    </aside>
 
-    <!-- File Explorer Tab -->
-    <div id="files-tab" class="tab-content">
-      <div class="file-controls">
-        <div class="breadcrumb">
-          <span id="current-path">/</span>
-        </div>
-        <div class="file-actions">
-          <button id="new-file-btn" class="btn btn-small">New File</button>
-          <button id="new-folder-btn" class="btn btn-small">New Folder</button>
-          <label for="file-upload" class="btn btn-small">Upload</label>
-          <input type="file" id="file-upload" style="display: none;">
-          <button id="refresh-files-btn" class="btn btn-small">Refresh</button>
-        </div>
-      </div>
-      
-      <div class="file-explorer">
-        <table class="file-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Size</th>
-              <th>Modified</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="file-list">
-          </tbody>
-        </table>
-      </div>
-
-      <!-- File Editor Modal -->
-      <div id="file-editor-modal" class="modal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h2 id="editor-title">Edit File</h2>
-            <button class="close-btn">&times;</button>
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- No Server Selected State -->
+      <div id="no-server-view" class="no-server-view">
+        <div class="welcome-message">
+          <h2>🎮 MServerController</h2>
+          <p>Multi-Server Minecraft Manager</p>
+          <div class="welcome-actions">
+            <button id="welcome-add-btn" class="btn btn-success">Add Your First Server</button>
           </div>
-          <textarea id="file-content" class="file-editor"></textarea>
+          <div class="feature-list">
+            <div class="feature">
+              <span class="feature-icon">🖥️</span>
+              <span>Real-time Console</span>
+            </div>
+            <div class="feature">
+              <span class="feature-icon">📁</span>
+              <span>File Explorer</span>
+            </div>
+            <div class="feature">
+              <span class="feature-icon">💾</span>
+              <span>Backup & Restore</span>
+            </div>
+            <div class="feature">
+              <span class="feature-icon">⚙️</span>
+              <span>Easy Configuration</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Server View -->
+      <div id="server-view" class="server-view" style="display: none;">
+        <header class="server-header">
+          <div class="server-info">
+            <h2 id="server-name">Server Name</h2>
+            <div class="server-status">
+              <span id="status-indicator" class="status-stopped">●</span>
+              <span id="status-text">Stopped</span>
+            </div>
+          </div>
+          <div class="server-actions">
+            <button id="start-btn" class="btn btn-success">Start</button>
+            <button id="stop-btn" class="btn btn-danger" disabled>Stop</button>
+            <button id="edit-server-btn" class="btn btn-small">⚙️ Settings</button>
+            <button id="delete-server-btn" class="btn btn-danger btn-small">🗑️</button>
+          </div>
+        </header>
+
+        <nav class="tabs">
+          <button class="tab-button active" data-tab="terminal">Terminal</button>
+          <button class="tab-button" data-tab="files">Files</button>
+          <button class="tab-button" data-tab="backups">Backups</button>
+        </nav>
+
+        <!-- Terminal Tab -->
+        <div id="terminal-tab" class="tab-content active">
+          <div class="terminal-container">
+            <div id="terminal-output" class="terminal"></div>
+            <div class="terminal-input-container">
+              <input type="text" id="terminal-input" class="terminal-input" placeholder="Enter command..." disabled>
+              <button id="send-btn" class="btn" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- File Explorer Tab -->
+        <div id="files-tab" class="tab-content">
+          <div class="file-controls">
+            <div class="breadcrumb">
+              <span id="current-path">/</span>
+            </div>
+            <div class="file-actions">
+              <button id="new-file-btn" class="btn btn-small">New File</button>
+              <button id="new-folder-btn" class="btn btn-small">New Folder</button>
+              <label for="file-upload" class="btn btn-small">Upload</label>
+              <input type="file" id="file-upload" style="display: none;">
+              <button id="refresh-files-btn" class="btn btn-small">Refresh</button>
+            </div>
+          </div>
+          
+          <div class="file-explorer">
+            <table class="file-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Size</th>
+                  <th>Modified</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="file-list">
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Backups Tab -->
+        <div id="backups-tab" class="tab-content">
+          <div class="backup-controls">
+            <button id="create-backup-btn" class="btn btn-success">Create Backup</button>
+            <button id="refresh-backups-btn" class="btn">Refresh</button>
+          </div>
+          
+          <div class="backup-list">
+            <table class="backup-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Size</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="backup-list">
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Add/Edit Server Modal -->
+    <div id="server-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="modal-title">Add Server</h2>
+          <button class="close-btn" onclick="closeServerModal()">&times;</button>
+        </div>
+        <form id="server-form">
+          <div class="form-group">
+            <label for="input-name">Server Name:</label>
+            <input type="text" id="input-name" class="form-control" placeholder="My Minecraft Server" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="input-path">Server Directory Path:</label>
+            <input type="text" id="input-path" class="form-control" placeholder="/path/to/minecraft/server">
+            <small>Leave empty to create a new directory automatically</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="input-executable">Server Executable:</label>
+            <input type="text" id="input-executable" class="form-control" placeholder="server.jar" value="server.jar">
+            <small>Name of the server JAR file</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="input-java-args">Java Arguments:</label>
+            <input type="text" id="input-java-args" class="form-control" placeholder="-Xmx2G -Xms1G" value="-Xmx2G -Xms1G">
+            <small>JVM arguments for memory allocation</small>
+          </div>
+          
           <div class="modal-footer">
-            <button id="save-file-btn" class="btn btn-success">Save</button>
-            <button class="close-btn btn">Cancel</button>
+            <button type="submit" class="btn btn-success">Save</button>
+            <button type="button" class="btn" onclick="closeServerModal()">Cancel</button>
           </div>
-        </div>
+        </form>
       </div>
     </div>
 
-    <!-- Backups Tab -->
-    <div id="backups-tab" class="tab-content">
-      <div class="backup-controls">
-        <button id="create-backup-btn" class="btn btn-success">Create Backup</button>
-        <button id="refresh-backups-btn" class="btn">Refresh</button>
-      </div>
-      
-      <div class="backup-list">
-        <table class="backup-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Size</th>
-              <th>Created</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="backup-list">
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Configuration Tab -->
-    <div id="config-tab" class="tab-content">
-      <div class="config-form">
-        <h2>Server Configuration</h2>
-        
-        <div class="form-group">
-          <label for="server-path">Server Directory Path:</label>
-          <input type="text" id="server-path" class="form-control" placeholder="/path/to/minecraft/server">
-          <small>Full path to your Minecraft server directory</small>
+    <!-- File Editor Modal -->
+    <div id="file-editor-modal" class="modal">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2 id="editor-title">Edit File</h2>
+          <button class="close-btn" onclick="closeFileEditor()">&times;</button>
         </div>
-        
-        <div class="form-group">
-          <label for="executable">Server Executable:</label>
-          <input type="text" id="executable" class="form-control" placeholder="server.jar">
-          <small>Name of the server JAR file</small>
-        </div>
-        
-        <div class="form-group">
-          <label for="java-args">Java Arguments:</label>
-          <input type="text" id="java-args" class="form-control" placeholder="-Xmx2G -Xms1G">
-          <small>JVM arguments for memory allocation</small>
-        </div>
-        
-        <div class="form-actions">
-          <button id="save-config-btn" class="btn btn-success">Save Configuration</button>
+        <textarea id="file-content" class="file-editor"></textarea>
+        <div class="modal-footer">
+          <button id="save-file-btn" class="btn btn-success">Save</button>
+          <button class="btn" onclick="closeFileEditor()">Cancel</button>
         </div>
       </div>
     </div>
   </div>
 
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

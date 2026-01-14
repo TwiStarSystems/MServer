@@ -1,50 +1,53 @@
-// WebSocket connection
-let ws = null;
+// MServerController - Multi-Server Frontend Application
+
+// Global state
+let socket = null;
+let currentServerId = null;
 let currentPath = '';
 let currentEditingFile = '';
+let editingServerId = null;
+let servers = [];
 
-// Initialize WebSocket
+// ==================== Socket.IO Connection ====================
+
 function connectWebSocket() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${window.location.host}`);
+  socket = io();
   
-  ws.onopen = () => {
-    console.log('WebSocket connected');
-  };
-  
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    
-    if (data.type === 'output' || data.type === 'error' || data.type === 'info') {
-      appendTerminalOutput(data.data);
+  socket.on('connect', () => {
+    console.log('Socket.IO connected');
+    // Subscribe to current server if selected
+    if (currentServerId) {
+      socket.emit('subscribe', { serverId: currentServerId });
     }
-  };
+  });
   
-  ws.onclose = () => {
-    console.log('WebSocket disconnected');
-    setTimeout(connectWebSocket, 3000);
-  };
+  socket.on('message', (data) => {
+    // Only process messages for the currently selected server
+    if (data.serverId === currentServerId) {
+      if (data.type === 'output' || data.type === 'error' || data.type === 'info') {
+        appendTerminalOutput(data.data);
+      }
+      if (data.type === 'status') {
+        updateServerStatus(data.running);
+      }
+    }
+    // Update server list status
+    if (data.type === 'status') {
+      updateServerInList(data.serverId, data.running);
+    }
+  });
   
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
-  };
+  socket.on('disconnect', () => {
+    console.log('Socket.IO disconnected');
+  });
+  
+  socket.on('connect_error', (error) => {
+    console.error('Socket.IO error:', error);
+  });
 }
 
-// Terminal functions
-function appendTerminalOutput(text) {
-  const terminal = document.getElementById('terminal-output');
-  terminal.textContent += text;
-  terminal.scrollTop = terminal.scrollHeight;
-}
+// ==================== API Functions ====================
 
-function sendCommand(command) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'command', command }));
-    appendTerminalOutput(`> ${command}\n`);
-  }
-}
-
-// API functions
 async function apiRequest(url, options = {}) {
   try {
     const response = await fetch(url, {
@@ -54,16 +57,107 @@ async function apiRequest(url, options = {}) {
         ...options.headers
       }
     });
-    return await response.json();
+    const data = await response.json();
+    if (!response.ok && data.error) {
+      throw new Error(data.error);
+    }
+    return data;
   } catch (error) {
     console.error('API request failed:', error);
-    alert('Request failed: ' + error.message);
+    alert('Error: ' + error.message);
     throw error;
   }
 }
 
-async function updateStatus() {
-  const status = await apiRequest('/api/status');
+// ==================== Server List Management ====================
+
+async function loadServers() {
+  try {
+    const data = await apiRequest('/api/servers');
+    servers = data.servers || [];
+    renderServerList();
+  } catch (error) {
+    console.error('Failed to load servers:', error);
+  }
+}
+
+function renderServerList() {
+  const container = document.getElementById('server-list');
+  
+  if (servers.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <p>No servers configured</p>
+        <small>Click "Add" to create one</small>
+      </div>
+    `;
+    return;
+  }
+  
+  container.innerHTML = servers.map(server => `
+    <div class="server-item ${server.id === currentServerId ? 'active' : ''}" 
+         data-server-id="${server.id}" 
+         onclick="selectServer('${server.id}')">
+      <div class="server-item-status ${server.running ? 'status-running' : 'status-stopped'}">●</div>
+      <div class="server-item-info">
+        <div class="server-item-name">${escapeHtml(server.name)}</div>
+        <div class="server-item-state">${server.running ? 'Running' : 'Stopped'}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function updateServerInList(serverId, isRunning) {
+  const server = servers.find(s => s.id === serverId);
+  if (server) {
+    server.running = isRunning;
+    renderServerList();
+  }
+}
+
+// ==================== Server Selection ====================
+
+async function selectServer(serverId) {
+  currentServerId = serverId;
+  currentPath = '';
+  
+  // Update UI
+  document.getElementById('no-server-view').style.display = 'none';
+  document.getElementById('server-view').style.display = 'flex';
+  
+  // Update server list selection
+  renderServerList();
+  
+  // Clear terminal
+  document.getElementById('terminal-output').textContent = '';
+  
+  // Subscribe to server output
+  if (socket && socket.connected) {
+    socket.emit('subscribe', { serverId: currentServerId });
+  }
+  
+  // Load server details
+  await loadServerDetails();
+  
+  // Switch to terminal tab
+  switchTab('terminal');
+}
+
+async function loadServerDetails() {
+  if (!currentServerId) return;
+  
+  try {
+    const server = await apiRequest(`/api/servers/${currentServerId}`);
+    
+    // Update header
+    document.getElementById('server-name').textContent = server.name;
+    updateServerStatus(server.running);
+  } catch (error) {
+    console.error('Failed to load server details:', error);
+  }
+}
+
+function updateServerStatus(isRunning) {
   const indicator = document.getElementById('status-indicator');
   const text = document.getElementById('status-text');
   const startBtn = document.getElementById('start-btn');
@@ -71,7 +165,7 @@ async function updateStatus() {
   const terminalInput = document.getElementById('terminal-input');
   const sendBtn = document.getElementById('send-btn');
   
-  if (status.running) {
+  if (isRunning) {
     indicator.className = 'status-running';
     text.textContent = 'Running';
     startBtn.disabled = true;
@@ -86,54 +180,190 @@ async function updateStatus() {
     terminalInput.disabled = true;
     sendBtn.disabled = true;
   }
+  
+  // Update server in list
+  updateServerInList(currentServerId, isRunning);
 }
 
+// ==================== Server Actions ====================
+
 async function startServer() {
-  const result = await apiRequest('/api/server/start', { method: 'POST' });
-  if (result.success) {
-    appendTerminalOutput('Starting server...\n');
-    updateStatus();
+  if (!currentServerId) return;
+  
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
+    if (result.success) {
+      appendTerminalOutput('Starting server...\n');
+      updateServerStatus(true);
+    }
+  } catch (error) {
+    // Error already shown by apiRequest
   }
 }
 
 async function stopServer() {
-  const result = await apiRequest('/api/server/stop', { method: 'POST' });
-  if (result.success) {
-    appendTerminalOutput('Stopping server...\n');
-    setTimeout(updateStatus, 1000);
+  if (!currentServerId) return;
+  
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/stop`, { method: 'POST' });
+    if (result.success) {
+      appendTerminalOutput('Stopping server...\n');
+      setTimeout(() => loadServerDetails(), 2000);
+    }
+  } catch (error) {
+    // Error already shown by apiRequest
   }
 }
 
-// File Explorer functions
-async function loadFiles(path = '') {
-  currentPath = path;
-  const data = await apiRequest(`/api/files?path=${encodeURIComponent(path)}`);
+// ==================== Server CRUD ====================
+
+function openAddServerModal() {
+  editingServerId = null;
+  document.getElementById('modal-title').textContent = 'Add Server';
+  document.getElementById('input-name').value = '';
+  document.getElementById('input-path').value = '';
+  document.getElementById('input-executable').value = 'server.jar';
+  document.getElementById('input-java-args').value = '-Xmx2G -Xms1G';
+  document.getElementById('server-modal').classList.add('active');
+}
+
+async function openEditServerModal() {
+  if (!currentServerId) return;
   
-  if (data.isFile) {
-    await openFileEditor(path);
+  try {
+    const server = await apiRequest(`/api/servers/${currentServerId}`);
+    
+    editingServerId = currentServerId;
+    document.getElementById('modal-title').textContent = 'Edit Server';
+    document.getElementById('input-name').value = server.name || '';
+    document.getElementById('input-path').value = server.serverPath || '';
+    document.getElementById('input-executable').value = server.executable || 'server.jar';
+    document.getElementById('input-java-args').value = server.javaArgs || '-Xmx2G -Xms1G';
+    document.getElementById('server-modal').classList.add('active');
+  } catch (error) {
+    console.error('Failed to load server for editing:', error);
+  }
+}
+
+function closeServerModal() {
+  document.getElementById('server-modal').classList.remove('active');
+  editingServerId = null;
+}
+
+async function saveServer(e) {
+  e.preventDefault();
+  
+  const serverData = {
+    name: document.getElementById('input-name').value,
+    serverPath: document.getElementById('input-path').value,
+    executable: document.getElementById('input-executable').value,
+    javaArgs: document.getElementById('input-java-args').value
+  };
+  
+  try {
+    if (editingServerId) {
+      // Update existing server
+      await apiRequest(`/api/servers/${editingServerId}`, {
+        method: 'PUT',
+        body: JSON.stringify(serverData)
+      });
+    } else {
+      // Create new server
+      const result = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify(serverData)
+      });
+      // Select the new server
+      await loadServers();
+      selectServer(result.serverId);
+    }
+    
+    closeServerModal();
+    await loadServers();
+    
+    if (currentServerId) {
+      await loadServerDetails();
+    }
+  } catch (error) {
+    console.error('Failed to save server:', error);
+  }
+}
+
+async function deleteServer() {
+  if (!currentServerId) return;
+  
+  const server = servers.find(s => s.id === currentServerId);
+  if (!confirm(`Are you sure you want to delete "${server?.name}"?\n\nThis will only remove the configuration, not the server files.`)) {
     return;
   }
   
-  document.getElementById('current-path').textContent = '/' + path;
-  const fileList = document.getElementById('file-list');
-  fileList.innerHTML = '';
-  
-  // Add parent directory link if not at root
-  if (path) {
-    const parentPath = path.split('/').slice(0, -1).join('/');
-    const row = createFileRow({
-      name: '..',
-      isDirectory: true
-    }, parentPath);
-    fileList.appendChild(row);
+  try {
+    await apiRequest(`/api/servers/${currentServerId}`, { method: 'DELETE' });
+    
+    currentServerId = null;
+    document.getElementById('no-server-view').style.display = 'flex';
+    document.getElementById('server-view').style.display = 'none';
+    
+    await loadServers();
+  } catch (error) {
+    console.error('Failed to delete server:', error);
   }
+}
+
+// ==================== Terminal Functions ====================
+
+function appendTerminalOutput(text) {
+  const terminal = document.getElementById('terminal-output');
+  terminal.textContent += text;
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function sendCommand(command) {
+  if (!currentServerId || !socket || !socket.connected) return;
   
-  // Add files and directories
-  data.files.forEach(file => {
-    const filePath = path ? `${path}/${file.name}` : file.name;
-    const row = createFileRow(file, filePath);
-    fileList.appendChild(row);
-  });
+  socket.emit('command', { serverId: currentServerId, command });
+  appendTerminalOutput(`> ${command}\n`);
+}
+
+// ==================== File Explorer ====================
+
+async function loadFiles(path = '') {
+  if (!currentServerId) return;
+  
+  currentPath = path;
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/files?path=${encodeURIComponent(path)}`);
+    
+    if (data.isFile) {
+      await openFileEditor(path);
+      return;
+    }
+    
+    document.getElementById('current-path').textContent = '/' + path;
+    const fileList = document.getElementById('file-list');
+    fileList.innerHTML = '';
+    
+    // Add parent directory link if not at root
+    if (path) {
+      const parentPath = path.split('/').slice(0, -1).join('/');
+      fileList.appendChild(createFileRow({ name: '..', isDirectory: true }, parentPath));
+    }
+    
+    // Sort: directories first, then files
+    const sortedFiles = data.files.sort((a, b) => {
+      if (a.isDirectory && !b.isDirectory) return -1;
+      if (!a.isDirectory && b.isDirectory) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    
+    sortedFiles.forEach(file => {
+      const filePath = path ? `${path}/${file.name}` : file.name;
+      fileList.appendChild(createFileRow(file, filePath));
+    });
+  } catch (error) {
+    console.error('Failed to load files:', error);
+  }
 }
 
 function createFileRow(file, filePath) {
@@ -144,7 +374,7 @@ function createFileRow(file, filePath) {
   nameDiv.className = 'file-name';
   nameDiv.innerHTML = `
     <span class="file-icon">${file.isDirectory ? '📁' : '📄'}</span>
-    <span>${file.name}</span>
+    <span>${escapeHtml(file.name)}</span>
   `;
   nameDiv.onclick = () => {
     if (file.isDirectory) {
@@ -197,195 +427,227 @@ function createFileRow(file, filePath) {
   return row;
 }
 
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
-}
-
 async function openFileEditor(filePath) {
-  currentEditingFile = filePath;
-  const data = await apiRequest(`/api/files/read?path=${encodeURIComponent(filePath)}`);
+  if (!currentServerId) return;
   
-  document.getElementById('editor-title').textContent = `Edit: ${filePath}`;
-  document.getElementById('file-content').value = data.content;
-  document.getElementById('file-editor-modal').classList.add('active');
+  try {
+    currentEditingFile = filePath;
+    const data = await apiRequest(`/api/servers/${currentServerId}/files/read?path=${encodeURIComponent(filePath)}`);
+    
+    document.getElementById('editor-title').textContent = `Edit: ${filePath}`;
+    document.getElementById('file-content').value = data.content;
+    document.getElementById('file-editor-modal').classList.add('active');
+  } catch (error) {
+    console.error('Failed to open file:', error);
+  }
 }
 
 async function saveFile() {
-  const content = document.getElementById('file-content').value;
-  await apiRequest('/api/files/write', {
-    method: 'POST',
-    body: JSON.stringify({ path: currentEditingFile, content })
-  });
+  if (!currentServerId || !currentEditingFile) return;
   
-  closeModal();
-  alert('File saved successfully');
+  try {
+    const content = document.getElementById('file-content').value;
+    await apiRequest(`/api/servers/${currentServerId}/files/write`, {
+      method: 'POST',
+      body: JSON.stringify({ path: currentEditingFile, content })
+    });
+    
+    closeFileEditor();
+    alert('File saved successfully');
+  } catch (error) {
+    console.error('Failed to save file:', error);
+  }
 }
 
-function closeModal() {
+function closeFileEditor() {
   document.getElementById('file-editor-modal').classList.remove('active');
+  currentEditingFile = '';
 }
 
 async function createNewFile() {
+  if (!currentServerId) return;
+  
   const name = prompt('Enter file name:');
   if (!name) return;
   
-  const filePath = currentPath ? `${currentPath}/${name}` : name;
-  await apiRequest('/api/files/create', {
-    method: 'POST',
-    body: JSON.stringify({ path: filePath, type: 'file' })
-  });
-  
-  loadFiles(currentPath);
+  try {
+    const filePath = currentPath ? `${currentPath}/${name}` : name;
+    await apiRequest(`/api/servers/${currentServerId}/files/create`, {
+      method: 'POST',
+      body: JSON.stringify({ path: filePath, type: 'file' })
+    });
+    
+    loadFiles(currentPath);
+  } catch (error) {
+    console.error('Failed to create file:', error);
+  }
 }
 
 async function createNewFolder() {
+  if (!currentServerId) return;
+  
   const name = prompt('Enter folder name:');
   if (!name) return;
   
-  const filePath = currentPath ? `${currentPath}/${name}` : name;
-  await apiRequest('/api/files/create', {
-    method: 'POST',
-    body: JSON.stringify({ path: filePath, type: 'directory' })
-  });
-  
-  loadFiles(currentPath);
+  try {
+    const filePath = currentPath ? `${currentPath}/${name}` : name;
+    await apiRequest(`/api/servers/${currentServerId}/files/create`, {
+      method: 'POST',
+      body: JSON.stringify({ path: filePath, type: 'directory' })
+    });
+    
+    loadFiles(currentPath);
+  } catch (error) {
+    console.error('Failed to create folder:', error);
+  }
 }
 
 async function deleteFile(filePath) {
+  if (!currentServerId) return;
   if (!confirm(`Are you sure you want to delete ${filePath}?`)) return;
   
-  await apiRequest('/api/files/delete', {
-    method: 'DELETE',
-    body: JSON.stringify({ path: filePath })
-  });
-  
-  loadFiles(currentPath);
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/files/delete`, {
+      method: 'DELETE',
+      body: JSON.stringify({ path: filePath })
+    });
+    
+    loadFiles(currentPath);
+  } catch (error) {
+    console.error('Failed to delete file:', error);
+  }
 }
 
 function downloadFile(filePath) {
-  window.location.href = `/api/files/download?path=${encodeURIComponent(filePath)}`;
+  if (!currentServerId) return;
+  window.location.href = `/api/servers/${currentServerId}/files/download?path=${encodeURIComponent(filePath)}`;
 }
 
 async function uploadFile(file) {
+  if (!currentServerId) return;
+  
   const formData = new FormData();
   formData.append('file', file);
   formData.append('path', currentPath);
   
-  const response = await fetch('/api/files/upload', {
-    method: 'POST',
-    body: formData
-  });
-  
-  const result = await response.json();
-  if (result.success) {
-    alert('File uploaded successfully');
-    loadFiles(currentPath);
+  try {
+    const response = await fetch(`/api/servers/${currentServerId}/files/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    
+    const result = await response.json();
+    if (result.success) {
+      alert('File uploaded successfully');
+      loadFiles(currentPath);
+    } else {
+      throw new Error(result.error || 'Upload failed');
+    }
+  } catch (error) {
+    console.error('Failed to upload file:', error);
+    alert('Upload failed: ' + error.message);
   }
 }
 
-// Backup functions
+// ==================== Backup Functions ====================
+
 async function loadBackups() {
-  const data = await apiRequest('/api/backups');
-  const backupList = document.getElementById('backup-list');
-  backupList.innerHTML = '';
+  if (!currentServerId) return;
   
-  if (data.backups.length === 0) {
-    backupList.innerHTML = '<tr><td colspan="4" class="empty-state"><h3>No backups yet</h3><p>Create your first backup to get started</p></td></tr>';
-    return;
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/backups`);
+    const backupList = document.getElementById('backup-list');
+    backupList.innerHTML = '';
+    
+    if (data.backups.length === 0) {
+      backupList.innerHTML = '<tr><td colspan="4" class="empty-state"><h3>No backups yet</h3><p>Create your first backup to protect your server</p></td></tr>';
+      return;
+    }
+    
+    data.backups.forEach(backup => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${escapeHtml(backup.name)}</td>
+        <td>${formatBytes(backup.size)}</td>
+        <td>${new Date(backup.created).toLocaleString()}</td>
+        <td>
+          <div class="file-actions-cell">
+            <button class="btn btn-small action-btn" onclick="downloadBackup('${escapeHtml(backup.name)}')">Download</button>
+            <button class="btn btn-success btn-small action-btn" onclick="restoreBackup('${escapeHtml(backup.name)}')">Restore</button>
+            <button class="btn btn-danger btn-small action-btn" onclick="deleteBackup('${escapeHtml(backup.name)}')">Delete</button>
+          </div>
+        </td>
+      `;
+      backupList.appendChild(row);
+    });
+  } catch (error) {
+    console.error('Failed to load backups:', error);
   }
-  
-  data.backups.forEach(backup => {
-    const row = document.createElement('tr');
-    
-    row.innerHTML = `
-      <td>${backup.name}</td>
-      <td>${formatBytes(backup.size)}</td>
-      <td>${new Date(backup.created).toLocaleString()}</td>
-      <td>
-        <div class="file-actions-cell">
-          <button class="btn btn-small action-btn download-backup" data-name="${backup.name}">Download</button>
-          <button class="btn btn-danger btn-small action-btn delete-backup" data-name="${backup.name}">Delete</button>
-        </div>
-      </td>
-    `;
-    
-    backupList.appendChild(row);
-  });
-  
-  // Add event listeners
-  document.querySelectorAll('.download-backup').forEach(btn => {
-    btn.onclick = () => downloadBackup(btn.dataset.name);
-  });
-  
-  document.querySelectorAll('.delete-backup').forEach(btn => {
-    btn.onclick = () => deleteBackup(btn.dataset.name);
-  });
 }
 
 async function createBackup() {
+  if (!currentServerId) return;
   if (!confirm('Create a backup of the server? This may take a few minutes.')) return;
   
-  document.getElementById('create-backup-btn').disabled = true;
-  document.getElementById('create-backup-btn').textContent = 'Creating...';
+  const btn = document.getElementById('create-backup-btn');
+  btn.disabled = true;
+  btn.textContent = 'Creating...';
   
   try {
-    const result = await apiRequest('/api/backups/create', { method: 'POST' });
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/create`, { method: 'POST' });
     if (result.success) {
       alert(`Backup created: ${result.backup} (${formatBytes(result.size)})`);
       loadBackups();
     }
+  } catch (error) {
+    console.error('Failed to create backup:', error);
   } finally {
-    document.getElementById('create-backup-btn').disabled = false;
-    document.getElementById('create-backup-btn').textContent = 'Create Backup';
+    btn.disabled = false;
+    btn.textContent = 'Create Backup';
   }
 }
 
 function downloadBackup(name) {
-  window.location.href = `/api/backups/download?name=${encodeURIComponent(name)}`;
+  if (!currentServerId) return;
+  window.location.href = `/api/servers/${currentServerId}/backups/download?name=${encodeURIComponent(name)}`;
 }
 
-async function deleteBackup(name) {
-  if (!confirm(`Delete backup ${name}?`)) return;
+async function restoreBackup(name) {
+  if (!currentServerId) return;
+  if (!confirm(`Restore backup "${name}"?\n\nWARNING: This will replace all current server files!\nMake sure the server is stopped.`)) return;
   
-  await apiRequest('/api/backups/delete', {
-    method: 'DELETE',
-    body: JSON.stringify({ name })
-  });
-  
-  loadBackups();
-}
-
-// Configuration functions
-async function loadConfig() {
-  const config = await apiRequest('/api/config');
-  
-  document.getElementById('server-path').value = config.serverPath || '';
-  document.getElementById('executable').value = config.executable || 'server.jar';
-  document.getElementById('java-args').value = config.javaArgs || '-Xmx2G -Xms1G';
-}
-
-async function saveConfig() {
-  const config = {
-    serverPath: document.getElementById('server-path').value,
-    executable: document.getElementById('executable').value,
-    javaArgs: document.getElementById('java-args').value
-  };
-  
-  const result = await apiRequest('/api/config', {
-    method: 'POST',
-    body: JSON.stringify(config)
-  });
-  
-  if (result.success) {
-    alert('Configuration saved successfully');
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+    
+    if (result.success) {
+      alert('Backup restored successfully!');
+      loadFiles('');
+    }
+  } catch (error) {
+    console.error('Failed to restore backup:', error);
   }
 }
 
-// Tab switching
+async function deleteBackup(name) {
+  if (!currentServerId) return;
+  if (!confirm(`Delete backup ${name}?`)) return;
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/backups/delete`, {
+      method: 'DELETE',
+      body: JSON.stringify({ name })
+    });
+    loadBackups();
+  } catch (error) {
+    console.error('Failed to delete backup:', error);
+  }
+}
+
+// ==================== Tab Switching ====================
+
 function switchTab(tabName) {
   document.querySelectorAll('.tab-button').forEach(btn => {
     btn.classList.remove('active');
@@ -399,37 +661,63 @@ function switchTab(tabName) {
   
   // Load data when switching tabs
   if (tabName === 'files') {
-    loadFiles();
+    loadFiles(currentPath);
   } else if (tabName === 'backups') {
     loadBackups();
-  } else if (tabName === 'config') {
-    loadConfig();
   }
 }
 
-// Event listeners
+// ==================== Utility Functions ====================
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ==================== Event Listeners ====================
+
 document.addEventListener('DOMContentLoaded', () => {
   // Connect WebSocket
   connectWebSocket();
   
-  // Update status
-  updateStatus();
-  setInterval(updateStatus, 5000);
+  // Load servers
+  loadServers();
+  
+  // Refresh servers periodically
+  setInterval(loadServers, 10000);
+  
+  // Add server buttons
+  document.getElementById('add-server-btn').onclick = openAddServerModal;
+  document.getElementById('welcome-add-btn').onclick = openAddServerModal;
+  
+  // Server form
+  document.getElementById('server-form').onsubmit = saveServer;
+  
+  // Server actions
+  document.getElementById('start-btn').onclick = startServer;
+  document.getElementById('stop-btn').onclick = stopServer;
+  document.getElementById('edit-server-btn').onclick = openEditServerModal;
+  document.getElementById('delete-server-btn').onclick = deleteServer;
   
   // Tab buttons
   document.querySelectorAll('.tab-button').forEach(btn => {
     btn.onclick = () => switchTab(btn.dataset.tab);
   });
   
-  // Terminal controls
-  document.getElementById('start-btn').onclick = startServer;
-  document.getElementById('stop-btn').onclick = stopServer;
-  
+  // Terminal input
   document.getElementById('terminal-input').onkeypress = (e) => {
     if (e.key === 'Enter') {
-      const input = e.target;
-      sendCommand(input.value);
-      input.value = '';
+      sendCommand(e.target.value);
+      e.target.value = '';
     }
   };
   
@@ -453,21 +741,17 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // File editor
   document.getElementById('save-file-btn').onclick = saveFile;
-  document.querySelectorAll('.close-btn').forEach(btn => {
-    btn.onclick = closeModal;
-  });
   
   // Backup controls
   document.getElementById('create-backup-btn').onclick = createBackup;
   document.getElementById('refresh-backups-btn').onclick = loadBackups;
   
-  // Config controls
-  document.getElementById('save-config-btn').onclick = saveConfig;
+  // Close modals on background click
+  document.getElementById('server-modal').onclick = (e) => {
+    if (e.target.id === 'server-modal') closeServerModal();
+  };
   
-  // Close modal on background click
   document.getElementById('file-editor-modal').onclick = (e) => {
-    if (e.target.id === 'file-editor-modal') {
-      closeModal();
-    }
+    if (e.target.id === 'file-editor-modal') closeFileEditor();
   };
 });

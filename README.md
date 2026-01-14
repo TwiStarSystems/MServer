@@ -1,42 +1,53 @@
 # MServerController
-A Web-Based Minecraft Server Manager
 
-MServerController is a modern, user-friendly web application for creating, running, and managing Minecraft servers. Built with Node.js and Express, it provides a clean interface for server administration with real-time monitoring, file management, and automated backups.
+A Web-Based Multi-Server Minecraft Manager
+
+MServerController is a modern, user-friendly web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python and Flask, it provides a clean interface for server administration with real-time monitoring, file management, and automated backups.
+
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ## Features
 
-### 🖥️ Terminal View
-- Real-time server console output via WebSocket
-- Live command execution
+### 🎮 Multi-Server Support
+- Manage unlimited Minecraft servers from a single dashboard
+- Start, stop, and monitor multiple servers simultaneously
+- Each server has isolated configuration, files, and backups
+- Real-time status indicators for all servers
+
+### 🖥️ Real-Time Terminal
+- Live server console output via WebSocket (Socket.IO)
+- Execute commands on any running server
 - Color-coded output for easy reading
-- Command history and input
+- Persistent output buffer for recent history
 
 ### 📁 File Explorer
 - Browse server files and directories
 - Create, edit, and delete files
-- Upload files to the server
+- Upload files to any server
 - Download files and directories
 - Syntax-highlighted text editor
 
 ### 💾 Backup System
-- One-click backup creation
+- One-click backup creation per server
 - Automatic ZIP compression
 - Download backups to your local machine
+- **Restore backups** with a single click
 - Manage and delete old backups
-- Full server state preservation
+- Backups organized by server
 
 ### ⚙️ Server Configuration
 - Configure server executable path
-- Set Java memory allocation
+- Set Java memory allocation per server
 - Customize JVM arguments
-- Change server directory
 - Easy-to-use web interface
 
 ## Requirements
 
-- **Operating System**: Debian 13 or newer
-- **Web Server**: Nginx
-- **Runtime**: Node.js LTS (18+)
+- **Operating System**: Debian 13+ (recommended), Ubuntu 22.04+, or any modern Linux
+- **Web Server**: Nginx (for production)
+- **Runtime**: Python 3.10+
 - **Java**: OpenJDK 17+ (for running Minecraft servers)
 
 ## Installation
@@ -55,7 +66,8 @@ sudo ./install.sh
 ```
 
 The script will:
-- Install all required dependencies (Node.js, Nginx, Java)
+- Install all required dependencies (Python, Nginx, Java)
+- Create a Python virtual environment
 - Set up the application in `/opt/mservercontroller`
 - Configure Nginx as a reverse proxy
 - Create and enable a systemd service
@@ -70,20 +82,22 @@ http://your-server-ip
 
 If you prefer to install manually:
 
-1. **Install dependencies**:
+1. **Install system dependencies**:
 ```bash
 sudo apt-get update
-sudo apt-get install -y nodejs npm nginx openjdk-17-jre-headless
+sudo apt-get install -y python3 python3-pip python3-venv nginx openjdk-17-jre-headless
 ```
 
 2. **Clone and setup**:
 ```bash
 git clone https://github.com/TwiStarSystems/MServerController.git
 cd MServerController
-npm install
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-3. **Configure Nginx**:
+3. **Configure Nginx** (optional, for production):
 ```bash
 sudo cp nginx.conf /etc/nginx/sites-available/mservercontroller
 sudo ln -s /etc/nginx/sites-available/mservercontroller /etc/nginx/sites-enabled/
@@ -93,64 +107,87 @@ sudo systemctl reload nginx
 
 4. **Start the application**:
 ```bash
-node server.js
+source venv/bin/activate
+python server.py
 ```
+
+### Development Mode
+
+For local development:
+```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run with debug mode (optional)
+python server.py
+```
+
+The application will be available at `http://localhost:3000`
 
 ## Usage
 
-### Initial Setup
+### Getting Started
 
 1. **Access the web interface** at `http://your-server-ip`
 
-2. **Configure your server** in the Configuration tab:
-   - Set the server directory path (where your Minecraft server files are)
-   - Specify the server JAR file name (e.g., `server.jar`)
-   - Configure Java memory settings (e.g., `-Xmx2G -Xms1G`)
-   - Click "Save Configuration"
+2. **Add a server** by clicking the "Add" button in the sidebar:
+   - Enter a name for your server
+   - Specify the server directory (or leave empty to create a new one)
+   - Configure the JAR file name and Java arguments
+   - Click "Save"
 
-3. **Start your server** from the Terminal tab
+3. **Start your server** by selecting it and clicking "Start"
 
-### Managing Your Server
+### Managing Multiple Servers
+
+#### Sidebar
+- View all configured servers at a glance
+- Green indicator = Running, Red = Stopped
+- Click any server to manage it
 
 #### Terminal View
-- Click the "Start Server" button to launch your Minecraft server
-- Watch real-time console output
-- Execute commands by typing in the input field and pressing Enter
-- Click "Stop Server" to gracefully shut down
+- Real-time console output
+- Send commands while server is running
+- Start/Stop buttons for quick control
 
 #### File Explorer
-- Browse your server files
-- Click on a file to edit its contents
-- Use the action buttons to:
-  - **New File**: Create a new file
-  - **New Folder**: Create a new directory
-  - **Upload**: Upload files from your computer
-  - **Download**: Download individual files
-  - **Delete**: Remove files or folders
+- Browse and edit server files
+- Upload plugins, worlds, configurations
+- Download any file
 
 #### Backups
-- Click "Create Backup" to create a ZIP archive of your entire server
-- Download backups to your local machine
-- Delete old backups to save space
-- Backups are stored in the `backups/` directory
+- Create backups of any server
+- Restore previous states
+- Download backups for external storage
 
 ## Configuration
 
 ### Environment Variables
 
-You can customize the application using environment variables:
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | HTTP port for the application | `3000` |
+| `SECRET_KEY` | Flask secret key for sessions | Auto-generated |
 
-- `PORT`: HTTP port (default: 3000)
-- `NODE_ENV`: Environment mode (production/development)
+### Server Configuration
 
-### Config File
-
-The application stores its configuration in `config.json`:
+Each server stores its configuration in `config.json`:
 ```json
 {
-  "serverPath": "/path/to/minecraft/server",
-  "executable": "server.jar",
-  "javaArgs": "-Xmx2G -Xms1G"
+  "servers": {
+    "abc12345": {
+      "name": "Survival Server",
+      "serverPath": "/opt/mservercontroller/servers/abc12345",
+      "executable": "server.jar",
+      "javaArgs": "-Xmx4G -Xms2G",
+      "autoStart": false,
+      "created": "2025-01-14T10:00:00"
+    }
+  }
 }
 ```
 
@@ -175,10 +212,42 @@ sudo systemctl status mservercontroller
 sudo journalctl -u mservercontroller -f
 ```
 
+## API Reference
+
+### Server Management
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers` | List all servers |
+| POST | `/api/servers` | Create new server |
+| GET | `/api/servers/<id>` | Get server details |
+| PUT | `/api/servers/<id>` | Update server config |
+| DELETE | `/api/servers/<id>` | Delete server config |
+| POST | `/api/servers/<id>/start` | Start server |
+| POST | `/api/servers/<id>/stop` | Stop server |
+
+### File Management
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/files` | List files |
+| GET | `/api/servers/<id>/files/read` | Read file content |
+| POST | `/api/servers/<id>/files/write` | Write file content |
+| POST | `/api/servers/<id>/files/upload` | Upload file |
+| GET | `/api/servers/<id>/files/download` | Download file |
+| DELETE | `/api/servers/<id>/files/delete` | Delete file |
+
+### Backup Management
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/backups` | List backups |
+| POST | `/api/servers/<id>/backups/create` | Create backup |
+| GET | `/api/servers/<id>/backups/download` | Download backup |
+| POST | `/api/servers/<id>/backups/restore` | Restore backup |
+| DELETE | `/api/servers/<id>/backups/delete` | Delete backup |
+
 ## Security Considerations
 
 - The application runs on localhost by default and should be accessed through Nginx
-- File operations are restricted to the configured server directory
+- File operations are restricted to configured server directories
 - Path traversal attacks are prevented with security checks
 - Rate limiting is enabled on all API endpoints:
   - General API: 100 requests per 15 minutes per IP
@@ -186,9 +255,6 @@ sudo journalctl -u mservercontroller -f
   - Backup creation: 5 requests per 15 minutes per IP
 - Consider setting up SSL/TLS certificates for production use
 - Implement firewall rules to restrict access to the web interface
-- Change default ports if needed
-- Regular backups are recommended
-- All dependencies are regularly updated to patched versions
 
 ## Troubleshooting
 
@@ -197,11 +263,16 @@ sudo journalctl -u mservercontroller -f
 # Check logs
 sudo journalctl -u mservercontroller -xe
 
-# Verify Node.js is installed
-node --version
+# Verify Python is installed
+python3 --version
 
 # Check if port 3000 is available
 sudo netstat -tlnp | grep 3000
+
+# Test manually
+cd /opt/mservercontroller
+source venv/bin/activate
+python server.py
 ```
 
 ### Nginx errors
@@ -215,24 +286,27 @@ sudo tail -f /var/log/nginx/error.log
 
 ### Minecraft server won't start
 - Verify Java is installed: `java -version`
-- Check that the server JAR path is correct in Configuration
+- Check that the server JAR path is correct
 - Ensure the server directory has proper permissions
 - Review the terminal output for error messages
+- Accept the EULA if required (`eula.txt`)
 
 ## Directory Structure
 
 ```
 MServerController/
-├── server.js           # Main Node.js server
-├── package.json        # Node.js dependencies
+├── server.py           # Main Python/Flask server
+├── requirements.txt    # Python dependencies
 ├── nginx.conf          # Nginx configuration
 ├── install.sh          # Installation script
+├── config.json         # Server configurations (generated)
 ├── public/             # Frontend files
 │   ├── index.html      # Main HTML page
 │   ├── styles.css      # Styles
 │   └── app.js          # Frontend JavaScript
-├── servers/            # Minecraft server files (default)
-├── backups/            # Server backups
+├── venv/               # Python virtual environment
+├── servers/            # Minecraft server files (per-server subdirectories)
+├── backups/            # Server backups (per-server subdirectories)
 └── uploads/            # Temporary upload directory
 ```
 
@@ -240,9 +314,15 @@ MServerController/
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
 
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see [LICENSE](LICENSE) file for details
 
 ## Support
 
