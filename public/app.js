@@ -320,6 +320,25 @@ async function startServer() {
   if (!currentServerId) return;
   
   try {
+    // First check if server is managed (has managed.conf)
+    const managedCheck = await apiRequest(`/api/servers/${currentServerId}/managed`);
+    
+    if (!managedCheck.managed) {
+      // Show management modal
+      showManagementModal();
+      return;
+    }
+    
+    // Check if EULA has been accepted
+    const eulaCheck = await apiRequest(`/api/servers/${currentServerId}/eula`);
+    
+    if (!eulaCheck.accepted) {
+      // Show EULA acceptance modal
+      showEulaModal();
+      return;
+    }
+    
+    // All checks passed, start the server
     const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
     if (result.success) {
       appendTerminalOutput('Starting server...\n');
@@ -327,6 +346,142 @@ async function startServer() {
     }
   } catch (error) {
     // Error already shown by apiRequest
+  }
+}
+
+function showManagementModal() {
+  // Remove existing modal if any
+  const existing = document.getElementById('management-modal');
+  if (existing) existing.remove();
+  
+  const server = servers.find(s => s.id === currentServerId);
+  
+  const modal = document.createElement('div');
+  modal.id = 'management-modal';
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>📋 Enable Server Management</h2>
+        <button class="close-btn" onclick="closeManagementModal()">&times;</button>
+      </div>
+      <div class="management-content">
+        <p>The server <strong>"${escapeHtml(server?.name || 'this server')}"</strong> is not yet fully managed by MServerController.</p>
+        <div class="management-notice">
+          <p>Enabling management will:</p>
+          <ul>
+            <li>Create a <code>managed.conf</code> file in the server directory</li>
+            <li>Allow MServerController to track server settings and status</li>
+            <li>Enable EULA acceptance and other management features</li>
+          </ul>
+        </div>
+        <p class="management-info">ℹ️ This is required for servers imported before management tracking was added, or after app updates.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeManagementModal()">Cancel</button>
+        <button class="btn btn-success" onclick="enableManagementAndContinue()">Enable Management</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Close on background click
+  modal.onclick = (e) => {
+    if (e.target.id === 'management-modal') closeManagementModal();
+  };
+}
+
+function closeManagementModal() {
+  const modal = document.getElementById('management-modal');
+  if (modal) modal.remove();
+}
+
+async function enableManagementAndContinue() {
+  if (!currentServerId) return;
+  
+  try {
+    // Enable management
+    const result = await apiRequest(`/api/servers/${currentServerId}/managed/enable`, { method: 'POST' });
+    
+    if (result.success) {
+      closeManagementModal();
+      showNotification('Server management enabled', 'success');
+      
+      // Continue with the start process (will check EULA next)
+      await startServer();
+    }
+  } catch (error) {
+    showNotification('Failed to enable management: ' + error.message, 'error');
+  }
+}
+
+function showEulaModal() {
+  // Remove existing modal if any
+  const existing = document.getElementById('eula-modal');
+  if (existing) existing.remove();
+  
+  const modal = document.createElement('div');
+  modal.id = 'eula-modal';
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>⚠️ Minecraft EULA</h2>
+        <button class="close-btn" onclick="closeEulaModal()">&times;</button>
+      </div>
+      <div class="eula-content">
+        <p>Before starting this Minecraft server, you must accept the <strong>Minecraft End User License Agreement (EULA)</strong>.</p>
+        <div class="eula-notice">
+          <p>By clicking "Accept EULA", you agree that:</p>
+          <ul>
+            <li>You have read and agree to the <a href="https://aka.ms/MinecraftEULA" target="_blank">Minecraft EULA</a></li>
+            <li>You understand the terms and conditions set by Mojang/Microsoft</li>
+            <li>This will create an <code>eula.txt</code> file with <code>eula=true</code></li>
+          </ul>
+        </div>
+        <p class="eula-warning">⚠️ You must accept the EULA to run a Minecraft server.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeEulaModal()">Cancel</button>
+        <button class="btn btn-success" onclick="acceptEulaAndStart()">Accept EULA & Start Server</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Close on background click
+  modal.onclick = (e) => {
+    if (e.target.id === 'eula-modal') closeEulaModal();
+  };
+}
+
+function closeEulaModal() {
+  const modal = document.getElementById('eula-modal');
+  if (modal) modal.remove();
+}
+
+async function acceptEulaAndStart() {
+  if (!currentServerId) return;
+  
+  try {
+    // Accept EULA
+    const acceptResult = await apiRequest(`/api/servers/${currentServerId}/eula/accept`, { method: 'POST' });
+    
+    if (acceptResult.success) {
+      closeEulaModal();
+      showNotification('EULA accepted successfully', 'success');
+      
+      // Now start the server
+      const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
+      if (result.success) {
+        appendTerminalOutput('EULA accepted. Starting server...\n');
+        updateServerStatus(true);
+      }
+    }
+  } catch (error) {
+    showNotification('Failed to accept EULA: ' + error.message, 'error');
   }
 }
 
@@ -752,16 +907,95 @@ function toggleCustomJarUpload() {
   }
 }
 
-async function deleteServer() {
+function deleteServer() {
   if (!currentServerId) return;
   
   const server = servers.find(s => s.id === currentServerId);
-  if (!confirm(`Are you sure you want to delete "${server?.name}"?\n\nThis will only remove the configuration, not the server files.`)) {
-    return;
+  showDeleteServerModal(server);
+}
+
+function showDeleteServerModal(server) {
+  // Remove existing modal if any
+  const existing = document.getElementById('delete-server-modal');
+  if (existing) existing.remove();
+  
+  const modal = document.createElement('div');
+  modal.id = 'delete-server-modal';
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>🗑️ Delete Server</h2>
+        <button class="close-btn" onclick="closeDeleteServerModal()">&times;</button>
+      </div>
+      <div class="delete-server-content">
+        <p>What would you like to do with <strong>"${escapeHtml(server?.name || 'this server')}"</strong>?</p>
+        
+        <div class="delete-options">
+          <button class="delete-option-btn" onclick="confirmDeleteServer(false)">
+            <span class="delete-option-icon">📤</span>
+            <div class="delete-option-info">
+              <span class="delete-option-title">Remove from Management</span>
+              <span class="delete-option-desc">Remove server from console only. Server files will be kept and can be re-imported later.</span>
+            </div>
+          </button>
+          
+          <button class="delete-option-btn delete-option-danger" onclick="confirmDeleteServer(true)">
+            <span class="delete-option-icon">⚠️</span>
+            <div class="delete-option-info">
+              <span class="delete-option-title">Delete Everything</span>
+              <span class="delete-option-desc">Permanently delete the server and ALL its files including worlds, plugins, and configurations.</span>
+            </div>
+          </button>
+        </div>
+        
+        <p class="delete-warning">⚠️ Deleting everything cannot be undone!</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeDeleteServerModal()">Cancel</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Close on background click
+  modal.onclick = (e) => {
+    if (e.target.id === 'delete-server-modal') closeDeleteServerModal();
+  };
+}
+
+function closeDeleteServerModal() {
+  const modal = document.getElementById('delete-server-modal');
+  if (modal) modal.remove();
+}
+
+async function confirmDeleteServer(deleteFiles) {
+  if (!currentServerId) return;
+  
+  const server = servers.find(s => s.id === currentServerId);
+  
+  // Extra confirmation for full delete
+  if (deleteFiles) {
+    if (!confirm(`⚠️ FINAL WARNING ⚠️\n\nYou are about to PERMANENTLY DELETE "${server?.name}" and ALL its files!\n\nThis includes:\n• World data\n• Plugins\n• Configurations\n• Backups in server folder\n\nThis action CANNOT be undone!\n\nAre you absolutely sure?`)) {
+      return;
+    }
   }
   
   try {
-    await apiRequest(`/api/servers/${currentServerId}`, { method: 'DELETE' });
+    const url = deleteFiles 
+      ? `/api/servers/${currentServerId}?deleteFiles=true`
+      : `/api/servers/${currentServerId}`;
+    
+    await apiRequest(url, { method: 'DELETE' });
+    
+    closeDeleteServerModal();
+    
+    if (deleteFiles) {
+      showNotification('Server and all files deleted permanently', 'success');
+    } else {
+      showNotification('Server removed from management. Files preserved.', 'success');
+    }
     
     currentServerId = null;
     document.getElementById('no-server-view').style.display = 'flex';
@@ -770,6 +1004,7 @@ async function deleteServer() {
     await loadServers();
   } catch (error) {
     console.error('Failed to delete server:', error);
+    showNotification('Failed to delete server: ' + error.message, 'error');
   }
 }
 

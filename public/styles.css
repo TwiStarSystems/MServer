@@ -2313,3 +2313,197 @@ select.form-control:disabled {
 .notification-close:hover {
   opacity: 1;
 }
+
+/* ==================== EULA Modal ==================== */
+
+.eula-content {
+  padding: 20px;
+}
+
+.eula-content p {
+  margin-bottom: 15px;
+  line-height: 1.6;
+  color: #e0e0e0;
+}
+
+.eula-notice {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+}
+
+.eula-notice p {
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.eula-notice ul {
+  margin: 0;
+  padding-left: 25px;
+}
+
+.eula-notice li {
+  margin-bottom: 8px;
+  color: #ccc;
+}
+
+.eula-notice a {
+  color: #667eea;
+  text-decoration: underline;
+}
+
+.eula-notice a:hover {
+  color: #8b9ff7;
+}
+
+.eula-notice code {
+  background: #252536;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  color: #f5576c;
+}
+
+.eula-warning {
+  color: #f5576c !important;
+  font-weight: 600;
+  padding: 12px 15px;
+  background: rgba(245, 87, 108, 0.1);
+  border-radius: 6px;
+  border-left: 3px solid #f5576c;
+}
+
+/* ==================== Delete Server Modal ==================== */
+
+.delete-server-content {
+  padding: 20px;
+}
+
+.delete-server-content > p {
+  margin-bottom: 20px;
+  color: #e0e0e0;
+  font-size: 1rem;
+}
+
+.delete-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.delete-option-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+  padding: 18px;
+  background: #1a1a2e;
+  border: 2px solid #333;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.delete-option-btn:hover {
+  border-color: #667eea;
+  background: #252536;
+}
+
+.delete-option-danger:hover {
+  border-color: #f5576c;
+  background: rgba(245, 87, 108, 0.1);
+}
+
+.delete-option-icon {
+  font-size: 28px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.delete-option-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.delete-option-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.delete-option-desc {
+  font-size: 0.85rem;
+  color: #888;
+  line-height: 1.4;
+}
+
+.delete-option-danger .delete-option-title {
+  color: #f5576c;
+}
+
+.delete-warning {
+  color: #f5576c !important;
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 10px;
+  background: rgba(245, 87, 108, 0.1);
+  border-radius: 6px;
+}
+
+/* ==================== Management Modal ==================== */
+
+.management-content {
+  padding: 20px;
+}
+
+.management-content > p {
+  margin-bottom: 15px;
+  line-height: 1.6;
+  color: #e0e0e0;
+}
+
+.management-notice {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 20px 0;
+}
+
+.management-notice p {
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.management-notice ul {
+  margin: 0;
+  padding-left: 25px;
+}
+
+.management-notice li {
+  margin-bottom: 8px;
+  color: #ccc;
+}
+
+.management-notice code {
+  background: #252536;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  color: #667eea;
+}
+
+.management-info {
+  color: #667eea !important;
+  font-size: 0.9rem;
+  padding: 12px 15px;
+  background: rgba(102, 126, 234, 0.1);
+  border-radius: 6px;
+  border-left: 3px solid #667eea;
+}
