@@ -786,6 +786,118 @@ async function resetAllApiUrls() {
   }
 }
 
+// ==================== Bulk URL Update Functions ====================
+
+async function bulkUpdateJarUrls() {
+  const btn = document.getElementById('bulk-update-btn');
+  const progressDiv = document.getElementById('bulk-update-progress');
+  const progressFill = document.getElementById('bulk-progress-fill');
+  const progressText = document.getElementById('bulk-progress-text');
+  const resultsDiv = document.getElementById('bulk-update-results');
+  const summaryDiv = document.getElementById('bulk-results-summary');
+  const detailsDiv = document.getElementById('bulk-results-details');
+  
+  // Get selected types
+  const checkboxes = document.querySelectorAll('#bulk-update-types input[type="checkbox"]:checked');
+  const selectedTypes = Array.from(checkboxes).map(cb => cb.value);
+  
+  if (selectedTypes.length === 0) {
+    alert('Please select at least one server type to update.');
+    return;
+  }
+  
+  const maxVersions = parseInt(document.getElementById('bulk-max-versions').value);
+  
+  // Show progress, hide results
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Updating...';
+  progressDiv.style.display = 'block';
+  resultsDiv.style.display = 'none';
+  progressFill.style.width = '0%';
+  progressText.textContent = 'Fetching URLs from APIs...';
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        types: selectedTypes,
+        maxVersions: maxVersions
+      })
+    });
+    
+    const data = await response.json();
+    
+    // Update progress to complete
+    progressFill.style.width = '100%';
+    progressText.textContent = 'Complete!';
+    
+    // Show results
+    setTimeout(() => {
+      progressDiv.style.display = 'none';
+      resultsDiv.style.display = 'block';
+      
+      // Summary
+      const summary = data.summary || { updated: 0, failed: 0, skipped: 0 };
+      summaryDiv.innerHTML = `
+        <div class="summary-stats">
+          <div class="stat success-stat">
+            <span class="stat-value">${summary.updated}</span>
+            <span class="stat-label">Updated</span>
+          </div>
+          <div class="stat error-stat">
+            <span class="stat-value">${summary.failed}</span>
+            <span class="stat-label">Failed</span>
+          </div>
+        </div>
+      `;
+      
+      // Details
+      let detailsHtml = '';
+      
+      if (data.results.success.length > 0) {
+        detailsHtml += '<div class="results-section"><h4>✅ Successfully Updated</h4><div class="results-list">';
+        data.results.success.forEach(item => {
+          detailsHtml += `
+            <div class="result-item success">
+              <span class="result-type">${item.type}:${item.version}</span>
+              ${item.build ? `<span class="result-build">Build ${item.build}</span>` : ''}
+            </div>
+          `;
+        });
+        detailsHtml += '</div></div>';
+      }
+      
+      if (data.results.failed.length > 0) {
+        detailsHtml += '<div class="results-section"><h4>❌ Failed</h4><div class="results-list">';
+        data.results.failed.forEach(item => {
+          detailsHtml += `
+            <div class="result-item failed">
+              <span class="result-type">${item.type}${item.version ? ':' + item.version : ''}</span>
+              <span class="result-error">${item.error}</span>
+            </div>
+          `;
+        });
+        detailsHtml += '</div></div>';
+      }
+      
+      detailsDiv.innerHTML = detailsHtml || '<p>No detailed results available.</p>';
+      
+      // Reload config display
+      loadJarConfig();
+    }, 500);
+    
+  } catch (err) {
+    progressDiv.style.display = 'none';
+    resultsDiv.style.display = 'block';
+    summaryDiv.innerHTML = `<div class="error-text">Error: ${err.message}</div>`;
+    detailsDiv.innerHTML = '';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🔄 Update All URLs';
+  }
+}
+
 // ==================== Utility Functions ====================
 
 function formatBytes(bytes) {

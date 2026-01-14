@@ -253,6 +253,60 @@
             </div>
           </div>
           
+          <!-- Bulk URL Update -->
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>🔄 Bulk URL Update</h3>
+              <span class="tool-description">Fetch and update all JAR URLs from configured APIs</span>
+            </div>
+            <div class="tool-panel-body">
+              <p class="tool-info">Select server types to update and click "Update All URLs" to fetch the latest download URLs and save them to the config file.</p>
+              
+              <div class="bulk-update-options">
+                <div class="form-group">
+                  <label>Server Types to Update</label>
+                  <div class="checkbox-grid" id="bulk-update-types">
+                    <label class="checkbox-item"><input type="checkbox" value="vanilla" checked> Vanilla (Java)</label>
+                    <label class="checkbox-item"><input type="checkbox" value="paper" checked> Paper</label>
+                    <label class="checkbox-item"><input type="checkbox" value="purpur" checked> Purpur</label>
+                    <label class="checkbox-item"><input type="checkbox" value="fabric" checked> Fabric</label>
+                    <label class="checkbox-item"><input type="checkbox" value="folia"> Folia</label>
+                    <label class="checkbox-item"><input type="checkbox" value="velocity"> Velocity</label>
+                    <label class="checkbox-item"><input type="checkbox" value="waterfall"> Waterfall</label>
+                    <label class="checkbox-item"><input type="checkbox" value="bedrock"> Bedrock</label>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Max Versions per Type</label>
+                  <select id="bulk-max-versions" class="form-control" style="width: 150px;">
+                    <option value="5">5 versions</option>
+                    <option value="10" selected>10 versions</option>
+                    <option value="15">15 versions</option>
+                    <option value="20">20 versions</option>
+                    <option value="30">30 versions</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <button id="bulk-update-btn" class="btn btn-primary" onclick="bulkUpdateJarUrls()">
+                    🔄 Update All URLs
+                  </button>
+                </div>
+              </div>
+              
+              <div id="bulk-update-progress" class="bulk-update-progress" style="display: none;">
+                <div class="progress-bar">
+                  <div class="progress-bar-fill" id="bulk-progress-fill"></div>
+                </div>
+                <div class="progress-text" id="bulk-progress-text">Starting...</div>
+              </div>
+              
+              <div id="bulk-update-results" class="bulk-update-results" style="display: none;">
+                <div class="results-summary" id="bulk-results-summary"></div>
+                <div class="results-details" id="bulk-results-details"></div>
+              </div>
+            </div>
+          </div>
+          
           <!-- API URL Configuration -->
           <div class="tool-panel">
             <div class="tool-panel-header">

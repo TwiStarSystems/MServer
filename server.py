@@ -3781,6 +3781,276 @@ def update_jar_config():
     
     return jsonify({'success': True, 'message': f'Added/updated {server_type}:{version}'})
 
+@app.route('/api/tools/jarfetcher/bulk-update', methods=['POST'])
+@admin_required
+def bulk_update_jar_urls():
+    """Fetch all versions from APIs and update jarurls.conf"""
+    data = request.get_json() or {}
+    server_types = data.get('types', ['vanilla', 'paper', 'purpur', 'fabric', 'folia', 'velocity', 'waterfall'])
+    max_versions = data.get('maxVersions', 10)  # Limit versions per type to avoid timeout
+    
+    results = {
+        'success': [],
+        'failed': [],
+        'skipped': []
+    }
+    
+    for server_type in server_types:
+        try:
+            # Fetch versions for this type
+            versions_data = fetch_versions_for_type(server_type)
+            if not versions_data:
+                results['failed'].append({
+                    'type': server_type,
+                    'error': 'Failed to fetch version list'
+                })
+                continue
+            
+            # Limit to max_versions
+            versions_to_fetch = versions_data[:max_versions]
+            
+            for version_info in versions_to_fetch:
+                version = version_info.get('version')
+                if not version:
+                    continue
+                
+                try:
+                    # Fetch download URL for this version
+                    url_data = fetch_download_url_for_type(server_type, version)
+                    
+                    if url_data and url_data.get('url'):
+                        # Verify the URL is accessible
+                        url = url_data['url']
+                        is_valid = verify_url(url)
+                        
+                        if is_valid:
+                            # Update the config file
+                            update_jar_config_entry(server_type, version, url)
+                            results['success'].append({
+                                'type': server_type,
+                                'version': version,
+                                'url': url,
+                                'build': url_data.get('build')
+                            })
+                        else:
+                            results['failed'].append({
+                                'type': server_type,
+                                'version': version,
+                                'error': 'URL not accessible or invalid'
+                            })
+                    else:
+                        results['failed'].append({
+                            'type': server_type,
+                            'version': version,
+                            'error': url_data.get('error', 'No URL returned')
+                        })
+                except Exception as e:
+                    results['failed'].append({
+                        'type': server_type,
+                        'version': version,
+                        'error': str(e)
+                    })
+                    
+        except Exception as e:
+            results['failed'].append({
+                'type': server_type,
+                'error': f'Failed to process type: {str(e)}'
+            })
+    
+    return jsonify({
+        'success': True,
+        'results': results,
+        'summary': {
+            'updated': len(results['success']),
+            'failed': len(results['failed']),
+            'skipped': len(results['skipped'])
+        }
+    })
+
+def fetch_versions_for_type(server_type):
+    """Fetch version list for a server type (internal helper)"""
+    try:
+        if server_type == 'vanilla':
+            response = requests.get(get_api_url('vanilla'), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                versions = []
+                for v in data.get('versions', []):
+                    if v.get('type') == 'release':
+                        versions.append({'version': v['id'], 'url': v['url']})
+                return versions
+        
+        elif server_type == 'bedrock':
+            # Bedrock uses direct URLs, no API fetch needed
+            response = requests.get(get_api_url('bedrock'), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                return [{'version': v} for v in list(data.keys())[:30]]
+            # Fallback to known versions
+            known = ['1.21.51.02', '1.21.50.07', '1.21.44.01', '1.21.43.01', '1.21.42.01']
+            return [{'version': v} for v in known]
+        
+        elif server_type in ['paper', 'folia', 'velocity', 'waterfall']:
+            base_url = f'https://api.papermc.io/v2/projects/{server_type}'
+            response = requests.get(base_url, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                versions = list(reversed(data.get('versions', [])[-30:]))
+                return [{'version': v} for v in versions]
+        
+        elif server_type == 'purpur':
+            response = requests.get(get_api_url('purpur'), timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                versions = list(reversed(data.get('versions', [])[-30:]))
+                return [{'version': v} for v in versions]
+        
+        elif server_type == 'fabric':
+            response = requests.get('https://meta.fabricmc.net/v2/versions/game', timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                versions = []
+                for v in data[:30]:
+                    if v.get('stable', False):
+                        versions.append({'version': v['version']})
+                return versions
+    except Exception as e:
+        print(f"Error fetching versions for {server_type}: {e}")
+    
+    return None
+
+def fetch_download_url_for_type(server_type, version):
+    """Fetch download URL for a specific version (internal helper)"""
+    try:
+        if server_type == 'vanilla':
+            # Get manifest first
+            manifest_response = requests.get(get_api_url('vanilla'), timeout=30)
+            if manifest_response.status_code != 200:
+                return {'error': 'Failed to fetch manifest'}
+            
+            manifest_data = manifest_response.json()
+            version_url = None
+            for v in manifest_data.get('versions', []):
+                if v['id'] == version:
+                    version_url = v['url']
+                    break
+            
+            if not version_url:
+                return {'error': 'Version not found'}
+            
+            # Get version manifest
+            version_response = requests.get(version_url, timeout=30)
+            if version_response.status_code == 200:
+                data = version_response.json()
+                server_download = data.get('downloads', {}).get('server', {})
+                url = server_download.get('url')
+                if url:
+                    return {'url': url}
+            return {'error': 'No server download available'}
+        
+        elif server_type == 'bedrock':
+            url = f'https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip'
+            return {'url': url}
+        
+        elif server_type in ['paper', 'folia', 'velocity', 'waterfall']:
+            builds_url = f'https://api.papermc.io/v2/projects/{server_type}/versions/{version}/builds'
+            response = requests.get(builds_url, timeout=30)
+            
+            if response.status_code != 200:
+                return {'error': f'Failed to fetch builds'}
+            
+            builds_data = response.json()
+            builds = builds_data.get('builds', [])
+            
+            if not builds:
+                return {'error': 'No builds available'}
+            
+            latest_build = builds[-1]
+            build_number = latest_build['build']
+            downloads = latest_build.get('downloads', {})
+            application = downloads.get('application', {})
+            filename = application.get('name', f'{server_type}-{version}.jar')
+            
+            url = f'https://api.papermc.io/v2/projects/{server_type}/versions/{version}/builds/{build_number}/downloads/{filename}'
+            return {'url': url, 'build': build_number}
+        
+        elif server_type == 'purpur':
+            url = f'https://api.purpurmc.org/v2/purpur/{version}/latest/download'
+            return {'url': url}
+        
+        elif server_type == 'fabric':
+            loader_resp = requests.get('https://meta.fabricmc.net/v2/versions/loader', timeout=30)
+            installer_resp = requests.get('https://meta.fabricmc.net/v2/versions/installer', timeout=30)
+            
+            if loader_resp.status_code == 200 and installer_resp.status_code == 200:
+                loader_version = loader_resp.json()[0]['version']
+                installer_version = installer_resp.json()[0]['version']
+                url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar'
+                return {'url': url}
+            return {'error': 'Failed to fetch Fabric loader info'}
+        
+    except Exception as e:
+        return {'error': str(e)}
+    
+    return {'error': 'Unknown server type'}
+
+def verify_url(url):
+    """Verify that a URL is accessible (HEAD request)"""
+    try:
+        response = requests.head(url, timeout=10, allow_redirects=True)
+        # Accept 200, 301, 302, 307, 308 as valid
+        return response.status_code in [200, 301, 302, 307, 308]
+    except Exception:
+        # Try GET with stream to avoid downloading
+        try:
+            response = requests.get(url, timeout=10, stream=True, allow_redirects=True)
+            response.close()
+            return response.status_code in [200, 301, 302, 307, 308]
+        except Exception:
+            return False
+
+def update_jar_config_entry(server_type, version, url):
+    """Update a single entry in jarurls.conf"""
+    lines = []
+    if JAR_URLS_PATH.exists():
+        with open(JAR_URLS_PATH, 'r') as f:
+            lines = f.readlines()
+    
+    entry = f'{server_type}:{version}={url}\n'
+    entry_prefix = f'{server_type}:{version}='
+    
+    # Check if entry already exists
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(entry_prefix):
+            lines[i] = entry
+            found = True
+            break
+    
+    if not found:
+        # Find the right section
+        section_header = f'# === {server_type.upper()}'
+        insert_index = len(lines)
+        
+        for i, line in enumerate(lines):
+            if line.upper().startswith(section_header.upper()):
+                # Find end of section
+                for j in range(i + 1, len(lines)):
+                    if lines[j].startswith('# ==='):
+                        insert_index = j
+                        break
+                else:
+                    insert_index = len(lines)
+                break
+        
+        if insert_index == len(lines):
+            lines.append(entry)
+        else:
+            lines.insert(insert_index, entry)
+    
+    with open(JAR_URLS_PATH, 'w') as f:
+        f.writelines(lines)
+
 
 # ==================== Tools API ====================
 
