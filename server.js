@@ -6,6 +6,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const multer = require('multer');
 const archiver = require('archiver');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const server = http.createServer(app);
@@ -23,9 +24,31 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
   }
 });
 
+// Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10, // Limit uploads
+  message: 'Too many upload requests, please try again later.',
+});
+
+const backupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5, // Limit backup creation
+  message: 'Too many backup requests, please try again later.',
+});
+
 // Middleware
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/api/', apiLimiter);
 
 // Store active Minecraft server process
 let minecraftProcess = null;
@@ -292,7 +315,7 @@ app.get('/api/files/download', (req, res) => {
 });
 
 // Upload file
-app.post('/api/files/upload', upload.single('file'), (req, res) => {
+app.post('/api/files/upload', uploadLimiter, upload.single('file'), (req, res) => {
   const targetPath = req.body.path || '';
   const serverPath = serverConfig.serverPath || SERVERS_DIR;
   const uploadedFile = req.file;
@@ -335,7 +358,7 @@ app.get('/api/backups', (req, res) => {
 });
 
 // Create backup
-app.post('/api/backups/create', (req, res) => {
+app.post('/api/backups/create', backupLimiter, (req, res) => {
   const serverPath = serverConfig.serverPath || SERVERS_DIR;
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupName = `backup-${timestamp}.zip`;
