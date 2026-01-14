@@ -803,15 +803,15 @@ def index():
     """Serve main page - redirects to login if not authenticated"""
     user_id, user = get_current_user()
     if not user:
-        return send_from_directory('public', 'login.html')
+        return redirect('/login.html')
     return send_from_directory('public', 'index.html')
 
-@app.route('/login')
+@app.route('/login.html')
 def login_page():
     """Serve login page"""
     return send_from_directory('public', 'login.html')
 
-@app.route('/public')
+@app.route('/public.html')
 def public_page():
     """Serve public status page (no auth required)"""
     return send_from_directory('public', 'public.html')
@@ -819,15 +819,15 @@ def public_page():
 @app.route('/<path:path>')
 def static_files(path):
     """Serve static files"""
-    # Allow certain files without auth
-    public_files = ['login.html', 'public.html', 'styles.css', 'app.js', 'login.js', 'public.js']
+    # Allow certain files without auth (CSS, JS, and public pages)
+    public_files = ['styles.css', 'app.js', 'login.js', 'public.js']
     if path in public_files or path.startswith('assets/'):
         return send_from_directory('public', path)
     
     # Check auth for other files
     user_id, user = get_current_user()
     if not user:
-        return redirect('/login')
+        return redirect('/login.html')
     
     return send_from_directory('public', path)
 

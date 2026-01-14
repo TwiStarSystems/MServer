@@ -1,8 +1,14 @@
 // Login page JavaScript
 
+// Prevent multiple auth checks
+let authCheckDone = false;
+
 document.addEventListener('DOMContentLoaded', () => {
-    // Check if already logged in
-    checkAuthStatus();
+    // Check if already logged in (only once)
+    if (!authCheckDone) {
+        authCheckDone = true;
+        checkAuthStatus();
+    }
     
     // Tab switching
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -118,11 +124,16 @@ async function checkAuthStatus() {
     try {
         const response = await fetch('/api/auth/me');
         if (response.ok) {
-            // Already logged in, redirect to main app
-            window.location.href = '/';
+            const data = await response.json();
+            if (data && data.username) {
+                // Already logged in, redirect to main app
+                window.location.replace('/');
+            }
         }
+        // If not ok (401, etc.), just stay on login page - no action needed
     } catch (err) {
-        // Not logged in, stay on login page
+        // Network error - stay on login page, don't do anything
+        console.log('Auth check failed, staying on login page');
     }
 }
 
