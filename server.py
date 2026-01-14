@@ -1169,6 +1169,9 @@ class ServerInstance:
     
     def start(self):
         """Start the server process"""
+        # Clear the output buffer on start for fresh logs
+        self.output_buffer = []
+        
         args = ['java'] + self.java_args.split() + ['-jar', self.executable, 'nogui']
         
         self.process = subprocess.Popen(
@@ -2326,9 +2329,13 @@ def handle_subscribe(data):
         
         instance = server_manager.servers.get(server_id)
         if instance:
-            # Send recent output to the client
-            for line in instance.get_recent_output():
-                emit('message', {'type': 'output', 'data': line, 'serverId': server_id})
+            # Only send recent output if server is running to avoid stale log spam
+            if instance.is_running():
+                for line in instance.get_recent_output():
+                    emit('message', {'type': 'output', 'data': line, 'serverId': server_id})
+            
+            # Always send current status
+            emit('message', {'type': 'status', 'running': instance.is_running(), 'serverId': server_id})
 
 
 if __name__ == '__main__':

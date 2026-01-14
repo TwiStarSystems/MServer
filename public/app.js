@@ -139,6 +139,8 @@ function connectWebSocket() {
     console.log('Socket.IO connected');
     // Subscribe to current server if selected
     if (currentServerId) {
+      // Clear terminal before re-subscribing to avoid duplicate logs
+      document.getElementById('terminal-output').textContent = '';
       socket.emit('subscribe', { serverId: currentServerId });
     }
   });
@@ -339,6 +341,9 @@ async function startServer() {
     }
     
     // All checks passed, start the server
+    // Clear terminal before starting
+    document.getElementById('terminal-output').textContent = '';
+    
     const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
     if (result.success) {
       appendTerminalOutput('Starting server...\n');
