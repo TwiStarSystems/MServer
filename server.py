@@ -1394,6 +1394,12 @@ def get_server_versions(server_type):
     versions = jar_manager.get_versions(server_type)
     return jsonify({'versions': versions})
 
+@app.route('/api/default-server-path', methods=['GET'])
+@login_required
+def get_default_server_path():
+    """Get the default server installation path"""
+    return jsonify({'path': str(SERVERS_DIR)})
+
 
 # ==================== Server Management API ====================
 

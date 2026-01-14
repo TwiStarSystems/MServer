@@ -9,6 +9,30 @@ let editingServerId = null;
 let servers = [];
 let currentUser = null;
 
+// ==================== Notifications ====================
+
+function showNotification(message, type = 'info') {
+  // Remove existing notification
+  const existing = document.querySelector('.notification');
+  if (existing) existing.remove();
+  
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.innerHTML = `
+    <span class="notification-message">${escapeHtml(message)}</span>
+    <button class="notification-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Auto-remove after 5 seconds
+  setTimeout(() => {
+    if (notification.parentElement) {
+      notification.remove();
+    }
+  }, 5000);
+}
+
 // ==================== Authentication ====================
 
 async function checkAuth() {
@@ -322,14 +346,152 @@ async function stopServer() {
 
 // ==================== Server CRUD ====================
 
-function openAddServerModal() {
+let serverTypes = [];
+let currentCreationType = null;
+let defaultServerPath = '';
+
+async function openAddServerModal() {
   editingServerId = null;
+  currentCreationType = null;
+  
   document.getElementById('modal-title').textContent = 'Add Server';
+  
+  // Show creation type selection, hide all forms
+  document.getElementById('creation-type-section').style.display = 'block';
+  document.getElementById('fresh-server-form').style.display = 'none';
+  document.getElementById('import-server-form').style.display = 'none';
+  document.getElementById('manual-server-form').style.display = 'none';
+  
+  // Fetch the default server path
+  try {
+    const result = await apiRequest('/api/default-server-path');
+    defaultServerPath = result.path || '';
+  } catch (err) {
+    console.error('Failed to get default server path:', err);
+    defaultServerPath = '';
+  }
+  
+  // Reset fresh server form
+  document.getElementById('fresh-name').value = '';
+  document.getElementById('fresh-type').value = '';
+  document.getElementById('fresh-version').value = '';
+  document.getElementById('fresh-version').disabled = true;
+  document.getElementById('fresh-jar-name').value = 'server.jar';
+  document.getElementById('fresh-java-args').value = '-Xmx2G -Xms1G';
+  document.getElementById('fresh-upload-jar').checked = false;
+  document.getElementById('custom-jar-upload').style.display = 'none';
+  
+  // Reset import form
+  document.getElementById('import-name').value = '';
+  document.getElementById('import-file').value = '';
+  document.getElementById('import-java-args').value = '-Xmx2G -Xms1G';
+  
+  // Reset manual form with default path placeholder
   document.getElementById('input-name').value = '';
   document.getElementById('input-path').value = '';
+  document.getElementById('input-path').placeholder = defaultServerPath ? `${defaultServerPath}/<server-id>` : '/path/to/minecraft/server';
   document.getElementById('input-executable').value = 'server.jar';
   document.getElementById('input-java-args').value = '-Xmx2G -Xms1G';
+  
+  // Update path hint with actual default path
+  const pathHint = document.getElementById('path-hint');
+  if (pathHint && defaultServerPath) {
+    pathHint.innerHTML = `Leave empty to auto-create in <code>${defaultServerPath}/</code>`;
+  }
+  
+  // Load server types for fresh server option
+  loadServerTypes();
+  
   document.getElementById('server-modal').classList.add('active');
+}
+
+function selectCreationType(type) {
+  currentCreationType = type;
+  
+  // Hide creation type section
+  document.getElementById('creation-type-section').style.display = 'none';
+  
+  // Show the appropriate form
+  if (type === 'fresh') {
+    document.getElementById('fresh-server-form').style.display = 'block';
+  } else if (type === 'import') {
+    document.getElementById('import-server-form').style.display = 'block';
+  } else if (type === 'manual') {
+    document.getElementById('manual-server-form').style.display = 'block';
+    // Show the back button in manual mode
+    document.querySelector('#manual-server-form .back-btn').style.display = 'inline-block';
+  }
+}
+
+function backToCreationType() {
+  currentCreationType = null;
+  
+  // Hide all forms
+  document.getElementById('fresh-server-form').style.display = 'none';
+  document.getElementById('import-server-form').style.display = 'none';
+  document.getElementById('manual-server-form').style.display = 'none';
+  
+  // Show creation type selection
+  document.getElementById('creation-type-section').style.display = 'block';
+}
+
+async function loadServerTypes() {
+  try {
+    const result = await apiRequest('/api/server-types');
+    serverTypes = result.types || [];
+    
+    const typeSelect = document.getElementById('fresh-type');
+    typeSelect.innerHTML = '<option value="">Select server type...</option>';
+    
+    serverTypes.forEach(type => {
+      const option = document.createElement('option');
+      option.value = type.id;
+      option.textContent = type.name;
+      option.dataset.description = type.description || '';
+      typeSelect.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Failed to load server types:', error);
+  }
+}
+
+async function loadVersions() {
+  const typeSelect = document.getElementById('fresh-type');
+  const versionSelect = document.getElementById('fresh-version');
+  const typeDesc = document.getElementById('type-description');
+  
+  const serverType = typeSelect.value;
+  
+  if (!serverType) {
+    versionSelect.innerHTML = '<option value="">Select server type first...</option>';
+    versionSelect.disabled = true;
+    typeDesc.textContent = '';
+    return;
+  }
+  
+  // Show type description
+  const selectedOption = typeSelect.options[typeSelect.selectedIndex];
+  typeDesc.textContent = selectedOption.dataset.description || '';
+  
+  try {
+    versionSelect.innerHTML = '<option value="">Loading versions...</option>';
+    versionSelect.disabled = true;
+    
+    const result = await apiRequest(`/api/server-types/${serverType}/versions`);
+    const versions = result.versions || [];
+    
+    versionSelect.innerHTML = '<option value="">Select version...</option>';
+    versions.forEach(version => {
+      const option = document.createElement('option');
+      option.value = version;
+      option.textContent = version;
+      versionSelect.appendChild(option);
+    });
+    versionSelect.disabled = false;
+  } catch (error) {
+    console.error('Failed to load versions:', error);
+    versionSelect.innerHTML = '<option value="">Error loading versions</option>';
+  }
 }
 
 async function openEditServerModal() {
@@ -339,7 +501,19 @@ async function openEditServerModal() {
     const server = await apiRequest(`/api/servers/${currentServerId}`);
     
     editingServerId = currentServerId;
+    currentCreationType = 'manual';
+    
     document.getElementById('modal-title').textContent = 'Edit Server';
+    
+    // Hide creation type section and other forms
+    document.getElementById('creation-type-section').style.display = 'none';
+    document.getElementById('fresh-server-form').style.display = 'none';
+    document.getElementById('import-server-form').style.display = 'none';
+    document.getElementById('manual-server-form').style.display = 'block';
+    
+    // Hide the back button in edit mode
+    document.querySelector('#manual-server-form .back-btn').style.display = 'none';
+    
     document.getElementById('input-name').value = server.name || '';
     document.getElementById('input-path').value = server.serverPath || '';
     document.getElementById('input-executable').value = server.executable || 'server.jar';
@@ -353,8 +527,10 @@ async function openEditServerModal() {
 function closeServerModal() {
   document.getElementById('server-modal').classList.remove('active');
   editingServerId = null;
+  currentCreationType = null;
 }
 
+// Save server (manual configuration / edit mode)
 async function saveServer(e) {
   e.preventDefault();
   
@@ -373,14 +549,21 @@ async function saveServer(e) {
         body: JSON.stringify(serverData)
       });
     } else {
-      // Create new server
+      // Create new server (manual)
       const result = await apiRequest('/api/servers', {
         method: 'POST',
         body: JSON.stringify(serverData)
       });
-      // Select the new server
+      
+      if (result.pendingApproval) {
+        showNotification('Server created and pending admin approval', 'info');
+      }
+      
+      // Select the new server if approved
       await loadServers();
-      selectServer(result.serverId);
+      if (!result.pendingApproval && result.serverId) {
+        selectServer(result.serverId);
+      }
     }
     
     closeServerModal();
@@ -391,6 +574,181 @@ async function saveServer(e) {
     }
   } catch (error) {
     console.error('Failed to save server:', error);
+  }
+}
+
+// Create fresh server with JAR download
+async function createFreshServer(e) {
+  e.preventDefault();
+  
+  const name = document.getElementById('fresh-name').value;
+  const serverType = document.getElementById('fresh-type').value;
+  const version = document.getElementById('fresh-version').value;
+  const executable = document.getElementById('fresh-jar-name').value || 'server.jar';
+  const javaArgs = document.getElementById('fresh-java-args').value || '-Xmx2G -Xms1G';
+  const uploadCustom = document.getElementById('fresh-upload-jar').checked;
+  
+  if (!uploadCustom && (!serverType || !version)) {
+    showNotification('Please select a server type and version', 'error');
+    return;
+  }
+  
+  try {
+    // Show loading state
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Creating...';
+    submitBtn.disabled = true;
+    
+    if (uploadCustom) {
+      // Custom JAR upload flow
+      const fileInput = document.getElementById('fresh-jar-file');
+      if (!fileInput.files.length) {
+        showNotification('Please select a JAR file to upload', 'error');
+        submitBtn.textContent = originalText;
+        submitBtn.disabled = false;
+        return;
+      }
+      
+      // First create the server
+      const result = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          executable,
+          javaArgs,
+          serverType: 'custom'
+        })
+      });
+      
+      if (result.pendingApproval) {
+        showNotification('Server created and pending admin approval', 'info');
+        closeServerModal();
+        await loadServers();
+        return;
+      }
+      
+      // Then upload the JAR
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      
+      await fetch(`/api/servers/${result.serverId}/upload-jar`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      await loadServers();
+      selectServer(result.serverId);
+    } else {
+      // Download server JAR from repository
+      const result = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          executable,
+          javaArgs,
+          serverType,
+          version,
+          downloadJar: true
+        })
+      });
+      
+      if (result.pendingApproval) {
+        showNotification('Server created and pending admin approval', 'info');
+      } else if (result.warning) {
+        showNotification(result.warning, 'warning');
+        await loadServers();
+        selectServer(result.serverId);
+      } else {
+        await loadServers();
+        selectServer(result.serverId);
+      }
+    }
+    
+    closeServerModal();
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+  } catch (error) {
+    console.error('Failed to create server:', error);
+    showNotification('Failed to create server: ' + error.message, 'error');
+    // Reset button state
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    submitBtn.textContent = 'Create Server';
+    submitBtn.disabled = false;
+  }
+}
+
+// Import server from ZIP
+async function importServer(e) {
+  e.preventDefault();
+  
+  const name = document.getElementById('import-name').value;
+  const fileInput = document.getElementById('import-file');
+  const javaArgs = document.getElementById('import-java-args').value || '-Xmx2G -Xms1G';
+  
+  if (!fileInput.files.length) {
+    showNotification('Please select a ZIP file to import', 'error');
+    return;
+  }
+  
+  try {
+    // Show loading state
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Importing...';
+    submitBtn.disabled = true;
+    
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    formData.append('name', name);
+    formData.append('javaArgs', javaArgs);
+    
+    const response = await fetch('/api/servers/import', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const result = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(result.error || 'Import failed');
+    }
+    
+    if (result.pendingApproval) {
+      showNotification('Server imported and pending admin approval', 'info');
+    } else {
+      await loadServers();
+      selectServer(result.serverId);
+    }
+    
+    closeServerModal();
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+  } catch (error) {
+    console.error('Failed to import server:', error);
+    showNotification('Failed to import server: ' + error.message, 'error');
+    // Reset button state
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    submitBtn.textContent = 'Import Server';
+    submitBtn.disabled = false;
+  }
+}
+
+// Toggle custom JAR upload section
+function toggleCustomJarUpload() {
+  const checkbox = document.getElementById('fresh-upload-jar');
+  const customSection = document.getElementById('custom-jar-upload');
+  const typeGroup = document.getElementById('fresh-type').closest('.form-group');
+  const versionGroup = document.getElementById('fresh-version').closest('.form-group');
+  
+  if (checkbox.checked) {
+    customSection.style.display = 'block';
+    typeGroup.style.display = 'none';
+    versionGroup.style.display = 'none';
+  } else {
+    customSection.style.display = 'none';
+    typeGroup.style.display = 'block';
+    versionGroup.style.display = 'block';
   }
 }
 
@@ -811,8 +1169,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('add-server-btn').onclick = openAddServerModal;
   document.getElementById('welcome-add-btn').onclick = openAddServerModal;
   
-  // Server form
-  document.getElementById('server-form').onsubmit = saveServer;
+  // Server forms
+  document.getElementById('fresh-server-form').onsubmit = createFreshServer;
+  document.getElementById('import-server-form').onsubmit = importServer;
+  document.getElementById('manual-server-form').onsubmit = saveServer;
+  
+  // Custom JAR upload toggle
+  document.getElementById('fresh-upload-jar').onchange = toggleCustomJarUpload;
+  
+  // Version loading when type changes
+  document.getElementById('fresh-type').onchange = loadVersions;
   
   // Server actions
   document.getElementById('start-btn').onclick = startServer;
