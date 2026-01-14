@@ -70,6 +70,11 @@ class SettingsManager:
             'siteTitle': 'MServerController',
             'siteIcon': '',
             'footerAddition': ''
+        },
+        'app': {
+            'enableRegistration': True,
+            'requireApproval': True,
+            'requireServerApproval': False
         }
     }
     
@@ -119,6 +124,22 @@ class SettingsManager:
         
         self._save_settings()
         return self.settings['branding']
+    
+    def get_app_settings(self):
+        """Get app settings"""
+        return self.settings.get('app', self.DEFAULT_SETTINGS['app'])
+    
+    def update_app_settings(self, app_data):
+        """Update app settings"""
+        if 'app' not in self.settings:
+            self.settings['app'] = {}
+        
+        for key in ['enableRegistration', 'requireApproval', 'requireServerApproval']:
+            if key in app_data:
+                self.settings['app'][key] = app_data[key]
+        
+        self._save_settings()
+        return self.settings['app']
 
 
 # ==================== System Stats Manager ====================
@@ -350,17 +371,57 @@ class UserManager:
             if len(password) < 6:
                 return None, "Password must be at least 6 characters"
             
+            # Check if approval is required
+            require_approval = settings_manager.get_app_settings().get('requireApproval', True)
+            
             user_id = str(uuid.uuid4())[:8]
             self.users['users'][user_id] = {
                 'username': username,
                 'password': generate_password_hash(password),
                 'role': 'user',
-                'approved': False,  # Requires admin approval
+                'approved': not require_approval,  # Auto-approve if not required
                 'created': datetime.now().isoformat(),
                 'lastLogin': None
             }
             self._save_users()
-            return user_id, "Registration successful. Please wait for admin approval."
+            
+            if require_approval:
+                return user_id, "Registration successful. Please wait for admin approval."
+            return user_id, "Registration successful. You can now log in."
+    
+    def create_user(self, username, password, role='user'):
+        """Create a user directly (admin function, auto-approved)"""
+        with self.lock:
+            # Check if username exists
+            for user in self.users.get('users', {}).values():
+                if user['username'].lower() == username.lower():
+                    return None, "Username already exists"
+            
+            # Validate username
+            if len(username) < 3 or len(username) > 32:
+                return None, "Username must be 3-32 characters"
+            if not username.replace('_', '').replace('-', '').isalnum():
+                return None, "Username can only contain letters, numbers, underscores, and hyphens"
+            
+            # Validate password
+            if len(password) < 6:
+                return None, "Password must be at least 6 characters"
+            
+            # Validate role
+            if role not in self.ROLES:
+                return None, "Invalid role"
+            
+            user_id = str(uuid.uuid4())[:8]
+            self.users['users'][user_id] = {
+                'username': username,
+                'password': generate_password_hash(password),
+                'role': role,
+                'approved': True,  # Admin-created users are auto-approved
+                'created': datetime.now().isoformat(),
+                'lastLogin': None
+            }
+            self._save_users()
+            return user_id, "User created successfully"
     
     def get_user(self, user_id):
         """Get user by ID"""
@@ -449,9 +510,9 @@ class UserManager:
         return self.ROLES.get(role, 0)
 
 
-# Initialize managers
-user_manager = UserManager()
+# Initialize managers (settings_manager must be first as UserManager uses it)
 settings_manager = SettingsManager()
+user_manager = UserManager()
 stats_manager = StatsManager()
 
 
@@ -714,10 +775,16 @@ class ServerManager:
         with open(CONFIG_PATH, 'w') as f:
             json.dump(self.config, f, indent=2)
     
-    def get_servers_list(self):
+    def get_servers_list(self, include_pending=False):
         """Get list of all configured servers with their status"""
         servers = []
         for server_id, server_config in self.config.get('servers', {}).items():
+            is_approved = server_config.get('approved', True)  # Default to approved for legacy servers
+            
+            # Skip pending servers unless explicitly requested
+            if not include_pending and not is_approved:
+                continue
+                
             instance = self.servers.get(server_id)
             is_running = instance is not None and instance.is_running()
             servers.append({
@@ -727,16 +794,47 @@ class ServerManager:
                 'executable': server_config.get('executable', 'server.jar'),
                 'javaArgs': server_config.get('javaArgs', '-Xmx2G -Xms1G'),
                 'autoStart': server_config.get('autoStart', False),
+                'serverType': server_config.get('serverType'),
+                'version': server_config.get('version'),
+                'owner': server_config.get('owner'),
+                'created': server_config.get('created'),
+                'approved': is_approved,
                 'running': is_running
             })
         return servers
+    
+    def get_pending_servers(self):
+        """Get list of servers pending approval"""
+        servers = []
+        for server_id, server_config in self.config.get('servers', {}).items():
+            if not server_config.get('approved', True):  # Not approved
+                servers.append({
+                    'id': server_id,
+                    'name': server_config.get('name', 'Unnamed Server'),
+                    'type': server_config.get('serverType', 'Server'),
+                    'owner': server_config.get('owner'),
+                    'created': server_config.get('created')
+                })
+        return servers
+    
+    def approve_server(self, server_id):
+        """Approve a pending server"""
+        if server_id in self.config.get('servers', {}):
+            self.config['servers'][server_id]['approved'] = True
+            self._save_config()
+            return True
+        return False
+    
+    def reject_server(self, server_id):
+        """Reject (delete) a pending server"""
+        return self.delete_server(server_id)
     
     def get_server_config(self, server_id):
         """Get configuration for a specific server"""
         return self.config.get('servers', {}).get(server_id)
     
     def create_server(self, name, server_path='', executable='server.jar', java_args='-Xmx2G -Xms1G', 
-                      server_type=None, version=None, owner=None):
+                      server_type=None, version=None, owner=None, approved=True):
         """Create a new server configuration"""
         server_id = str(uuid.uuid4())[:8]
         
@@ -756,13 +854,14 @@ class ServerManager:
             'version': version,
             'owner': owner,
             'autoStart': False,
+            'approved': approved,
             'created': datetime.now().isoformat()
         }
         
         self._save_config()
         return server_id
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx2G -Xms1G', owner=None):
+    def import_server_from_zip(self, name, zip_path, java_args='-Xmx2G -Xms1G', owner=None, approved=True):
         """Import a server from a ZIP file"""
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
@@ -815,6 +914,7 @@ class ServerManager:
                 'serverType': 'imported',
                 'owner': owner,
                 'autoStart': False,
+                'approved': approved,
                 'created': datetime.now().isoformat()
             }
             
@@ -1155,6 +1255,28 @@ def api_get_users():
     """Get all users (admin only)"""
     return jsonify({'users': user_manager.get_all_users()})
 
+@app.route('/api/admin/users', methods=['POST'])
+@admin_required
+def api_create_user():
+    """Create a new user (admin only)"""
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    role = data.get('role', 'user')
+    
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    
+    if role not in ['admin', 'user', 'public']:
+        return jsonify({'error': 'Invalid role'}), 400
+    
+    user_id, message = user_manager.create_user(username, password, role)
+    
+    if not user_id:
+        return jsonify({'error': message}), 400
+    
+    return jsonify({'success': True, 'userId': user_id, 'message': message})
+
 @app.route('/api/admin/users/<user_id>/approve', methods=['POST'])
 @admin_required
 def api_approve_user(user_id):
@@ -1206,6 +1328,38 @@ def api_delete_user(user_id):
     if user_manager.delete_user(user_id):
         return jsonify({'success': True})
     return jsonify({'error': 'User not found'}), 404
+
+
+# ==================== Admin Server Approval API ====================
+
+@app.route('/api/admin/servers/pending', methods=['GET'])
+@admin_required
+def api_get_pending_servers():
+    """Get list of servers pending approval"""
+    pending = server_manager.get_pending_servers()
+    # Enrich with owner usernames
+    for server in pending:
+        owner_id = server.get('owner')
+        if owner_id:
+            user = user_manager.get_user_by_id(owner_id)
+            server['owner'] = user.get('username', 'Unknown') if user else 'Unknown'
+    return jsonify({'servers': pending})
+
+@app.route('/api/admin/servers/<server_id>/approve', methods=['POST'])
+@admin_required
+def api_approve_server(server_id):
+    """Approve a pending server"""
+    if server_manager.approve_server(server_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Server not found'}), 404
+
+@app.route('/api/admin/servers/<server_id>/reject', methods=['DELETE'])
+@admin_required
+def api_reject_server(server_id):
+    """Reject (delete) a pending server"""
+    if server_manager.reject_server(server_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Server not found'}), 404
 
 
 # ==================== Public API (No Auth Required) ====================
@@ -1273,6 +1427,11 @@ def create_server():
     version = data.get('version')
     download_jar = data.get('downloadJar', False)
     
+    # Check if server approval is required (admins are always auto-approved)
+    is_admin = user.get('role') == 'admin'
+    require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
+    approved = is_admin or not require_approval
+    
     # Create the server configuration with owner
     server_id = server_manager.create_server(
         name=name,
@@ -1281,7 +1440,8 @@ def create_server():
         java_args=java_args,
         server_type=server_type,
         version=version,
-        owner=user_id
+        owner=user_id,
+        approved=approved
     )
     
     # Download JAR if requested
@@ -1302,7 +1462,11 @@ def create_server():
         eula_path = server_dir / 'eula.txt'
         eula_path.write_text('# By setting this to TRUE, you agree to the Minecraft EULA\neula=false\n')
     
-    return jsonify({'success': True, 'serverId': server_id})
+    response = {'success': True, 'serverId': server_id}
+    if not approved:
+        response['pendingApproval'] = True
+        response['message'] = 'Server created and pending admin approval'
+    return jsonify(response)
 
 @app.route('/api/servers/import', methods=['POST'])
 @login_required
@@ -1321,6 +1485,11 @@ def import_server():
     name = request.form.get('name', 'Imported Server')
     java_args = request.form.get('javaArgs', '-Xmx2G -Xms1G')
     
+    # Check if server approval is required (admins are always auto-approved)
+    is_admin = user.get('role') == 'admin'
+    require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
+    approved = is_admin or not require_approval
+    
     # Save uploaded file temporarily
     filename = secure_filename(file.filename)
     temp_path = UPLOADS_DIR / filename
@@ -1328,10 +1497,14 @@ def import_server():
     try:
         file.save(str(temp_path))
         
-        success, result = server_manager.import_server_from_zip(name, temp_path, java_args, owner=user_id)
+        success, result = server_manager.import_server_from_zip(name, temp_path, java_args, owner=user_id, approved=approved)
         
         if success:
-            return jsonify({'success': True, 'serverId': result})
+            response = {'success': True, 'serverId': result}
+            if not approved:
+                response['pendingApproval'] = True
+                response['message'] = 'Server imported and pending admin approval'
+            return jsonify(response)
         else:
             return jsonify({'error': result}), 400
     finally:
@@ -1788,6 +1961,20 @@ def update_branding():
     data = request.get_json()
     branding = settings_manager.update_branding(data)
     return jsonify({'success': True, 'branding': branding})
+
+@app.route('/api/settings/app', methods=['GET'])
+@admin_required
+def get_app_settings():
+    """Get app settings (admin only)"""
+    return jsonify(settings_manager.get_app_settings())
+
+@app.route('/api/settings/app', methods=['PUT'])
+@admin_required
+def update_app_settings():
+    """Update app settings (admin only)"""
+    data = request.get_json()
+    app_settings = settings_manager.update_app_settings(data)
+    return jsonify({'success': True, 'settings': app_settings})
 
 
 # ==================== System Stats API ====================

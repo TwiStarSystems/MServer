@@ -20,6 +20,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab === 'users') {
         loadUsers();
       }
+      // Load approvals when Approvals tab is clicked
+      if (tab === 'approvals') {
+        loadPendingApprovals();
+      }
+      // Load app settings when Server Settings tab is clicked
+      if (tab === 'appsettings') {
+        loadAppSettings();
+      }
     });
   });
   
@@ -445,15 +453,6 @@ function escapeHtml(text) {
 
 // ==================== User Management Functions ====================
 
-function switchUserTab(subtab) {
-  document.querySelectorAll('.user-mgmt-tab-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.subtab === subtab);
-  });
-  document.querySelectorAll('.user-mgmt-content').forEach(content => {
-    content.classList.toggle('active', content.id === `${subtab}-users-tab`);
-  });
-}
-
 async function loadUsers() {
   try {
     const response = await fetch('/api/admin/users');
@@ -461,21 +460,18 @@ async function loadUsers() {
     
     const data = await response.json();
     const users = data.users || [];
-    
     const approvedUsers = users.filter(u => u.approved);
-    const pendingUsers = users.filter(u => !u.approved);
     
-    // Render approved users
-    const approvedTab = document.getElementById('approved-users-tab');
+    const usersList = document.getElementById('users-list');
     if (approvedUsers.length === 0) {
-      approvedTab.innerHTML = `
+      usersList.innerHTML = `
         <div class="user-mgmt-empty">
           <h3>No Users</h3>
-          <p>No approved users found</p>
+          <p>No registered users found</p>
         </div>
       `;
     } else {
-      approvedTab.innerHTML = `
+      usersList.innerHTML = `
         <table class="user-mgmt-table">
           <thead>
             <tr>
@@ -508,49 +504,148 @@ async function loadUsers() {
         </table>
       `;
     }
-    
-    // Render pending users
-    const pendingTab = document.getElementById('pending-users-tab');
-    if (pendingUsers.length === 0) {
-      pendingTab.innerHTML = `
-        <div class="user-mgmt-empty">
-          <h3>No Pending Requests</h3>
-          <p>No users waiting for approval</p>
-        </div>
-      `;
-    } else {
-      pendingTab.innerHTML = `
-        <table class="user-mgmt-table">
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Registered</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pendingUsers.map(u => `
-              <tr>
-                <td>${escapeHtml(u.username)}</td>
-                <td>${new Date(u.created).toLocaleDateString()}</td>
-                <td class="user-mgmt-actions">
-                  <button class="btn btn-small btn-success" onclick="approveUser('${u.id}')">Approve</button>
-                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Reject</button>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      `;
-    }
   } catch (err) {
     console.error('Failed to load users:', err);
-    document.getElementById('approved-users-tab').innerHTML = `
+    document.getElementById('users-list').innerHTML = `
       <div class="user-mgmt-empty">
         <h3>Error Loading Users</h3>
         <p>${err.message}</p>
       </div>
     `;
+  }
+}
+
+// ==================== Approvals Functions ====================
+
+async function loadPendingApprovals() {
+  await Promise.all([loadPendingUsers(), loadPendingServers()]);
+}
+
+async function loadPendingUsers() {
+  try {
+    const response = await fetch('/api/admin/users');
+    if (!response.ok) throw new Error('Failed to load users');
+    
+    const data = await response.json();
+    const users = data.users || [];
+    const pendingUsers = users.filter(u => !u.approved);
+    
+    // Update count badge
+    document.getElementById('pending-users-count').textContent = pendingUsers.length;
+    
+    const pendingList = document.getElementById('pending-users-list');
+    if (pendingUsers.length === 0) {
+      pendingList.innerHTML = `
+        <div class="approval-empty">
+          <p>No pending user registrations</p>
+        </div>
+      `;
+    } else {
+      pendingList.innerHTML = `
+        <div class="approval-items">
+          ${pendingUsers.map(u => `
+            <div class="approval-item">
+              <div class="approval-item-info">
+                <span class="approval-item-name">${escapeHtml(u.username)}</span>
+                <span class="approval-item-date">Registered ${new Date(u.created).toLocaleDateString()}</span>
+              </div>
+              <div class="approval-item-actions">
+                <button class="btn btn-small btn-success" onclick="approveUser('${u.id}')">Approve</button>
+                <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Reject</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+  } catch (err) {
+    console.error('Failed to load pending users:', err);
+    document.getElementById('pending-users-list').innerHTML = `
+      <div class="approval-empty">
+        <p>Error loading pending users</p>
+      </div>
+    `;
+  }
+}
+
+async function loadPendingServers() {
+  try {
+    const response = await fetch('/api/admin/servers/pending');
+    if (!response.ok) {
+      // Endpoint may not exist yet - show empty state
+      document.getElementById('pending-servers-count').textContent = '0';
+      document.getElementById('pending-servers-list').innerHTML = `
+        <div class="approval-empty">
+          <p>No pending server requests</p>
+        </div>
+      `;
+      return;
+    }
+    
+    const data = await response.json();
+    const pendingServers = data.servers || [];
+    
+    // Update count badge
+    document.getElementById('pending-servers-count').textContent = pendingServers.length;
+    
+    const pendingList = document.getElementById('pending-servers-list');
+    if (pendingServers.length === 0) {
+      pendingList.innerHTML = `
+        <div class="approval-empty">
+          <p>No pending server requests</p>
+        </div>
+      `;
+    } else {
+      pendingList.innerHTML = `
+        <div class="approval-items">
+          ${pendingServers.map(s => `
+            <div class="approval-item">
+              <div class="approval-item-info">
+                <span class="approval-item-name">${escapeHtml(s.name)}</span>
+                <span class="approval-item-meta">Requested by ${escapeHtml(s.owner || 'Unknown')} • ${s.type || 'Server'}</span>
+                <span class="approval-item-date">Requested ${new Date(s.created).toLocaleDateString()}</span>
+              </div>
+              <div class="approval-item-actions">
+                <button class="btn btn-small btn-success" onclick="approveServer('${s.id}')">Approve</button>
+                <button class="btn btn-small btn-danger" onclick="rejectServer('${s.id}', '${escapeHtml(s.name)}')">Reject</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+  } catch (err) {
+    console.error('Failed to load pending servers:', err);
+    document.getElementById('pending-servers-count').textContent = '0';
+    document.getElementById('pending-servers-list').innerHTML = `
+      <div class="approval-empty">
+        <p>No pending server requests</p>
+      </div>
+    `;
+  }
+}
+
+async function approveServer(serverId) {
+  try {
+    const response = await fetch(`/api/admin/servers/${serverId}/approve`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to approve server');
+    loadPendingServers();
+  } catch (err) {
+    console.error('Failed to approve server:', err);
+    alert('Failed to approve server: ' + err.message);
+  }
+}
+
+async function rejectServer(serverId, serverName) {
+  if (!confirm(`Are you sure you want to reject the server request "${serverName}"? This will delete the request.`)) return;
+  
+  try {
+    const response = await fetch(`/api/admin/servers/${serverId}/reject`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to reject server');
+    loadPendingServers();
+  } catch (err) {
+    console.error('Failed to reject server:', err);
+    alert('Failed to reject server: ' + err.message);
   }
 }
 
@@ -612,5 +707,91 @@ async function deleteUser(userId, username) {
   } catch (err) {
     console.error('Failed to delete user:', err);
     alert('Failed to delete user: ' + err.message);
+  }
+}
+
+// ==================== Add User Functions ====================
+
+function openAddUserModal() {
+  document.getElementById('add-user-modal').style.display = 'flex';
+  document.getElementById('new-username').focus();
+}
+
+function closeAddUserModal() {
+  document.getElementById('add-user-modal').style.display = 'none';
+  document.getElementById('add-user-form').reset();
+}
+
+async function createUser(event) {
+  event.preventDefault();
+  
+  const username = document.getElementById('new-username').value.trim();
+  const password = document.getElementById('new-password').value;
+  const role = document.getElementById('new-role').value;
+  
+  if (!username || !password) {
+    alert('Please fill in all fields');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, role })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to create user');
+    }
+    
+    alert('User created successfully!');
+    closeAddUserModal();
+    loadUsers();
+  } catch (err) {
+    console.error('Failed to create user:', err);
+    alert('Failed to create user: ' + err.message);
+  }
+}
+
+// ==================== App Settings Functions ====================
+
+async function loadAppSettings() {
+  try {
+    const response = await fetch('/api/settings/app');
+    if (response.ok) {
+      const settings = await response.json();
+      
+      document.getElementById('enable-registration').checked = settings.enableRegistration ?? true;
+      document.getElementById('require-approval').checked = settings.requireApproval ?? true;
+      document.getElementById('require-server-approval').checked = settings.requireServerApproval ?? false;
+    }
+  } catch (err) {
+    console.error('Failed to load app settings:', err);
+  }
+}
+
+async function saveAppSettings() {
+  const settings = {
+    enableRegistration: document.getElementById('enable-registration').checked,
+    requireApproval: document.getElementById('require-approval').checked,
+    requireServerApproval: document.getElementById('require-server-approval').checked
+  };
+  
+  try {
+    const response = await fetch('/api/settings/app', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to save settings');
+    }
+  } catch (err) {
+    console.error('Failed to save app settings:', err);
+    alert('Failed to save settings: ' + err.message);
   }
 }

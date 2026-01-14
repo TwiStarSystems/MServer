@@ -2012,3 +2012,233 @@ select.form-control:disabled {
   margin-bottom: 8px;
   color: #aaa;
 }
+
+/* User Management Header */
+.user-mgmt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.user-mgmt-header .user-mgmt-tabs {
+  margin-bottom: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* ==================== Server Settings (App Settings) ==================== */
+
+.settings-card {
+  background: #1e1e2e;
+  border-radius: 12px;
+  padding: 24px;
+  border: 1px solid #333;
+  margin-bottom: 20px;
+}
+
+.settings-card h3 {
+  font-size: 1.1rem;
+  color: #fff;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #333;
+}
+
+.settings-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 0;
+  border-bottom: 1px solid #2a2a3e;
+}
+
+.settings-option:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settings-option-info {
+  flex: 1;
+  padding-right: 20px;
+}
+
+.settings-option-info label {
+  display: block;
+  font-size: 0.95rem;
+  color: #e0e0e0;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.settings-option-info small {
+  font-size: 0.85rem;
+  color: #888;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #333;
+  transition: 0.3s;
+  border-radius: 26px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #888;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #667eea;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(24px);
+  background-color: #fff;
+}
+
+.toggle-switch input:focus + .toggle-slider {
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
+}
+
+/* ==================== Approvals Section ==================== */
+
+.approvals-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 24px;
+}
+
+.approval-card {
+  background: #1e1e2e;
+  border-radius: 12px;
+  border: 1px solid #333;
+  overflow: hidden;
+}
+
+.approval-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: #252536;
+  border-bottom: 1px solid #333;
+}
+
+.approval-card-header h3 {
+  font-size: 1rem;
+  color: #fff;
+  margin: 0;
+}
+
+.approval-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  background: #667eea;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 12px;
+}
+
+.approval-list {
+  padding: 16px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.approval-empty {
+  text-align: center;
+  padding: 30px 20px;
+  color: #888;
+}
+
+.approval-empty p {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.approval-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.approval-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  background: #252536;
+  border-radius: 8px;
+  border: 1px solid #333;
+}
+
+.approval-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.approval-item-name {
+  font-weight: 600;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.approval-item-meta {
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+.approval-item-date {
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.approval-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+/* User Management Header Update */
+.user-mgmt-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #fff;
+}
