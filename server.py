@@ -3496,7 +3496,7 @@ def list_tools():
 @app.route('/api/tools/<tool_name>/run', methods=['POST'])
 @admin_required
 def run_tool(tool_name):
-    """Run a tool from the tools directory"""
+    """Run a tool from the tools directory with optional arguments"""
     tool_path = TOOLS_DIR / f'{tool_name}.py'
     
     if not tool_path.exists():
@@ -3510,13 +3510,28 @@ def run_tool(tool_name):
     except Exception:
         return jsonify({'error': 'Invalid tool'}), 400
     
+    # Get optional arguments from request body
+    data = request.get_json() or {}
+    args_string = data.get('args', '').strip()
+    timeout_seconds = min(data.get('timeout', 300), 600)  # Max 10 minutes
+    
+    # Parse arguments (split by whitespace, respecting quotes)
+    import shlex
+    try:
+        args_list = shlex.split(args_string) if args_string else []
+    except ValueError as e:
+        return jsonify({'error': f'Invalid arguments: {str(e)}'}), 400
+    
+    # Build command
+    command = ['python3', str(tool_path)] + args_list
+    
     try:
         # Run the tool and capture output
         result = subprocess.run(
-            ['python3', str(tool_path)],
+            command,
             capture_output=True,
             text=True,
-            timeout=60,  # 60 second timeout
+            timeout=timeout_seconds,
             cwd=str(BASE_DIR)
         )
         
@@ -3524,10 +3539,11 @@ def run_tool(tool_name):
             'success': result.returncode == 0,
             'output': result.stdout,
             'error': result.stderr,
-            'returnCode': result.returncode
+            'returnCode': result.returncode,
+            'command': ' '.join(command)
         })
     except subprocess.TimeoutExpired:
-        return jsonify({'error': 'Tool execution timed out (60s limit)'}), 408
+        return jsonify({'error': f'Tool execution timed out ({timeout_seconds}s limit)'}), 408
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

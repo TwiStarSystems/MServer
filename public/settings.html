@@ -247,15 +247,16 @@
             </div>
           </div>
           
-          <!-- Other Tools -->
+          <!-- Custom Tools -->
           <div class="tool-panel">
             <div class="tool-panel-header">
               <h3>🛠️ Custom Tools</h3>
               <span class="tool-description">Python scripts from the ./tools folder</span>
+              <button class="btn btn-small" onclick="loadTools()" title="Refresh">🔄</button>
             </div>
-            <div id="tools-container" class="tools-grid">
-              <div class="no-tools">
-                <h3>Loading tools...</h3>
+            <div class="tool-panel-body">
+              <div id="tools-container" class="tools-list">
+                <div class="loading-text">Loading tools...</div>
               </div>
             </div>
           </div>

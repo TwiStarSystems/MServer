@@ -375,11 +375,27 @@ async function loadTools() {
       
       if (data.tools && data.tools.length > 0) {
         container.innerHTML = data.tools.map(tool => `
-          <div class="tool-card" data-tool="${tool.name}">
-            <h4>${escapeHtml(tool.name)}</h4>
-            <p>${escapeHtml(tool.description)}</p>
-            <button class="btn btn-primary" onclick="runTool('${tool.name}')">Run Tool</button>
-            <div class="tool-output" id="output-${tool.name}"></div>
+          <div class="tool-item" data-tool="${tool.name}">
+            <div class="tool-item-header">
+              <div class="tool-info">
+                <h4 class="tool-name">📜 ${escapeHtml(tool.filename)}</h4>
+                <p class="tool-desc">${escapeHtml(tool.description)}</p>
+              </div>
+              <button class="btn btn-small tool-toggle" onclick="toggleToolExpand('${tool.name}')" title="Expand/Collapse">▼</button>
+            </div>
+            <div class="tool-details" id="details-${tool.name}" style="display: none;">
+              <div class="tool-args-section">
+                <label>Arguments (optional):</label>
+                <input type="text" class="form-control tool-args-input" id="args-${tool.name}" 
+                       placeholder="e.g., --download-latest=10 --quiet" />
+                <small class="tool-args-hint">Enter command-line arguments separated by spaces</small>
+              </div>
+              <div class="tool-actions">
+                <button class="btn btn-primary" onclick="runTool('${tool.name}')">▶️ Run Tool</button>
+                <span class="tool-status" id="status-${tool.name}"></span>
+              </div>
+              <div class="tool-output" id="output-${tool.name}"></div>
+            </div>
           </div>
         `).join('');
       } else {
@@ -402,37 +418,61 @@ async function loadTools() {
   }
 }
 
+function toggleToolExpand(toolName) {
+  const details = document.getElementById(`details-${toolName}`);
+  const toggle = document.querySelector(`[data-tool="${toolName}"] .tool-toggle`);
+  
+  if (details.style.display === 'none') {
+    details.style.display = 'block';
+    toggle.textContent = '▲';
+  } else {
+    details.style.display = 'none';
+    toggle.textContent = '▼';
+  }
+}
+
 async function runTool(toolName) {
   const outputEl = document.getElementById(`output-${toolName}`);
+  const statusEl = document.getElementById(`status-${toolName}`);
+  const argsInput = document.getElementById(`args-${toolName}`);
   const card = document.querySelector(`[data-tool="${toolName}"]`);
-  const btn = card.querySelector('button');
+  const btn = card.querySelector('.btn-primary');
+  
+  const args = argsInput ? argsInput.value.trim() : '';
   
   btn.disabled = true;
-  btn.textContent = 'Running...';
+  btn.textContent = '⏳ Running...';
+  statusEl.textContent = '';
   outputEl.classList.add('show');
   outputEl.classList.remove('success', 'error');
-  outputEl.textContent = 'Executing tool...';
+  outputEl.innerHTML = '<span class="loading-text">Executing tool...</span>';
   
   try {
     const response = await fetch(`/api/tools/${toolName}/run`, {
-      method: 'POST'
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ args: args, timeout: 300 })
     });
     
     const result = await response.json();
     
     if (result.success) {
       outputEl.classList.add('success');
+      statusEl.innerHTML = '<span class="success-text">✅ Completed</span>';
       outputEl.textContent = result.output || 'Tool completed successfully (no output)';
     } else {
       outputEl.classList.add('error');
-      outputEl.textContent = result.error || result.output || 'Tool failed';
+      statusEl.innerHTML = '<span class="error-text">❌ Failed</span>';
+      const errorOutput = result.error || result.output || 'Tool failed';
+      outputEl.textContent = errorOutput;
     }
   } catch (err) {
     outputEl.classList.add('error');
+    statusEl.innerHTML = '<span class="error-text">❌ Error</span>';
     outputEl.textContent = 'Error: ' + err.message;
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Run Tool';
+    btn.textContent = '▶️ Run Tool';
   }
 }
 
