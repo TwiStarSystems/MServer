@@ -3353,14 +3353,14 @@ def get_stats_history():
 
 # Default API endpoints for fetching Minecraft server JARs
 DEFAULT_MINECRAFT_APIS = {
-    'vanilla': 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json',
-    'bedrock': 'https://raw.githubusercontent.com/AlexxIT/BedrockDedicatedServer/master/versions.json',
-    'paper': 'https://api.papermc.io/v2/projects/paper',
-    'purpur': 'https://api.purpurmc.org/v2/purpur',
-    'fabric': 'https://meta.fabricmc.net/v2/versions',
-    'velocity': 'https://api.papermc.io/v2/projects/velocity',
-    'waterfall': 'https://api.papermc.io/v2/projects/waterfall',
-    'folia': 'https://api.papermc.io/v2/projects/folia'
+    'vanilla': 'https://jars.arcadiatech.org/manifest.json',
+    'bedrock': 'https://jars.arcadiatech.org/manifest.json',
+    'paper': 'https://jars.arcadiatech.org/manifest.json',
+    'purpur': 'https://jars.arcadiatech.org/manifest.json',
+    'fabric': 'https://jars.arcadiatech.org/manifest.json',
+    'forge': 'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json',
+    'waterfall': 'https://jars.arcadiatech.org/manifest.json',
+    'folia': 'https://jars.arcadiatech.org/manifest.json'
 }
 
 def load_minecraft_apis():
@@ -3401,7 +3401,7 @@ def get_jar_types():
             {'id': 'purpur', 'name': 'Purpur', 'description': 'Paper fork with extra features'},
             {'id': 'fabric', 'name': 'Fabric', 'description': 'Lightweight mod loader'},
             {'id': 'folia', 'name': 'Folia', 'description': 'Paper fork for multi-threaded regions'},
-            {'id': 'velocity', 'name': 'Velocity', 'description': 'Modern Minecraft proxy'},
+            {'id': 'forge', 'name': 'Forge', 'description': 'Mod loader for Minecraft mods'},
             {'id': 'waterfall', 'name': 'Waterfall', 'description': 'BungeeCord fork by PaperMC'}
         ]
     })
@@ -3485,8 +3485,8 @@ def get_jar_versions(server_type):
             return fetch_fabric_versions()
         elif server_type == 'folia':
             return fetch_papermc_versions('folia')
-        elif server_type == 'velocity':
-            return fetch_papermc_versions('velocity')
+        elif server_type == 'forge':
+            return fetch_forge_versions()
         elif server_type == 'waterfall':
             return fetch_papermc_versions('waterfall')
         else:
@@ -3612,6 +3612,44 @@ def fetch_fabric_versions():
     
     return jsonify({'versions': versions})
 
+def fetch_forge_versions():
+    """Fetch Forge versions from promotions file"""
+    try:
+        # Get promotions file which has recommended versions
+        response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
+        if response.status_code != 200:
+            return jsonify({'error': 'Failed to fetch from Forge API'}), 502
+        
+        data = response.json()
+        promos = data.get('promos', {})
+        
+        # Extract unique MC versions from promotions (format: "1.20.1-recommended", "1.20.1-latest")
+        versions_set = set()
+        for key in promos.keys():
+            if '-' in key:
+                mc_version = key.split('-')[0]
+                versions_set.add(mc_version)
+        
+        # Sort versions in reverse order
+        versions = []
+        for version in sorted(versions_set, reverse=True)[:30]:
+            versions.append({
+                'version': version,
+                'type': 'release',
+                'url': 'API'
+            })
+        
+        return jsonify({'versions': versions})
+    except Exception as e:
+        # Fallback to known recent versions
+        known_versions = [
+            '1.21.4', '1.21.3', '1.21.1', '1.21', '1.20.6', '1.20.4',
+            '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2',
+            '1.18.2', '1.17.1', '1.16.5'
+        ]
+        versions = [{'version': v, 'type': 'release', 'url': 'API'} for v in known_versions]
+        return jsonify({'versions': versions})
+
 @app.route('/api/tools/jarfetcher/download-url', methods=['POST'])
 @admin_required
 def get_jar_download_url():
@@ -3678,8 +3716,8 @@ def get_jar_download_url():
         elif server_type == 'folia':
             return get_papermc_download_url('folia', version)
         
-        elif server_type == 'velocity':
-            return get_papermc_download_url('velocity', version)
+        elif server_type == 'forge':
+            return get_forge_download_url(version)
         
         elif server_type == 'waterfall':
             return get_papermc_download_url('waterfall', version)
@@ -3714,6 +3752,34 @@ def get_papermc_download_url(project, version):
     
     download_url = f'https://api.papermc.io/v2/projects/{project}/versions/{version}/builds/{build_number}/downloads/{filename}'
     return jsonify({'url': download_url, 'build': build_number})
+
+def get_forge_download_url(version):
+    """Get download URL for Forge installer"""
+    try:
+        # Get promotions file to find the recommended build
+        response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
+        if response.status_code != 200:
+            return jsonify({'error': 'Failed to fetch Forge promotions'}), 502
+        
+        data = response.json()
+        promos = data.get('promos', {})
+        
+        # Try to get recommended version, fallback to latest
+        forge_version = promos.get(f'{version}-recommended') or promos.get(f'{version}-latest')
+        
+        if not forge_version:
+            return jsonify({'error': f'No Forge build found for Minecraft {version}'}), 404
+        
+        # Construct the download URL for the installer
+        url = f'https://maven.minecraftforge.net/net/minecraftforge/forge/{version}-{forge_version}/forge-{version}-{forge_version}-installer.jar'
+        
+        return jsonify({
+            'url': url,
+            'build': forge_version,
+            'note': 'This is a Forge installer JAR. Run it to install the server.'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/tools/jarfetcher/config', methods=['GET'])
 @admin_required
@@ -3915,7 +3981,7 @@ def update_jar_config():
 def bulk_update_jar_urls():
     """Fetch all versions from APIs and update jarurls.conf"""
     data = request.get_json() or {}
-    server_types = data.get('types', ['vanilla', 'paper', 'purpur', 'fabric', 'folia', 'velocity', 'waterfall'])
+    server_types = data.get('types', ['vanilla', 'paper', 'purpur', 'fabric', 'folia', 'forge', 'waterfall'])
     max_versions = data.get('maxVersions', 10)  # Limit versions per type to avoid timeout
     
     results = {
@@ -4019,7 +4085,7 @@ def fetch_versions_for_type(server_type):
             known = ['1.21.51.02', '1.21.50.07', '1.21.44.01', '1.21.43.01', '1.21.42.01']
             return [{'version': v} for v in known]
         
-        elif server_type in ['paper', 'folia', 'velocity', 'waterfall']:
+        elif server_type in ['paper', 'folia', 'waterfall']:
             base_url = f'https://api.papermc.io/v2/projects/{server_type}'
             response = requests.get(base_url, timeout=30)
             if response.status_code == 200:
@@ -4042,6 +4108,19 @@ def fetch_versions_for_type(server_type):
                 for v in data[:30]:
                     if v.get('stable', False):
                         versions.append({'version': v['version']})
+                return versions
+        
+        elif server_type == 'forge':
+            response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                promos = data.get('promos', {})
+                versions_set = set()
+                for key in promos.keys():
+                    if '-' in key:
+                        mc_version = key.split('-')[0]
+                        versions_set.add(mc_version)
+                versions = [{'version': v} for v in sorted(versions_set, reverse=True)[:30]]
                 return versions
     except Exception as e:
         print(f"Error fetching versions for {server_type}: {e}")
@@ -4081,7 +4160,7 @@ def fetch_download_url_for_type(server_type, version):
             url = f'https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip'
             return {'url': url}
         
-        elif server_type in ['paper', 'folia', 'velocity', 'waterfall']:
+        elif server_type in ['paper', 'folia', 'waterfall']:
             builds_url = f'https://api.papermc.io/v2/projects/{server_type}/versions/{version}/builds'
             response = requests.get(builds_url, timeout=30)
             
@@ -4117,6 +4196,18 @@ def fetch_download_url_for_type(server_type, version):
                 url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar'
                 return {'url': url}
             return {'error': 'Failed to fetch Fabric loader info'}
+        
+        elif server_type == 'forge':
+            response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                promos = data.get('promos', {})
+                forge_version = promos.get(f'{version}-recommended') or promos.get(f'{version}-latest')
+                
+                if forge_version:
+                    url = f'https://maven.minecraftforge.net/net/minecraftforge/forge/{version}-{forge_version}/forge-{version}-{forge_version}-installer.jar'
+                    return {'url': url, 'build': forge_version}
+            return {'error': f'No Forge build found for {version}'}
         
     except Exception as e:
         return {'error': str(e)}

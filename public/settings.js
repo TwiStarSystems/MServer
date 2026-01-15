@@ -789,7 +789,7 @@ const SERVER_TYPE_NAMES = {
   'purpur': 'Purpur',
   'fabric': 'Fabric',
   'folia': 'Folia',
-  'velocity': 'Velocity',
+  'forge': 'Forge',
   'waterfall': 'Waterfall'
 };
 

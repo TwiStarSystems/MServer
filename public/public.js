@@ -49,7 +49,8 @@ function createServerCard(server) {
         'paper': 'Paper',
         'purpur': 'Purpur',
         'bungeecord': 'BungeeCord',
-        'velocity': 'Velocity',
+        'waterfall': 'Waterfall',
+        'folia': 'Folia',
         'forge': 'Forge',
         'neoforge': 'NeoForge',
         'fabric': 'Fabric'
