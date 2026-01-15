@@ -1,0 +1,475 @@
+# Download Paper server JARs from the PaperMC API
+"""
+This tool fetches and downloads Paper Minecraft server JARs from the PaperMC API.
+Paper is a high-performance fork of Spigot with additional optimizations and features.
+
+API Documentation: https://api.papermc.io/docs/swagger-ui/index.html
+
+Modes:
+  --list              List all available Paper versions (default)
+  --download          Download server JARs to serverexecutables/paper/
+  --download-latest=N Download only the latest N versions
+
+Output format: paper:<VERSION>=API (latest build fetched automatically)
+Downloaded files: serverexecutables/paper/paper-<VERSION>-<BUILD>.jar
+"""
+
+import requests
+import json
+import sys
+import os
+import time
+from pathlib import Path
+
+PAPER_API_BASE = "https://api.papermc.io/v2/projects/paper"
+
+# Get the base directory (parent of tools folder)
+SCRIPT_DIR = Path(__file__).parent
+BASE_DIR = SCRIPT_DIR.parent
+SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables' / 'paper'
+
+
+def fetch_paper_versions():
+    """Fetch all available Paper versions from the API"""
+    print("📥 Fetching Paper versions...")
+    try:
+        response = requests.get(PAPER_API_BASE, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        versions = data.get('versions', [])
+        # Reverse to get newest first
+        versions = list(reversed(versions))
+        return versions
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to fetch Paper versions: {e}")
+        return None
+
+
+def fetch_version_builds(version):
+    """Fetch all builds for a specific version"""
+    try:
+        url = f"{PAPER_API_BASE}/versions/{version}"
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        return data.get('builds', [])
+    except requests.exceptions.RequestException:
+        return []
+
+
+def get_latest_build(version):
+    """Get the latest build number for a version"""
+    builds = fetch_version_builds(version)
+    if builds:
+        return max(builds)
+    return None
+
+
+def get_download_info(version, build):
+    """Get download information for a specific version and build"""
+    try:
+        url = f"{PAPER_API_BASE}/versions/{version}/builds/{build}"
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        downloads = data.get('downloads', {})
+        application = downloads.get('application', {})
+        filename = application.get('name')
+        sha256 = application.get('sha256')
+        
+        if filename:
+            download_url = f"{PAPER_API_BASE}/versions/{version}/builds/{build}/downloads/{filename}"
+            return {
+                'filename': filename,
+                'url': download_url,
+                'sha256': sha256,
+                'build': build
+            }
+        return None
+    except requests.exceptions.RequestException:
+        return None
+
+
+def get_server_info(versions, limit=None, quiet=False):
+    """
+    Get server download info for all versions
+    
+    Args:
+        versions: List of version strings
+        limit: Maximum number of versions to process (None for all)
+        quiet: Suppress progress output
+    
+    Returns:
+        List of dicts: {'version': str, 'build': int, 'url': str, 'filename': str}
+    """
+    server_info = []
+    
+    if limit:
+        versions = versions[:limit]
+    
+    total = len(versions)
+    
+    if not quiet:
+        print(f"\n🔍 Processing {total} versions...")
+        print("-" * 60)
+    
+    for i, version in enumerate(versions):
+        if not quiet:
+            print(f"  [{i + 1}/{total}] Fetching {version}...", end=" ", flush=True)
+        
+        # Get latest build for this version
+        build = get_latest_build(version)
+        
+        if not build:
+            if not quiet:
+                print("⚠️ No builds available")
+            continue
+        
+        # Get download info
+        info = get_download_info(version, build)
+        
+        if info:
+            server_info.append({
+                'version': version,
+                'build': info['build'],
+                'url': info['url'],
+                'filename': info['filename'],
+                'sha256': info['sha256']
+            })
+            if not quiet:
+                print(f"✅ Build {build}")
+        else:
+            if not quiet:
+                print("❌ Failed to get download info")
+        
+        # Small delay to be nice to the API
+        time.sleep(0.1)
+    
+    if not quiet:
+        print("-" * 60)
+        print(f"\n📊 Summary:")
+        print(f"   ✅ Found Paper JARs: {len(server_info)}")
+    
+    return server_info
+
+
+def format_output(server_info):
+    """Format the server info in the required format"""
+    output_lines = []
+    for item in server_info:
+        # Format: paper:version=API (will fetch latest build automatically)
+        output_lines.append(f"paper:{item['version']}=API (build {item['build']})")
+    return output_lines
+
+
+def download_jar(version, build, url, filename, skip_existing=True):
+    """
+    Download a single JAR file
+    
+    Args:
+        version: Version string (e.g., "1.21.4")
+        build: Build number
+        url: Download URL
+        filename: Original filename from API
+        skip_existing: Skip if file already exists
+    
+    Returns:
+        Tuple: (success: bool, message: str, size: int)
+    """
+    # Ensure directory exists
+    SERVER_EXECUTABLES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Use a consistent naming format
+    local_filename = f"paper-{version}-{build}.jar"
+    filepath = SERVER_EXECUTABLES_DIR / local_filename
+    
+    # Check if already exists
+    if skip_existing and filepath.exists():
+        return True, "Already exists", filepath.stat().st_size
+    
+    try:
+        response = requests.get(url, stream=True, timeout=120)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+        
+        return True, "Downloaded", downloaded
+        
+    except requests.exceptions.RequestException as e:
+        # Clean up partial download
+        if filepath.exists():
+            filepath.unlink()
+        return False, str(e), 0
+    except Exception as e:
+        if filepath.exists():
+            filepath.unlink()
+        return False, str(e), 0
+
+
+def bulk_download(server_info, skip_existing=True):
+    """
+    Download multiple JAR files
+    
+    Args:
+        server_info: List of dicts with version, build, url, filename keys
+        skip_existing: Skip files that already exist
+    """
+    total = len(server_info)
+    downloaded = 0
+    skipped = 0
+    failed = 0
+    total_bytes = 0
+    
+    print(f"\n📥 Downloading {total} Paper server JARs to:")
+    print(f"   {SERVER_EXECUTABLES_DIR}")
+    print("-" * 60)
+    
+    for i, item in enumerate(server_info):
+        version = item['version']
+        build = item['build']
+        url = item['url']
+        filename = item['filename']
+        
+        print(f"  [{i + 1}/{total}] paper-{version}-{build}.jar...", end=" ", flush=True)
+        
+        success, message, size = download_jar(version, build, url, filename, skip_existing)
+        
+        if success:
+            if message == "Already exists":
+                skipped += 1
+                print(f"⏭️ {message} ({format_bytes(size)})")
+            else:
+                downloaded += 1
+                total_bytes += size
+                print(f"✅ {message} ({format_bytes(size)})")
+        else:
+            failed += 1
+            print(f"❌ {message}")
+        
+        # Small delay between downloads
+        if success and message != "Already exists":
+            time.sleep(0.2)
+    
+    print("-" * 60)
+    print(f"\n📊 Download Summary:")
+    print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
+    print(f"   ⏭️ Skipped (existing): {skipped}")
+    print(f"   ❌ Failed: {failed}")
+    print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
+
+
+def format_bytes(bytes_size):
+    """Format bytes to human-readable string"""
+    if bytes_size == 0:
+        return "0 B"
+    sizes = ['B', 'KB', 'MB', 'GB']
+    i = 0
+    while bytes_size >= 1024 and i < len(sizes) - 1:
+        bytes_size /= 1024
+        i += 1
+    return f"{bytes_size:.2f} {sizes[i]}"
+
+
+def list_downloaded():
+    """List already downloaded JAR files"""
+    if not SERVER_EXECUTABLES_DIR.exists():
+        print("\n📁 No downloaded files yet.")
+        return []
+    
+    files = list(SERVER_EXECUTABLES_DIR.glob("paper-*.jar"))
+    files.sort(reverse=True)
+    
+    if not files:
+        print("\n📁 No downloaded files yet.")
+        return []
+    
+    print(f"\n📁 Downloaded files in {SERVER_EXECUTABLES_DIR}:")
+    print("-" * 60)
+    
+    total_size = 0
+    for f in files:
+        size = f.stat().st_size
+        total_size += size
+        print(f"  {f.name} ({format_bytes(size)})")
+    
+    print("-" * 60)
+    print(f"   Total: {len(files)} files ({format_bytes(total_size)})")
+    
+    return files
+
+
+def download_single_version(version, force=False):
+    """Download a specific Paper version (latest build)"""
+    print(f"\n🔍 Fetching latest build for Paper {version}...")
+    
+    build = get_latest_build(version)
+    if not build:
+        print(f"❌ No builds found for version {version}")
+        return False
+    
+    info = get_download_info(version, build)
+    if not info:
+        print(f"❌ Could not get download info for {version} build {build}")
+        return False
+    
+    print(f"✅ Found build {build}")
+    print(f"\n📥 Downloading paper-{version}-{build}.jar...")
+    
+    success, message, size = download_jar(
+        version, build, info['url'], info['filename'], 
+        skip_existing=not force
+    )
+    
+    if success:
+        if message == "Already exists":
+            print(f"⏭️ {message} ({format_bytes(size)})")
+        else:
+            print(f"✅ {message} ({format_bytes(size)})")
+        print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / f'paper-{version}-{build}.jar'}")
+        return True
+    else:
+        print(f"❌ {message}")
+        return False
+
+
+def print_usage():
+    """Print usage information"""
+    print("""
+Usage: python get_paper_jars.py [mode] [options]
+
+Modes:
+  --list              List all available Paper versions (default)
+  --download          Download ALL Paper server JARs (latest build for each version)
+  --download-latest=N Download only the latest N versions
+  --version=X         Download a specific version (e.g., --version=1.21.4)
+  --list-downloaded   Show already downloaded files
+
+Options:
+  --force             Re-download even if file exists
+  --quiet, -q         Suppress progress output during URL fetching
+
+Examples:
+  python get_paper_jars.py --list
+  python get_paper_jars.py --download-latest=10
+  python get_paper_jars.py --version=1.21.4
+  python get_paper_jars.py --download --force
+  python get_paper_jars.py --list-downloaded
+
+Note: Paper downloads always use the latest build for each version.
+Format: paper:<version>=API (build fetched automatically)
+""")
+
+
+def main():
+    print("=" * 60)
+    print("📄 Paper Server JAR Fetcher & Downloader")
+    print("=" * 60)
+    
+    # Parse arguments
+    args = sys.argv[1:]
+    
+    mode = 'list'  # default
+    limit = None
+    specific_version = None
+    force_download = '--force' in args
+    quiet = '--quiet' in args or '-q' in args
+    
+    # Determine mode
+    if '--download' in args:
+        mode = 'download'
+    elif '--list-downloaded' in args:
+        mode = 'list-downloaded'
+    elif '--list' in args:
+        mode = 'list'
+    
+    # Check for download-latest=N
+    for arg in args:
+        if arg.startswith('--download-latest='):
+            mode = 'download'
+            try:
+                limit = int(arg.split('=')[1])
+            except ValueError:
+                print("❌ Invalid --download-latest value. Use --download-latest=N where N is a number.")
+                return
+        elif arg.startswith('--limit='):
+            try:
+                limit = int(arg.split('=')[1])
+            except ValueError:
+                pass
+        elif arg.startswith('--version='):
+            mode = 'single'
+            specific_version = arg.split('=')[1]
+    
+    # Execute based on mode
+    if mode == 'list-downloaded':
+        list_downloaded()
+        return
+    
+    if mode == 'single':
+        if not specific_version:
+            print("❌ No version specified. Use --version=X.X.X")
+            return
+        download_single_version(specific_version, force=force_download)
+        return
+    
+    # Fetch versions for list or download modes
+    versions = fetch_paper_versions()
+    if not versions:
+        print("\n❌ Could not fetch Paper versions. Exiting.")
+        return
+    
+    print(f"✅ Found {len(versions)} Paper versions")
+    print(f"   Latest: {versions[0]}")
+    print(f"   Oldest: {versions[-1]}")
+    
+    # Get server info
+    server_info = get_server_info(
+        versions, 
+        limit=limit,
+        quiet=quiet
+    )
+    
+    if not server_info:
+        print("\n❌ No Paper server JARs found.")
+        return
+    
+    if mode == 'list':
+        # Format and display output
+        print("\n" + "=" * 60)
+        print("📋 PAPER SERVER JARS (paper:<version>=API)")
+        print("=" * 60 + "\n")
+        
+        output_lines = format_output(server_info)
+        for line in output_lines:
+            print(line)
+        
+        # Save to file
+        output_file = BASE_DIR / "paper_server_urls.txt"
+        with open(output_file, 'w') as f:
+            f.write("# Paper Server JAR Download Info\n")
+            f.write(f"# Generated from {PAPER_API_BASE}\n")
+            f.write(f"# Total: {len(output_lines)} versions\n")
+            f.write("# Format: paper:<version>=API (latest build fetched automatically)\n\n")
+            for item in server_info:
+                f.write(f"paper:{item['version']}=API (build {item['build']}, url: {item['url']})\n")
+        
+        print(f"\n💾 Saved to: {output_file}")
+        
+    elif mode == 'download':
+        # Bulk download
+        bulk_download(server_info, skip_existing=not force_download)
+    
+    print("\n✅ Done!")
+
+
+if __name__ == "__main__":
+    print_usage()
+    main()
