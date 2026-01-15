@@ -370,43 +370,45 @@ async function loadTools() {
   
   try {
     const response = await fetch('/api/tools');
-    if (response.ok) {
-      const data = await response.json();
-      
-      if (data.tools && data.tools.length > 0) {
-        container.innerHTML = data.tools.map(tool => `
-          <div class="tool-item" data-tool="${tool.name}">
-            <div class="tool-item-header">
-              <div class="tool-info">
-                <h4 class="tool-name">📜 ${escapeHtml(tool.filename)}</h4>
-                <p class="tool-desc">${escapeHtml(tool.description)}</p>
-              </div>
-              <button class="btn btn-small tool-toggle" onclick="toggleToolExpand('${tool.name}')" title="Expand/Collapse">▼</button>
+    if (!response.ok) {
+      throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (data.tools && data.tools.length > 0) {
+      container.innerHTML = data.tools.map(tool => `
+        <div class="tool-item" data-tool="${tool.name}">
+          <div class="tool-item-header">
+            <div class="tool-info">
+              <h4 class="tool-name">📜 ${escapeHtml(tool.filename)}</h4>
+              <p class="tool-desc">${escapeHtml(tool.description)}</p>
             </div>
-            <div class="tool-details" id="details-${tool.name}" style="display: none;">
-              <div class="tool-args-section">
-                <label>Arguments (optional):</label>
-                <input type="text" class="form-control tool-args-input" id="args-${tool.name}" 
-                       placeholder="e.g., --download-latest=10 --quiet" />
-                <small class="tool-args-hint">Enter command-line arguments separated by spaces</small>
-              </div>
-              <div class="tool-actions">
-                <button class="btn btn-primary" onclick="runTool('${tool.name}')">▶️ Run Tool</button>
-                <span class="tool-status" id="status-${tool.name}"></span>
-              </div>
-              <div class="tool-output" id="output-${tool.name}"></div>
+            <button class="btn btn-small tool-toggle" onclick="toggleToolExpand('${tool.name}')" title="Expand/Collapse">▼</button>
+          </div>
+          <div class="tool-details" id="details-${tool.name}" style="display: none;">
+            <div class="tool-args-section">
+              <label>Arguments (optional):</label>
+              <input type="text" class="form-control tool-args-input" id="args-${tool.name}" 
+                     placeholder="e.g., --download-latest=10 --quiet" />
+              <small class="tool-args-hint">Enter command-line arguments separated by spaces</small>
             </div>
+            <div class="tool-actions">
+              <button class="btn btn-primary" onclick="runTool('${tool.name}')">▶️ Run Tool</button>
+              <span class="tool-status" id="status-${tool.name}"></span>
+            </div>
+            <div class="tool-output" id="output-${tool.name}"></div>
           </div>
-        `).join('');
-      } else {
-        container.innerHTML = `
-          <div class="no-tools">
-            <h3>No Tools Available</h3>
-            <p>Add Python scripts to the <code>./tools</code> folder to see them here.</p>
-            <p>Each script should have a comment at the top describing its purpose.</p>
-          </div>
-        `;
-      }
+        </div>
+      `).join('');
+    } else {
+      container.innerHTML = `
+        <div class="no-tools">
+          <h3>No Tools Available</h3>
+          <p>Add Python scripts to the <code>./tools</code> folder to see them here.</p>
+          <p>Each script should have a comment at the top describing its purpose.</p>
+        </div>
+      `;
     }
   } catch (err) {
     container.innerHTML = `

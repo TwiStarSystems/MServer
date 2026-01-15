@@ -3467,29 +3467,36 @@ def delete_downloaded_jar():
 def list_tools():
     """List available tools in the tools directory"""
     tools = []
-    if TOOLS_DIR.exists():
-        for item in TOOLS_DIR.iterdir():
-            if item.suffix == '.py' and item.is_file():
-                # Read first line for description
-                description = ''
-                try:
-                    with open(item, 'r') as f:
-                        first_lines = f.readlines()[:5]
-                        for line in first_lines:
-                            if line.startswith('#') and not line.startswith('#!'):
-                                description = line[1:].strip()
-                                break
-                            elif line.startswith('"""') or line.startswith("'''"):
-                                description = line.strip().strip('"\'')
-                                break
-                except Exception:
-                    pass
-                
-                tools.append({
-                    'name': item.stem,
-                    'filename': item.name,
-                    'description': description or 'No description'
-                })
+    try:
+        if TOOLS_DIR.exists():
+            for item in TOOLS_DIR.iterdir():
+                if item.suffix == '.py' and item.is_file():
+                    # Read first line for description
+                    description = ''
+                    try:
+                        with open(item, 'r') as f:
+                            first_lines = f.readlines()[:5]
+                            for line in first_lines:
+                                if line.startswith('#') and not line.startswith('#!'):
+                                    description = line[1:].strip()
+                                    break
+                                elif line.startswith('"""') or line.startswith("'''"):
+                                    description = line.strip().strip('"\'')
+                                    break
+                    except Exception:
+                        pass
+                    
+                    tools.append({
+                        'name': item.stem,
+                        'filename': item.name,
+                        'description': description or 'No description'
+                    })
+        
+        # Sort tools alphabetically
+        tools.sort(key=lambda x: x['name'].lower())
+        
+    except Exception as e:
+        return jsonify({'error': str(e), 'tools': []}), 500
     
     return jsonify({'tools': tools})
 
