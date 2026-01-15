@@ -881,14 +881,19 @@ def server_access_required(f):
 class JarVersionManager:
     """Manager for Minecraft server JAR files and versions"""
     
-    SERVER_TYPES = {
-        'vanilla': {'name': 'Vanilla', 'description': 'Official Minecraft server', 'modded': False},
+    # Server type metadata
+    SERVER_TYPE_INFO = {
+        'vanilla': {'name': 'Vanilla', 'description': 'Official Minecraft Java Edition server', 'modded': False},
+        'bedrock': {'name': 'Bedrock', 'description': 'Official Minecraft Bedrock Edition server (not yet supported)', 'modded': False},
         'paper': {'name': 'Paper', 'description': 'High-performance Spigot fork', 'modded': False},
+        'folia': {'name': 'Folia', 'description': 'Paper fork for multi-threaded regions', 'modded': False},
         'purpur': {'name': 'Purpur', 'description': 'Paper fork with extra features', 'modded': False},
-        'bungeecord': {'name': 'BungeeCord', 'description': 'Proxy server for multi-server networks', 'modded': True},
-        'forge': {'name': 'Forge', 'description': 'Mod loader for Minecraft mods', 'modded': True},
-        'neoforge': {'name': 'NeoForge', 'description': 'Modern Forge fork with improved features', 'modded': True}
+        'forge': {'name': 'Forge', 'description': 'Mod loader for Minecraft mods (installer)', 'modded': True},
+        'neoforge': {'name': 'NeoForge', 'description': 'Modern Forge fork (installer)', 'modded': True}
     }
+    
+    # Server executables directory
+    EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
     
     def __init__(self):
         self.jar_urls = self._load_jar_urls()
@@ -911,25 +916,186 @@ class JarVersionManager:
                             urls[server_type][version] = url
         return urls
     
+    def _scan_local_jars(self):
+        """
+        Scan serverexecutables directory for available JAR files.
+        Returns dict: {server_type: [{version, filename, path, size}]}
+        """
+        local_jars = {}
+        
+        if not self.EXECUTABLES_DIR.exists():
+            return local_jars
+        
+        for type_dir in self.EXECUTABLES_DIR.iterdir():
+            if not type_dir.is_dir():
+                continue
+            
+            server_type = type_dir.name.lower()
+            local_jars[server_type] = []
+            
+            for jar_file in type_dir.iterdir():
+                if not jar_file.is_file():
+                    continue
+                if jar_file.suffix not in ['.jar', '.zip']:
+                    continue
+                if jar_file.name.startswith('.'):
+                    continue
+                
+                # Parse version from filename
+                version = self._extract_version(jar_file.name, server_type)
+                if version:
+                    local_jars[server_type].append({
+                        'version': version,
+                        'filename': jar_file.name,
+                        'path': str(jar_file),
+                        'size': jar_file.stat().st_size
+                    })
+        
+        return local_jars
+    
+    def _extract_version(self, filename, server_type):
+        """
+        Extract version from JAR filename.
+        Handles patterns like:
+          - vanilla-1.21.4.jar -> 1.21.4
+          - paper-1.21.4-232.jar -> 1.21.4 (build 232)
+          - forge-1.21.3-53.0.26-installer.jar -> 1.21.3-53.0.26
+          - neoforge-21.4.156-installer.jar -> 21.4.156
+        """
+        import re
+        
+        # Remove extension
+        name = filename.replace('.jar', '').replace('.zip', '')
+        
+        # Remove -installer suffix
+        name = name.replace('-installer', '')
+        
+        # Pattern for different server types
+        patterns = {
+            'vanilla': r'vanilla-([\d.]+)',
+            'paper': r'paper-([\d.]+)(?:-\d+)?',
+            'folia': r'folia-([\d.]+)(?:-\d+)?',
+            'purpur': r'purpur-([\d.]+)(?:-\d+)?',
+            'forge': r'forge-([\d.]+-[\d.]+)',
+            'neoforge': r'neoforge-([\d.]+(?:-beta)?)',
+        }
+        
+        # Try specific pattern first
+        if server_type in patterns:
+            match = re.search(patterns[server_type], name, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        # Generic fallback: type-VERSION or just VERSION
+        generic = re.search(rf'{server_type}-([\d.-]+)', name, re.IGNORECASE)
+        if generic:
+            return generic.group(1)
+        
+        # Very generic: just find version-like string
+        version_match = re.search(r'(\d+\.\d+(?:\.\d+)?(?:-[\d.]+)?)', name)
+        if version_match:
+            return version_match.group(1)
+        
+        return None
+    
     def get_server_types(self):
-        """Get list of available server types"""
-        return [
-            {
-                'id': type_id,
+        """
+        Get list of server types that have local JAR files available.
+        Only returns types with at least one downloaded JAR.
+        """
+        local_jars = self._scan_local_jars()
+        
+        available_types = []
+        for server_type, jars in local_jars.items():
+            if not jars:
+                continue
+            
+            # Get metadata or create default
+            info = self.SERVER_TYPE_INFO.get(server_type, {
+                'name': server_type.title(),
+                'description': f'{server_type.title()} server',
+                'modded': False
+            })
+            
+            available_types.append({
+                'id': server_type,
                 'name': info['name'],
                 'description': info['description'],
-                'modded': info['modded']
-            }
-            for type_id, info in self.SERVER_TYPES.items()
-        ]
+                'modded': info['modded'],
+                'jarCount': len(jars)
+            })
+        
+        # Sort by name
+        available_types.sort(key=lambda x: x['name'])
+        return available_types
     
     def get_versions(self, server_type):
-        """Get available versions for a server type"""
-        versions = []
-        if server_type in self.jar_urls:
-            for version in self.jar_urls[server_type].keys():
-                versions.append(version)
-        return sorted(versions, key=lambda v: [int(x) if x.isdigit() else x for x in v.replace('-', '.').split('.')], reverse=True)
+        """
+        Get available local versions for a server type.
+        Returns list of version strings, sorted newest first.
+        """
+        local_jars = self._scan_local_jars()
+        
+        if server_type not in local_jars:
+            return []
+        
+        versions = [jar['version'] for jar in local_jars[server_type]]
+        
+        # Sort versions (newest first)
+        def version_key(v):
+            # Handle versions like "1.21.4", "21.4.156", "1.21.3-53.0.26"
+            parts = []
+            for p in v.replace('-', '.').split('.'):
+                try:
+                    parts.append(int(p))
+                except ValueError:
+                    parts.append(p)
+            return parts
+        
+        return sorted(set(versions), key=version_key, reverse=True)
+    
+    def get_local_jar_info(self, server_type, version):
+        """
+        Get info about a specific local JAR file.
+        Returns: {filename, path, size} or None if not found
+        """
+        local_jars = self._scan_local_jars()
+        
+        if server_type not in local_jars:
+            return None
+        
+        for jar in local_jars[server_type]:
+            if jar['version'] == version:
+                return jar
+        
+        return None
+    
+    def copy_jar_to_server(self, server_type, version, dest_path):
+        """
+        Copy a local JAR file to the server directory.
+        Returns: (success: bool, message: str)
+        """
+        jar_info = self.get_local_jar_info(server_type, version)
+        
+        if not jar_info:
+            return False, f'JAR file not found for {server_type} version {version}'
+        
+        source_path = Path(jar_info['path'])
+        dest_path = Path(dest_path)
+        
+        if not source_path.exists():
+            return False, f'Source JAR file not found: {source_path}'
+        
+        try:
+            # Ensure destination directory exists
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Copy the JAR file
+            shutil.copy2(source_path, dest_path)
+            
+            return True, str(dest_path)
+        except Exception as e:
+            return False, f'Failed to copy JAR: {str(e)}'
     
     def _get_paper_download_url(self, version):
         """Get Paper download URL from API"""
@@ -1569,7 +1735,7 @@ class ServerManager:
             for item in server_dir.iterdir():
                 if item.suffix == '.jar' and item.is_file():
                     # Prioritize common server jar names
-                    if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'spigot.jar', 'forge.jar']:
+                    if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
                         executable = item.name
                         break
                     elif 'server' in item.name.lower() or 'paper' in item.name.lower():
@@ -1587,7 +1753,7 @@ class ServerManager:
                 # Re-check for JAR
                 for item in server_dir.iterdir():
                     if item.suffix == '.jar' and item.is_file():
-                        if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'spigot.jar', 'forge.jar']:
+                        if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
                             executable = item.name
                             break
                         elif 'server' in item.name.lower() or 'paper' in item.name.lower():
@@ -2219,18 +2385,19 @@ def create_server():
         approved=approved
     )
     
-    # Download JAR if requested
+    # Copy JAR from serverexecutables if requested
     if download_jar and server_type and version:
         server_config = server_manager.get_server_config(server_id)
         server_dir = Path(server_config['serverPath'])
         jar_path = server_dir / executable
         
-        success, result = jar_manager.download_jar(server_type, version, jar_path)
+        # Copy the local JAR file to the server directory
+        success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
         if not success:
             return jsonify({
                 'success': True, 
                 'serverId': server_id,
-                'warning': f'Server created but JAR download failed: {result}'
+                'warning': f'Server created but JAR copy failed: {result}'
             })
         
         # Create eula.txt for convenience
@@ -2321,7 +2488,7 @@ def upload_custom_jar(server_id):
 @server_access_required
 @limiter.limit("5 per 15 minutes")
 def download_server_jar(server_id):
-    """Download a specific server JAR for an existing server"""
+    """Copy a server JAR from serverexecutables to an existing server"""
     data = request.get_json()
     server_type = data.get('serverType')
     version = data.get('version')
@@ -2337,7 +2504,8 @@ def download_server_jar(server_id):
     server_path = Path(server_config['serverPath'])
     jar_path = server_path / executable
     
-    success, result = jar_manager.download_jar(server_type, version, jar_path)
+    # Copy from local serverexecutables directory
+    success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
     
     if success:
         server_manager.update_server(server_id, executable=executable, serverType=server_type, version=version)

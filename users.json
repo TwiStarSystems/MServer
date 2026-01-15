@@ -1,0 +1,12 @@
+{
+  "users": {
+    "6d493a2b": {
+      "username": "admin",
+      "password": "scrypt:32768:8:1$aukBOU1Sby5XWLSX$addce7aca434eb2212bae3dca42b3fcc2269a57e046a2e40b5b35e665c895637191e6ae6866d3c82268f389c1119847a84e5ab8e3298803dd92e93886a88d774",
+      "role": "admin",
+      "approved": true,
+      "created": "2026-01-15T16:37:53.106501",
+      "lastLogin": null
+    }
+  }
+}

@@ -293,7 +293,7 @@
             <button type="button" class="creation-type-btn" onclick="selectCreationType('fresh')">
               <span class="creation-icon">🆕</span>
               <span class="creation-label">Create Fresh Server</span>
-              <span class="creation-desc">Download a new server JAR</span>
+              <span class="creation-desc">Use a downloaded server JAR</span>
             </button>
             <button type="button" class="creation-type-btn" onclick="selectCreationType('import')">
               <span class="creation-icon">📦</span>
@@ -309,7 +309,7 @@
         </div>
 
         <!-- Fresh Server Form -->
-        <form id="fresh-server-form" class="server-form" style="display: none;">
+        <form id="fresh-server-form" class="server-form" style="display: none;" onsubmit="createFreshServer(event)">
           <div class="form-group">
             <label for="fresh-name">Server Name:</label>
             <input type="text" id="fresh-name" class="form-control" placeholder="My Minecraft Server" required>
@@ -320,7 +320,7 @@
             <select id="fresh-type" class="form-control" onchange="loadVersions()">
               <option value="">Select server type...</option>
             </select>
-            <small id="type-description" class="type-desc"></small>
+            <small id="type-description" class="type-desc">Select from locally downloaded server JARs</small>
           </div>
           
           <div class="form-group">

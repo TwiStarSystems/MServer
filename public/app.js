@@ -639,17 +639,31 @@ async function loadServerTypes() {
     serverTypes = result.types || [];
     
     const typeSelect = document.getElementById('fresh-type');
+    
+    if (serverTypes.length === 0) {
+      typeSelect.innerHTML = '<option value="">No server JARs available</option>';
+      typeSelect.disabled = true;
+      document.getElementById('type-description').textContent = 
+        'No server JAR files found. Use the Settings page JAR Downloader to download server files first.';
+      return;
+    }
+    
     typeSelect.innerHTML = '<option value="">Select server type...</option>';
+    typeSelect.disabled = false;
     
     serverTypes.forEach(type => {
       const option = document.createElement('option');
       option.value = type.id;
-      option.textContent = type.name;
+      // Show JAR count in the option text
+      const jarCount = type.jarCount || 0;
+      option.textContent = `${type.name} (${jarCount} ${jarCount === 1 ? 'version' : 'versions'})`;
       option.dataset.description = type.description || '';
       typeSelect.appendChild(option);
     });
   } catch (error) {
     console.error('Failed to load server types:', error);
+    const typeSelect = document.getElementById('fresh-type');
+    typeSelect.innerHTML = '<option value="">Error loading server types</option>';
   }
 }
 

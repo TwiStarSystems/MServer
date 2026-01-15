@@ -46,13 +46,12 @@ function createServerCard(server) {
     // Get server type display name
     const serverTypes = {
         'vanilla': 'Vanilla',
+        'bedrock': 'Bedrock',
         'paper': 'Paper',
-        'purpur': 'Purpur',
-        'bungeecord': 'BungeeCord',
         'folia': 'Folia',
+        'purpur': 'Purpur',
         'forge': 'Forge',
-        'neoforge': 'NeoForge',
-        'fabric': 'Fabric'
+        'neoforge': 'NeoForge'
     };
     
     const typeDisplay = serverTypes[server.serverType] || server.serverType || 'Unknown';
