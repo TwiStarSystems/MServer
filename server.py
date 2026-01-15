@@ -3500,6 +3500,88 @@ def list_tools():
     
     return jsonify({'tools': tools})
 
+@app.route('/api/tools/upload', methods=['POST'])
+@admin_required
+def upload_tool():
+    """Upload a Python tool file"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    # Validate file extension - only allow .py files
+    if not file.filename.lower().endswith('.py'):
+        return jsonify({'error': 'Only Python (.py) files are allowed'}), 400
+    
+    # Secure the filename
+    filename = secure_filename(file.filename)
+    
+    # Ensure it still has .py extension after securing
+    if not filename.lower().endswith('.py'):
+        filename = filename + '.py'
+    
+    # Validate the file content is valid Python (basic check)
+    try:
+        content = file.read().decode('utf-8')
+        file.seek(0)  # Reset file pointer
+        
+        # Check if file starts with shebang or comments (typical Python file)
+        # Also compile to check for syntax errors
+        compile(content, filename, 'exec')
+    except SyntaxError as e:
+        return jsonify({'error': f'Invalid Python syntax: {str(e)}'}), 400
+    except UnicodeDecodeError:
+        return jsonify({'error': 'File must be valid UTF-8 text'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Invalid file: {str(e)}'}), 400
+    
+    # Ensure tools directory exists
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Save the file
+    tool_path = TOOLS_DIR / filename
+    
+    try:
+        file.save(str(tool_path))
+        return jsonify({
+            'success': True,
+            'message': f'Tool "{filename}" uploaded successfully',
+            'filename': filename
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
+
+
+@app.route('/api/tools/<tool_name>/delete', methods=['DELETE'])
+@admin_required
+def delete_tool(tool_name):
+    """Delete a tool from the tools directory"""
+    tool_path = TOOLS_DIR / f'{tool_name}.py'
+    
+    if not tool_path.exists():
+        return jsonify({'error': 'Tool not found'}), 404
+    
+    # Security: ensure path is within tools directory
+    try:
+        tool_path = tool_path.resolve()
+        if not str(tool_path).startswith(str(TOOLS_DIR.resolve())):
+            return jsonify({'error': 'Invalid tool path'}), 400
+    except Exception:
+        return jsonify({'error': 'Invalid tool'}), 400
+    
+    try:
+        tool_path.unlink()
+        return jsonify({
+            'success': True,
+            'message': f'Tool "{tool_name}" deleted successfully'
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to delete tool: {str(e)}'}), 500
+
+
 @app.route('/api/tools/<tool_name>/run', methods=['POST'])
 @admin_required
 def run_tool(tool_name):

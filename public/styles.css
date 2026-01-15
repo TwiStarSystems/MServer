@@ -1636,6 +1636,54 @@ select.form-control:disabled {
   color: #888;
 }
 
+.tool-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.upload-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.upload-btn:hover {
+  opacity: 0.9;
+}
+
+.upload-status {
+  padding: 10px 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  font-size: 0.9rem;
+}
+
+.upload-status.loading {
+  background: rgba(88, 166, 255, 0.1);
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  color: #58a6ff;
+}
+
+.upload-status.success {
+  background: rgba(126, 231, 135, 0.1);
+  border: 1px solid rgba(126, 231, 135, 0.3);
+  color: #7ee787;
+}
+
+.upload-status.error {
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  color: #f85149;
+}
+
+.tool-header-btns {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .tool-panel-body {
   padding: 20px;
 }

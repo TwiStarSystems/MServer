@@ -394,7 +394,10 @@ async function loadTools() {
               <h4 class="tool-name">📜 ${escapeHtml(tool.filename)}</h4>
               <p class="tool-desc">${escapeHtml(tool.description)}</p>
             </div>
-            <button class="btn btn-small tool-toggle" onclick="toggleToolExpand('${tool.name}')" title="Expand/Collapse">▼</button>
+            <div class="tool-header-btns">
+              <button class="btn btn-small tool-toggle" onclick="toggleToolExpand('${tool.name}')" title="Expand/Collapse">▼</button>
+              <button class="btn btn-small btn-danger" onclick="deleteTool('${tool.name}')" title="Delete Tool">🗑️</button>
+            </div>
           </div>
           <div class="tool-details" id="details-${tool.name}" style="display: none;">
             <div class="tool-args-section">
@@ -441,6 +444,82 @@ function toggleToolExpand(toolName) {
   } else {
     details.style.display = 'none';
     toggle.textContent = '▼';
+  }
+}
+
+async function uploadTool(input) {
+  const file = input.files[0];
+  if (!file) return;
+  
+  const statusDiv = document.getElementById('tool-upload-status');
+  
+  // Validate file extension
+  if (!file.name.toLowerCase().endsWith('.py')) {
+    statusDiv.style.display = 'block';
+    statusDiv.className = 'upload-status error';
+    statusDiv.innerHTML = '❌ Only Python (.py) files are allowed';
+    input.value = ''; // Clear the input
+    return;
+  }
+  
+  // Show uploading status
+  statusDiv.style.display = 'block';
+  statusDiv.className = 'upload-status loading';
+  statusDiv.innerHTML = '⏳ Uploading...';
+  
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  try {
+    const response = await fetch('/api/tools/upload', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const result = await response.json();
+    
+    if (response.ok && result.success) {
+      statusDiv.className = 'upload-status success';
+      statusDiv.innerHTML = `✅ ${result.message}`;
+      
+      // Reload tools list
+      loadTools();
+      
+      // Hide status after 3 seconds
+      setTimeout(() => {
+        statusDiv.style.display = 'none';
+      }, 3000);
+    } else {
+      statusDiv.className = 'upload-status error';
+      statusDiv.innerHTML = `❌ ${result.error || 'Upload failed'}`;
+    }
+  } catch (err) {
+    statusDiv.className = 'upload-status error';
+    statusDiv.innerHTML = `❌ Error: ${err.message}`;
+  }
+  
+  // Clear the input so the same file can be selected again
+  input.value = '';
+}
+
+async function deleteTool(toolName) {
+  if (!confirm(`Are you sure you want to delete "${toolName}.py"?`)) return;
+  
+  try {
+    const response = await fetch(`/api/tools/${toolName}/delete`, {
+      method: 'DELETE'
+    });
+    
+    const result = await response.json();
+    
+    if (response.ok && result.success) {
+      alert(result.message);
+      loadTools();
+    } else {
+      alert(`Failed to delete tool: ${result.error || 'Unknown error'}`);
+    }
+  } catch (err) {
+    alert(`Error deleting tool: ${err.message}`);
   }
 }
 

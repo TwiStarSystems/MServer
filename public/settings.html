@@ -252,9 +252,16 @@
             <div class="tool-panel-header">
               <h3>🛠️ Custom Tools</h3>
               <span class="tool-description">Python scripts from the ./tools folder</span>
-              <button class="btn btn-small" onclick="loadTools()" title="Refresh">🔄</button>
+              <div class="tool-header-actions">
+                <label class="btn btn-success btn-small upload-btn" title="Upload Python Tool">
+                  📤 Upload
+                  <input type="file" id="tool-upload-input" accept=".py" style="display: none;" onchange="uploadTool(this)">
+                </label>
+                <button class="btn btn-small" onclick="loadTools()" title="Refresh">🔄</button>
+              </div>
             </div>
             <div class="tool-panel-body">
+              <div id="tool-upload-status" class="upload-status" style="display: none;"></div>
               <div id="tools-container" class="tools-list">
                 <div class="loading-text">Loading tools...</div>
               </div>

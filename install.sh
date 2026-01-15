@@ -260,6 +260,13 @@ do_install() {
         print_info "Copying files from current directory..."
         mkdir -p "$INSTALL_DIR"
         cp -r "$(dirname "$0")"/* "$INSTALL_DIR/"
+        
+        # Copy tools folder if it exists
+        if [ -d "$(dirname "$0")/tools" ]; then
+            print_info "Copying tools folder..."
+            cp -r "$(dirname "$0")/tools" "$INSTALL_DIR/"
+            print_success "Tools folder copied"
+        fi
     else
         print_info "Cloning from GitHub..."
         git clone "$REPO_URL" "$INSTALL_DIR"
@@ -322,6 +329,15 @@ do_update() {
         # Copy docs if exists
         if [ -d "$(dirname "$0")/docs" ]; then
             cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
+        fi
+        
+        # Copy tools folder if it exists (preserve user tools)
+        if [ -d "$(dirname "$0")/tools" ]; then
+            print_info "Updating tools folder..."
+            # Merge tools - copy new tools without overwriting existing user tools
+            mkdir -p "$INSTALL_DIR/tools"
+            cp -n "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
+            print_success "Tools folder updated"
         fi
         
         print_success "Files updated from local source"
@@ -404,6 +420,14 @@ do_quick_update() {
         fi
         if [ -d "$(dirname "$0")/configs" ]; then
             cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
+        fi
+        
+        # Copy tools folder if it exists (preserve user tools)
+        if [ -d "$(dirname "$0")/tools" ]; then
+            print_info "Updating tools folder..."
+            mkdir -p "$INSTALL_DIR/tools"
+            cp -n "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
+            print_success "Tools folder updated"
         fi
         
         print_success "Application files updated"
