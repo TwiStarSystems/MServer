@@ -3354,12 +3354,11 @@ def get_stats_history():
 # Default API endpoints for fetching Minecraft server JARs
 DEFAULT_MINECRAFT_APIS = {
     'vanilla': 'https://jars.arcadiatech.org/manifest.json',
-    'bedrock': 'https://jars.arcadiatech.org/manifest.json',
+    'bedrock': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links',
     'paper': 'https://jars.arcadiatech.org/manifest.json',
     'purpur': 'https://jars.arcadiatech.org/manifest.json',
     'fabric': 'https://jars.arcadiatech.org/manifest.json',
     'forge': 'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json',
-    'waterfall': 'https://jars.arcadiatech.org/manifest.json',
     'folia': 'https://jars.arcadiatech.org/manifest.json'
 }
 
@@ -3401,8 +3400,7 @@ def get_jar_types():
             {'id': 'purpur', 'name': 'Purpur', 'description': 'Paper fork with extra features'},
             {'id': 'fabric', 'name': 'Fabric', 'description': 'Lightweight mod loader'},
             {'id': 'folia', 'name': 'Folia', 'description': 'Paper fork for multi-threaded regions'},
-            {'id': 'forge', 'name': 'Forge', 'description': 'Mod loader for Minecraft mods'},
-            {'id': 'waterfall', 'name': 'Waterfall', 'description': 'BungeeCord fork by PaperMC'}
+            {'id': 'forge', 'name': 'Forge', 'description': 'Mod loader for Minecraft mods'}
         ]
     })
 
@@ -3468,11 +3466,108 @@ def reset_api_urls():
         'urls': DEFAULT_MINECRAFT_APIS
     })
 
+def fetch_arcadia_manifest():
+    """Fetch the arcadiatech.org manifest.json and cache it"""
+    try:
+        response = requests.get('https://jars.arcadiatech.org/manifest.json', timeout=30)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return None
+
+def fetch_versions_from_arcadia(server_type):
+    """Fetch versions for a server type from arcadiatech.org manifest"""
+    manifest = fetch_arcadia_manifest()
+    if not manifest:
+        return None
+    
+    # Map our server types to manifest keys
+    type_mapping = {
+        'vanilla': ('mc_java_servers', 'vanilla'),
+        'paper': ('mc_java_servers', 'paper'),
+        'fabric': ('mc_java_servers', 'fabric'),
+        'folia': ('mc_java_servers', 'folia'),
+        'forge': ('mc_java_servers', 'forge-installer'),
+        'purpur': ('mc_java_servers', 'purpur'),
+    }
+    
+    if server_type not in type_mapping:
+        return None
+    
+    category, manifest_type = type_mapping[server_type]
+    
+    try:
+        types_data = manifest.get(category, {}).get('types', {})
+        server_data = types_data.get(manifest_type, {})
+        versions_data = server_data.get('versions', {})
+        
+        # Sort versions (reverse to get newest first)
+        sorted_versions = sorted(versions_data.keys(), reverse=True)[:30]
+        
+        versions = []
+        for version in sorted_versions:
+            version_info = versions_data.get(version, {})
+            urls = version_info.get('url', [])
+            url = urls[0] if urls else 'API'
+            versions.append({
+                'version': version,
+                'type': 'release',
+                'url': url
+            })
+        
+        return versions
+    except Exception:
+        return None
+
+def get_arcadia_download_url(server_type, version):
+    """Get direct download URL from arcadiatech.org manifest"""
+    manifest = fetch_arcadia_manifest()
+    if not manifest:
+        return None
+    
+    # Map our server types to manifest keys
+    type_mapping = {
+        'vanilla': ('mc_java_servers', 'vanilla'),
+        'paper': ('mc_java_servers', 'paper'),
+        'fabric': ('mc_java_servers', 'fabric'),
+        'folia': ('mc_java_servers', 'folia'),
+        'forge': ('mc_java_servers', 'forge-installer'),
+        'purpur': ('mc_java_servers', 'purpur'),
+    }
+    
+    if server_type not in type_mapping:
+        return None
+    
+    category, manifest_type = type_mapping[server_type]
+    
+    try:
+        types_data = manifest.get(category, {}).get('types', {})
+        server_data = types_data.get(manifest_type, {})
+        versions_data = server_data.get('versions', {})
+        
+        version_info = versions_data.get(version, {})
+        urls = version_info.get('url', [])
+        
+        if urls:
+            return urls[0]
+    except Exception:
+        pass
+    
+    return None
+
 @app.route('/api/tools/jarfetcher/versions/<server_type>', methods=['GET'])
 @admin_required
 def get_jar_versions(server_type):
     """Fetch available versions for a server type"""
     try:
+        # Try arcadiatech.org manifest first (for most server types)
+        if server_type != 'bedrock':
+            arcadia_versions = fetch_versions_from_arcadia(server_type)
+            if arcadia_versions:
+                return jsonify({'versions': arcadia_versions})
+        
+        # Fallback to original APIs for specific types or if arcadia fails
         if server_type == 'vanilla':
             return fetch_vanilla_versions()
         elif server_type == 'bedrock':
@@ -3487,29 +3582,30 @@ def get_jar_versions(server_type):
             return fetch_papermc_versions('folia')
         elif server_type == 'forge':
             return fetch_forge_versions()
-        elif server_type == 'waterfall':
-            return fetch_papermc_versions('waterfall')
         else:
             return jsonify({'error': 'Unknown server type'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 def fetch_bedrock_versions():
-    """Fetch Bedrock Dedicated Server versions"""
-    # Try the community-maintained version list first
+    """Fetch Bedrock Dedicated Server versions from Minecraft services API"""
     try:
         response = requests.get(get_api_url('bedrock'), timeout=30)
         if response.status_code == 200:
             data = response.json()
-            versions = []
-            # The API returns a dict with version numbers as keys
-            for version in list(data.keys())[:30]:  # Get latest 30
-                versions.append({
-                    'version': version,
-                    'type': 'release',
-                    'url': 'API'
-                })
-            return jsonify({'versions': versions})
+            # Find serverBedrockLinux entry and extract version from URL
+            links = data.get('result', {}).get('links', [])
+            for link in links:
+                if link.get('downloadType') == 'serverBedrockLinux':
+                    url = link.get('downloadUrl', '')
+                    # Extract version from URL like: bedrock-server-1.21.132.3.zip
+                    if 'bedrock-server-' in url:
+                        version = url.split('bedrock-server-')[1].replace('.zip', '')
+                        return jsonify({'versions': [{
+                            'version': version,
+                            'type': 'release',
+                            'url': url
+                        }]})
     except Exception:
         pass
     
@@ -3556,7 +3652,7 @@ def fetch_vanilla_download_url(version_url):
     return None
 
 def fetch_papermc_versions(project):
-    """Fetch versions from PaperMC API (works for paper, folia, velocity, waterfall)"""
+    """Fetch versions from PaperMC API (works for paper, folia)"""
     base_url = f'https://api.papermc.io/v2/projects/{project}'
     response = requests.get(base_url, timeout=30)
     if response.status_code != 200:
@@ -3663,9 +3759,19 @@ def get_jar_download_url():
         return jsonify({'error': 'Missing type or version'}), 400
     
     try:
+        # Try arcadiatech.org first (for most server types except bedrock)
+        if server_type != 'bedrock':
+            arcadia_url = get_arcadia_download_url(server_type, version)
+            if arcadia_url:
+                note = None
+                if server_type == 'forge':
+                    note = 'This is a Forge installer JAR. Run it to install the server.'
+                return jsonify({'url': arcadia_url, 'note': note} if note else {'url': arcadia_url})
+        
+        # Fallback to original APIs if arcadia fails
         if server_type == 'vanilla':
-            # First get the version manifest URL
-            manifest_response = requests.get(get_api_url('vanilla'), timeout=30)
+            # First get the version manifest URL from Mojang
+            manifest_response = requests.get('https://launchermeta.mojang.com/mc/game/version_manifest.json', timeout=30)
             if manifest_response.status_code != 200:
                 return jsonify({'error': 'Failed to fetch manifest'}), 502
             
@@ -3685,9 +3791,24 @@ def get_jar_download_url():
             return jsonify({'error': 'No server JAR available for this version'}), 404
         
         elif server_type == 'bedrock':
-            # Bedrock Dedicated Server download URLs (Linux only)
-            # Format: https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip
-            url = f'https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip'
+            # Fetch from Minecraft services API for serverBedrockLinux
+            try:
+                response = requests.get(get_api_url('bedrock'), timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    links = data.get('result', {}).get('links', [])
+                    for link in links:
+                        if link.get('downloadType') == 'serverBedrockLinux':
+                            url = link.get('downloadUrl', '')
+                            if url:
+                                return jsonify({
+                                    'url': url,
+                                    'note': 'Bedrock servers are .zip files, not .jar files'
+                                })
+            except Exception:
+                pass
+            # Fallback to known URL pattern
+            url = f'https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-{version}.zip'
             return jsonify({
                 'url': url,
                 'note': 'Bedrock servers are .zip files, not .jar files'
@@ -3718,9 +3839,6 @@ def get_jar_download_url():
         
         elif server_type == 'forge':
             return get_forge_download_url(version)
-        
-        elif server_type == 'waterfall':
-            return get_papermc_download_url('waterfall', version)
         
         else:
             return jsonify({'error': 'Unknown server type'}), 400
@@ -3981,7 +4099,7 @@ def update_jar_config():
 def bulk_update_jar_urls():
     """Fetch all versions from APIs and update jarurls.conf"""
     data = request.get_json() or {}
-    server_types = data.get('types', ['vanilla', 'paper', 'purpur', 'fabric', 'folia', 'forge', 'waterfall'])
+    server_types = data.get('types', ['vanilla', 'paper', 'purpur', 'fabric', 'folia', 'forge'])
     max_versions = data.get('maxVersions', 10)  # Limit versions per type to avoid timeout
     
     results = {
@@ -4065,8 +4183,15 @@ def bulk_update_jar_urls():
 def fetch_versions_for_type(server_type):
     """Fetch version list for a server type (internal helper)"""
     try:
+        # Try arcadiatech.org first (for most server types except bedrock)
+        if server_type != 'bedrock':
+            arcadia_versions = fetch_versions_from_arcadia(server_type)
+            if arcadia_versions:
+                return [{'version': v['version'], 'url': v.get('url', 'API')} for v in arcadia_versions]
+        
+        # Fallback to original APIs
         if server_type == 'vanilla':
-            response = requests.get(get_api_url('vanilla'), timeout=30)
+            response = requests.get('https://launchermeta.mojang.com/mc/game/version_manifest.json', timeout=30)
             if response.status_code == 200:
                 data = response.json()
                 versions = []
@@ -4076,16 +4201,26 @@ def fetch_versions_for_type(server_type):
                 return versions
         
         elif server_type == 'bedrock':
-            # Bedrock uses direct URLs, no API fetch needed
-            response = requests.get(get_api_url('bedrock'), timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                return [{'version': v} for v in list(data.keys())[:30]]
+            # Fetch from Minecraft services API for serverBedrockLinux
+            try:
+                response = requests.get(get_api_url('bedrock'), timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    links = data.get('result', {}).get('links', [])
+                    for link in links:
+                        if link.get('downloadType') == 'serverBedrockLinux':
+                            url = link.get('downloadUrl', '')
+                            # Extract version from URL like: bedrock-server-1.21.132.3.zip
+                            if 'bedrock-server-' in url:
+                                version = url.split('bedrock-server-')[1].replace('.zip', '')
+                                return [{'version': version, 'url': url}]
+            except Exception:
+                pass
             # Fallback to known versions
             known = ['1.21.51.02', '1.21.50.07', '1.21.44.01', '1.21.43.01', '1.21.42.01']
             return [{'version': v} for v in known]
         
-        elif server_type in ['paper', 'folia', 'waterfall']:
+        elif server_type in ['paper', 'folia']:
             base_url = f'https://api.papermc.io/v2/projects/{server_type}'
             response = requests.get(base_url, timeout=30)
             if response.status_code == 200:
@@ -4094,7 +4229,7 @@ def fetch_versions_for_type(server_type):
                 return [{'version': v} for v in versions]
         
         elif server_type == 'purpur':
-            response = requests.get(get_api_url('purpur'), timeout=30)
+            response = requests.get('https://api.purpurmc.org/v2/purpur', timeout=30)
             if response.status_code == 200:
                 data = response.json()
                 versions = list(reversed(data.get('versions', [])[-30:]))
@@ -4130,9 +4265,16 @@ def fetch_versions_for_type(server_type):
 def fetch_download_url_for_type(server_type, version):
     """Fetch download URL for a specific version (internal helper)"""
     try:
+        # Try arcadiatech.org first (for most server types except bedrock)
+        if server_type != 'bedrock':
+            arcadia_url = get_arcadia_download_url(server_type, version)
+            if arcadia_url:
+                return {'url': arcadia_url}
+        
+        # Fallback to original APIs
         if server_type == 'vanilla':
             # Get manifest first
-            manifest_response = requests.get(get_api_url('vanilla'), timeout=30)
+            manifest_response = requests.get('https://launchermeta.mojang.com/mc/game/version_manifest.json', timeout=30)
             if manifest_response.status_code != 200:
                 return {'error': 'Failed to fetch manifest'}
             
@@ -4157,10 +4299,24 @@ def fetch_download_url_for_type(server_type, version):
             return {'error': 'No server download available'}
         
         elif server_type == 'bedrock':
-            url = f'https://minecraft.azureedge.net/bin-linux/bedrock-server-{version}.zip'
+            # Fetch from Minecraft services API for serverBedrockLinux
+            try:
+                response = requests.get(get_api_url('bedrock'), timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    links = data.get('result', {}).get('links', [])
+                    for link in links:
+                        if link.get('downloadType') == 'serverBedrockLinux':
+                            url = link.get('downloadUrl', '')
+                            if url:
+                                return {'url': url}
+            except Exception:
+                pass
+            # Fallback
+            url = f'https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-{version}.zip'
             return {'url': url}
         
-        elif server_type in ['paper', 'folia', 'waterfall']:
+        elif server_type in ['paper', 'folia']:
             builds_url = f'https://api.papermc.io/v2/projects/{server_type}/versions/{version}/builds'
             response = requests.get(builds_url, timeout=30)
             

@@ -789,8 +789,7 @@ const SERVER_TYPE_NAMES = {
   'purpur': 'Purpur',
   'fabric': 'Fabric',
   'folia': 'Folia',
-  'forge': 'Forge',
-  'waterfall': 'Waterfall'
+  'forge': 'Forge'
 };
 
 async function loadApiUrls() {
