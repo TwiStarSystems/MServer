@@ -3758,16 +3758,7 @@ def get_jar_download_url():
     if not server_type or not version:
         return jsonify({'error': 'Missing type or version'}), 400
     
-    try:
-        # Try arcadiatech.org first (for most server types except bedrock)
-#        if server_type != 'bedrock':
-#            arcadia_url = get_arcadia_download_url(server_type, version)
-#            if arcadia_url:
-#                note = None
-#                if server_type == 'forge':
-#                    note = 'This is a Forge installer JAR. Run it to install the server.'
-#                return jsonify({'url': arcadia_url, 'note': note} if note else {'url': arcadia_url})
-        
+    try:        
         # Fallback to original APIs if arcadia fails
         if server_type == 'vanilla':
             # First get the version manifest URL from Mojang
