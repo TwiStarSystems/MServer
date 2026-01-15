@@ -370,11 +370,21 @@ async function loadTools() {
   
   try {
     const response = await fetch('/api/tools');
-    if (!response.ok) {
-      throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+    const responseText = await response.text();
+    
+    // Try to parse as JSON
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseErr) {
+      throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
     }
     
-    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(`Server returned ${response.status}: ${data.error || response.statusText}`);
+    }
+    
+    console.log('Tools API response:', data);
     
     if (data.tools && data.tools.length > 0) {
       container.innerHTML = data.tools.map(tool => `
@@ -407,6 +417,7 @@ async function loadTools() {
           <h3>No Tools Available</h3>
           <p>Add Python scripts to the <code>./tools</code> folder to see them here.</p>
           <p>Each script should have a comment at the top describing its purpose.</p>
+          <p><small>API returned: ${data.tools ? data.tools.length : 0} tools</small></p>
         </div>
       `;
     }
