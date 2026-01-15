@@ -67,9 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadStatsHistory();
   loadBranding();
   loadTools();
-  loadJarFetcherTypes();
-  loadJarConfig();
-  loadApiUrls();
+  loadDownloadedJars();
   
   // Time range change handler
   document.getElementById('time-range').addEventListener('change', loadStatsHistory);
@@ -438,604 +436,122 @@ async function runTool(toolName) {
   }
 }
 
-// ==================== JAR URL Fetcher Functions ====================
+// ==================== JAR Downloader Functions ====================
 
-let currentJarType = '';
-let currentJarVersion = '';
-let currentJarUrl = '';
-
-async function loadJarFetcherTypes() {
-  const select = document.getElementById('jar-server-type');
+async function downloadJar() {
+  const typeInput = document.getElementById('download-type');
+  const versionInput = document.getElementById('download-version');
+  const urlInput = document.getElementById('download-url');
+  const btn = document.getElementById('download-jar-btn');
+  const statusDiv = document.getElementById('download-status');
   
-  try {
-    const response = await fetch('/api/tools/jarfetcher/types');
-    if (response.ok) {
-      const data = await response.json();
-      
-      select.innerHTML = '<option value="">Select server type...</option>';
-      data.types.forEach(type => {
-        const option = document.createElement('option');
-        option.value = type.id;
-        option.textContent = `${type.name} - ${type.description}`;
-        select.appendChild(option);
-      });
-    }
-  } catch (err) {
-    console.error('Failed to load JAR types:', err);
-  }
-}
-
-async function loadJarVersions() {
-  const typeSelect = document.getElementById('jar-server-type');
-  const versionSelect = document.getElementById('jar-version');
-  const fetchBtn = document.getElementById('fetch-url-btn');
-  const resultDiv = document.getElementById('jar-result');
-  const statusDiv = document.getElementById('jar-status');
+  const serverType = typeInput.value.trim().toLowerCase();
+  const version = versionInput.value.trim();
+  const url = urlInput.value.trim();
   
-  currentJarType = typeSelect.value;
-  currentJarVersion = '';
-  currentJarUrl = '';
-  
-  // Reset
-  versionSelect.innerHTML = '<option value="">Select version...</option>';
-  fetchBtn.disabled = true;
-  resultDiv.style.display = 'none';
-  statusDiv.textContent = '';
-  
-  if (!currentJarType) return;
-  
-  statusDiv.innerHTML = '<span class="loading-text">Loading versions...</span>';
-  
-  try {
-    const response = await fetch(`/api/tools/jarfetcher/versions/${currentJarType}`);
-    if (response.ok) {
-      const data = await response.json();
-      
-      versionSelect.innerHTML = '<option value="">Select version...</option>';
-      data.versions.forEach(v => {
-        const option = document.createElement('option');
-        option.value = v.version;
-        option.textContent = v.version;
-        versionSelect.appendChild(option);
-      });
-      
-      statusDiv.innerHTML = `<span class="success-text">✓ Loaded ${data.versions.length} versions</span>`;
-    } else {
-      const error = await response.json();
-      statusDiv.innerHTML = `<span class="error-text">✗ ${error.error}</span>`;
-    }
-  } catch (err) {
-    statusDiv.innerHTML = `<span class="error-text">✗ Failed to load versions: ${err.message}</span>`;
-  }
-}
-
-
-
-async function fetchJarUrl() {
-  const versionSelect = document.getElementById('jar-version');
-  const fetchBtn = document.getElementById('fetch-url-btn');
-  const resultDiv = document.getElementById('jar-result');
-  const urlOutput = document.getElementById('jar-url-output');
-  const buildInfo = document.getElementById('jar-build-info');
-  const noteDiv = document.getElementById('jar-note');
-  const statusDiv = document.getElementById('jar-status');
-  
-  currentJarVersion = versionSelect.value;
-  
-  // Enable/disable fetch button based on selection
-  fetchBtn.disabled = !currentJarType || !currentJarVersion;
-  
-  if (!currentJarType || !currentJarVersion) {
-    resultDiv.style.display = 'none';
+  if (!serverType || !version || !url) {
+    statusDiv.innerHTML = '<span class="error-text">⚠️ Please fill in all fields</span>';
     return;
   }
   
-  statusDiv.innerHTML = '<span class="loading-text">Fetching download URL...</span>';
-  fetchBtn.disabled = true;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Downloading...';
+  statusDiv.innerHTML = '<span class="loading-text">📥 Downloading file...</span>';
   
   try {
-    const requestBody = { type: currentJarType, version: currentJarVersion };
-    
-    const response = await fetch('/api/tools/jarfetcher/download-url', {
+    const response = await fetch('/api/tools/jar-downloader/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify({ type: serverType, version, url })
     });
     
     const data = await response.json();
     
-    if (response.ok && data.url) {
-      currentJarUrl = data.url;
-      urlOutput.textContent = data.url;
-      resultDiv.style.display = 'block';
+    if (response.ok && data.success) {
+      statusDiv.innerHTML = `<span class="success-text">✅ ${data.message}</span>
+        <div class="download-details">
+          <small>📁 Saved to: ${data.path}</small>
+          ${data.size ? `<small>📦 Size: ${formatBytes(data.size)}</small>` : ''}
+        </div>`;
       
-      if (data.build) {
-        buildInfo.textContent = `Build: ${data.build}`;
-        buildInfo.style.display = 'block';
-      } else {
-        buildInfo.style.display = 'none';
-      }
+      // Clear form
+      typeInput.value = '';
+      versionInput.value = '';
+      urlInput.value = '';
       
-      // Show note for Bedrock (.zip file)
-      if (noteDiv) {
-        if (currentJarType === 'bedrock') {
-          noteDiv.innerHTML = '<strong>Note:</strong> Bedrock Dedicated Server is a .zip archive, not a .jar file. Extract the contents to your server directory.';
-          noteDiv.style.display = 'block';
-        } else {
-          noteDiv.style.display = 'none';
-        }
-      }
-      
-      statusDiv.innerHTML = '<span class="success-text">✓ URL fetched successfully</span>';
+      // Reload the list
+      loadDownloadedJars();
     } else {
-      statusDiv.innerHTML = `<span class="error-text">✗ ${data.error || 'Failed to fetch URL'}</span>`;
-      resultDiv.style.display = 'none';
+      statusDiv.innerHTML = `<span class="error-text">❌ ${data.error || 'Download failed'}</span>`;
     }
   } catch (err) {
-    statusDiv.innerHTML = `<span class="error-text">✗ Error: ${err.message}</span>`;
-    resultDiv.style.display = 'none';
+    statusDiv.innerHTML = `<span class="error-text">❌ Error: ${err.message}</span>`;
   } finally {
-    fetchBtn.disabled = false;
+    btn.disabled = false;
+    btn.innerHTML = '📥 Download JAR';
   }
 }
 
-function copyJarUrl() {
-  if (currentJarUrl) {
-    navigator.clipboard.writeText(currentJarUrl).then(() => {
-      const statusDiv = document.getElementById('jar-status');
-      statusDiv.innerHTML = '<span class="success-text">✓ URL copied to clipboard!</span>';
-    }).catch(err => {
-      console.error('Failed to copy:', err);
-    });
-  }
-}
-
-async function addToConfig() {
-  if (!currentJarType || !currentJarVersion || !currentJarUrl) {
-    return;
-  }
-  
-  const statusDiv = document.getElementById('jar-status');
-  statusDiv.innerHTML = '<span class="loading-text">Adding to config...</span>';
-  
-  try {
-    const response = await fetch('/api/tools/jarfetcher/config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: currentJarType,
-        version: currentJarVersion,
-        url: currentJarUrl
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (response.ok && data.success) {
-      statusDiv.innerHTML = `<span class="success-text">✓ ${data.message}</span>`;
-      loadJarConfig(); // Refresh config display
-    } else {
-      statusDiv.innerHTML = `<span class="error-text">✗ ${data.error || 'Failed to update config'}</span>`;
-    }
-  } catch (err) {
-    statusDiv.innerHTML = `<span class="error-text">✗ Error: ${err.message}</span>`;
-  }
-}
-
-async function loadJarConfig() {
-  const configDisplay = document.getElementById('jar-config-content');
-  
-  try {
-    const response = await fetch('/api/tools/jarfetcher/config');
-    if (response.ok) {
-      const data = await response.json();
-      configDisplay.textContent = data.content || '# No configuration yet';
-    } else {
-      configDisplay.textContent = '# Failed to load configuration';
-    }
-  } catch (err) {
-    configDisplay.textContent = `# Error loading config: ${err.message}`;
-  }
-}
-
-// ==================== URL Testing Functions ====================
-
-async function testAllJarUrls() {
-  const resultsDiv = document.getElementById('url-test-results');
-  const summaryDiv = document.getElementById('url-test-summary');
-  const detailsDiv = document.getElementById('url-test-details');
-  
-  // Show results area with loading state
-  resultsDiv.style.display = 'block';
-  summaryDiv.innerHTML = '<div class="loading-text">🔍 Testing URLs... This may take a moment.</div>';
-  detailsDiv.innerHTML = '';
-  
-  try {
-    const response = await fetch('/api/tools/jarfetcher/test-urls', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testAll: true })
-    });
-    
-    const data = await response.json();
-    
-    if (response.ok && data.success) {
-      renderUrlTestResults(data);
-    } else {
-      summaryDiv.innerHTML = `<div class="error-text">❌ ${data.error || 'Failed to test URLs'}</div>`;
-    }
-  } catch (err) {
-    summaryDiv.innerHTML = `<div class="error-text">❌ Error: ${err.message}</div>`;
-  }
-}
-
-function renderUrlTestResults(data) {
-  const summaryDiv = document.getElementById('url-test-summary');
-  const detailsDiv = document.getElementById('url-test-details');
-  const summary = data.summary;
-  const results = data.results;
-  
-  // Summary
-  summaryDiv.innerHTML = `
-    <div class="test-summary-stats">
-      <div class="test-stat valid">
-        <span class="stat-icon">✅</span>
-        <span class="stat-value">${summary.valid}</span>
-        <span class="stat-label">Valid</span>
-      </div>
-      <div class="test-stat invalid">
-        <span class="stat-icon">❌</span>
-        <span class="stat-value">${summary.invalid}</span>
-        <span class="stat-label">Invalid</span>
-      </div>
-      <div class="test-stat api">
-        <span class="stat-icon">🔄</span>
-        <span class="stat-value">${summary.api}</span>
-        <span class="stat-label">API</span>
-      </div>
-      <div class="test-stat total">
-        <span class="stat-icon">📊</span>
-        <span class="stat-value">${summary.total}</span>
-        <span class="stat-label">Total</span>
-      </div>
-    </div>
-  `;
-  
-  // Details
-  let detailsHtml = '';
-  
-  // Invalid URLs first (most important)
-  if (results.invalid.length > 0) {
-    detailsHtml += `
-      <div class="test-section invalid-section">
-        <h5>❌ Invalid URLs (${results.invalid.length})</h5>
-        <div class="test-list">
-          ${results.invalid.map(item => `
-            <div class="test-item invalid">
-              <div class="test-item-header">
-                <span class="test-key">${item.key}</span>
-                <span class="test-error">${item.error || 'Unknown error'}</span>
-              </div>
-              <div class="test-item-url">${escapeHtml(item.url)}</div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `;
-  }
-  
-  // Valid URLs
-  if (results.valid.length > 0) {
-    detailsHtml += `
-      <div class="test-section valid-section">
-        <h5>✅ Valid URLs (${results.valid.length})</h5>
-        <div class="test-list collapsed" id="valid-urls-list">
-          ${results.valid.map(item => `
-            <div class="test-item valid">
-              <div class="test-item-header">
-                <span class="test-key">${item.key}</span>
-                <span class="test-status">HTTP ${item.status_code}</span>
-                ${item.size && item.size !== 'unknown' ? `<span class="test-size">${formatBytes(parseInt(item.size))}</span>` : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-        <button class="btn btn-small btn-link" onclick="toggleTestList('valid-urls-list')">Show/Hide Valid URLs</button>
-      </div>
-    `;
-  }
-  
-  // API entries
-  if (results.api.length > 0) {
-    detailsHtml += `
-      <div class="test-section api-section">
-        <h5>🔄 API Entries (${results.api.length})</h5>
-        <p class="test-note">These entries use dynamic API resolution at download time.</p>
-        <div class="test-list collapsed" id="api-urls-list">
-          ${results.api.map(item => `
-            <div class="test-item api">
-              <span class="test-key">${item.key}</span>
-            </div>
-          `).join('')}
-        </div>
-        <button class="btn btn-small btn-link" onclick="toggleTestList('api-urls-list')">Show/Hide API Entries</button>
-      </div>
-    `;
-  }
-  
-  detailsDiv.innerHTML = detailsHtml || '<p>No entries to test.</p>';
-}
-
-function toggleTestList(listId) {
-  const list = document.getElementById(listId);
-  if (list) {
-    list.classList.toggle('collapsed');
-  }
-}
-
-function hideUrlTestResults() {
-  const resultsDiv = document.getElementById('url-test-results');
-  if (resultsDiv) {
-    resultsDiv.style.display = 'none';
-  }
-}
-
-// ==================== API URL Configuration Functions ====================
-
-const SERVER_TYPE_NAMES = {
-  'vanilla': 'Vanilla (Java)',
-  'bedrock': 'Vanilla (Bedrock)',
-  'paper': 'Paper',
-  'purpur': 'Purpur',
-  'fabric': 'Fabric',
-  'folia': 'Folia',
-  'forge': 'Forge'
-};
-
-async function loadApiUrls() {
-  const container = document.getElementById('api-urls-container');
+async function loadDownloadedJars() {
+  const container = document.getElementById('downloaded-jars-list');
   if (!container) return;
   
   try {
-    const response = await fetch('/api/tools/jarfetcher/api-urls');
-    if (response.ok) {
-      const data = await response.json();
-      renderApiUrls(data.urls, data.defaults);
-    } else {
-      container.innerHTML = '<div class="error-text">Failed to load API URLs</div>';
-    }
-  } catch (err) {
-    container.innerHTML = `<div class="error-text">Error: ${err.message}</div>`;
-  }
-}
-
-function renderApiUrls(urls, defaults) {
-  const container = document.getElementById('api-urls-container');
-  if (!container) return;
-  
-  let html = '';
-  
-  for (const [type, url] of Object.entries(urls)) {
-    const isDefault = url === defaults[type];
-    const name = SERVER_TYPE_NAMES[type] || type;
-    
-    html += `
-      <div class="api-url-item" data-type="${type}">
-        <div class="api-url-header">
-          <span class="api-url-name">${name}</span>
-          ${isDefault ? '<span class="api-url-badge default">Default</span>' : '<span class="api-url-badge custom">Custom</span>'}
-        </div>
-        <div class="api-url-input-group">
-          <input type="text" 
-                 class="form-control api-url-input" 
-                 id="api-url-${type}" 
-                 value="${url}" 
-                 placeholder="${defaults[type]}"
-                 data-default="${defaults[type]}">
-          <button class="btn btn-small" onclick="saveApiUrl('${type}')" title="Save URL">💾</button>
-          <button class="btn btn-small btn-secondary" onclick="resetApiUrl('${type}')" title="Reset to Default">↩️</button>
-        </div>
-      </div>
-    `;
-  }
-  
-  container.innerHTML = html;
-}
-
-async function saveApiUrl(type) {
-  const input = document.getElementById(`api-url-${type}`);
-  const url = input.value.trim();
-  const item = input.closest('.api-url-item');
-  
-  try {
-    const response = await fetch('/api/tools/jarfetcher/api-urls', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, url })
-    });
-    
+    const response = await fetch('/api/tools/jar-downloader/list');
     const data = await response.json();
     
-    if (response.ok && data.success) {
-      // Update badge
-      const badge = item.querySelector('.api-url-badge');
-      if (data.isDefault) {
-        badge.className = 'api-url-badge default';
-        badge.textContent = 'Default';
-      } else {
-        badge.className = 'api-url-badge custom';
-        badge.textContent = 'Custom';
+    if (!data.jars || Object.keys(data.jars).length === 0) {
+      container.innerHTML = '<div class="no-jars-text">No downloaded files yet</div>';
+      return;
+    }
+    
+    let html = '';
+    for (const [serverType, files] of Object.entries(data.jars)) {
+      if (files.length === 0) continue;
+      
+      html += `<div class="jar-type-group">
+        <h5>📂 ${serverType}</h5>
+        <div class="jar-files-list">`;
+      
+      for (const file of files) {
+        html += `
+          <div class="jar-file-item">
+            <div class="jar-file-info">
+              <span class="jar-filename">${escapeHtml(file.filename)}</span>
+              <span class="jar-size">${formatBytes(file.size)}</span>
+            </div>
+            <button class="btn btn-small btn-danger" onclick="deleteJar('${serverType}', '${file.filename}')" title="Delete">🗑️</button>
+          </div>`;
       }
       
-      // Flash success
-      item.classList.add('save-success');
-      setTimeout(() => item.classList.remove('save-success'), 1500);
-    } else {
-      alert('Failed to save: ' + (data.error || 'Unknown error'));
+      html += '</div></div>';
     }
+    
+    container.innerHTML = html || '<div class="no-jars-text">No downloaded files yet</div>';
   } catch (err) {
-    alert('Error saving URL: ' + err.message);
+    container.innerHTML = `<div class="error-text">Failed to load files: ${err.message}</div>`;
   }
 }
 
-async function resetApiUrl(type) {
-  const input = document.getElementById(`api-url-${type}`);
-  const defaultUrl = input.dataset.default;
+async function deleteJar(serverType, filename) {
+  if (!confirm(`Delete ${filename}?`)) return;
   
   try {
-    const response = await fetch('/api/tools/jarfetcher/api-urls', {
-      method: 'PUT',
+    const response = await fetch('/api/tools/jar-downloader/delete', {
+      method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, url: '' }) // Empty URL resets to default
+      body: JSON.stringify({ type: serverType, filename })
     });
     
-    if (response.ok) {
-      input.value = defaultUrl;
-      
-      // Update badge
-      const item = input.closest('.api-url-item');
-      const badge = item.querySelector('.api-url-badge');
-      badge.className = 'api-url-badge default';
-      badge.textContent = 'Default';
-      
-      // Flash success
-      item.classList.add('save-success');
-      setTimeout(() => item.classList.remove('save-success'), 1500);
-    }
-  } catch (err) {
-    alert('Error resetting URL: ' + err.message);
-  }
-}
-
-async function resetAllApiUrls() {
-  if (!confirm('Are you sure you want to reset all API URLs to their defaults?')) {
-    return;
-  }
-  
-  try {
-    const response = await fetch('/api/tools/jarfetcher/api-urls/reset', {
-      method: 'POST'
-    });
+    const data = await response.json();
     
-    if (response.ok) {
-      loadApiUrls(); // Reload the display
+    if (response.ok && data.success) {
+      loadDownloadedJars();
     } else {
-      alert('Failed to reset API URLs');
+      alert('Failed to delete: ' + (data.error || 'Unknown error'));
     }
   } catch (err) {
     alert('Error: ' + err.message);
-  }
-}
-
-// ==================== Bulk URL Update Functions ====================
-
-async function bulkUpdateJarUrls() {
-  const btn = document.getElementById('bulk-update-btn');
-  const progressDiv = document.getElementById('bulk-update-progress');
-  const progressFill = document.getElementById('bulk-progress-fill');
-  const progressText = document.getElementById('bulk-progress-text');
-  const resultsDiv = document.getElementById('bulk-update-results');
-  const summaryDiv = document.getElementById('bulk-results-summary');
-  const detailsDiv = document.getElementById('bulk-results-details');
-  
-  // Get selected types
-  const checkboxes = document.querySelectorAll('#bulk-update-types input[type="checkbox"]:checked');
-  const selectedTypes = Array.from(checkboxes).map(cb => cb.value);
-  
-  if (selectedTypes.length === 0) {
-    alert('Please select at least one server type to update.');
-    return;
-  }
-  
-  const maxVersions = parseInt(document.getElementById('bulk-max-versions').value);
-  
-  // Show progress, hide results
-  btn.disabled = true;
-  btn.innerHTML = '⏳ Updating...';
-  progressDiv.style.display = 'block';
-  resultsDiv.style.display = 'none';
-  progressFill.style.width = '0%';
-  progressText.textContent = 'Fetching URLs from APIs...';
-  
-  try {
-    const response = await fetch('/api/tools/jarfetcher/bulk-update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        types: selectedTypes,
-        maxVersions: maxVersions
-      })
-    });
-    
-    const data = await response.json();
-    
-    // Update progress to complete
-    progressFill.style.width = '100%';
-    progressText.textContent = 'Complete!';
-    
-    // Show results
-    setTimeout(() => {
-      progressDiv.style.display = 'none';
-      resultsDiv.style.display = 'block';
-      
-      // Summary
-      const summary = data.summary || { updated: 0, failed: 0, skipped: 0 };
-      summaryDiv.innerHTML = `
-        <div class="summary-stats">
-          <div class="stat success-stat">
-            <span class="stat-value">${summary.updated}</span>
-            <span class="stat-label">Updated</span>
-          </div>
-          <div class="stat error-stat">
-            <span class="stat-value">${summary.failed}</span>
-            <span class="stat-label">Failed</span>
-          </div>
-        </div>
-      `;
-      
-      // Details
-      let detailsHtml = '';
-      
-      if (data.results.success.length > 0) {
-        detailsHtml += '<div class="results-section"><h4>✅ Successfully Updated</h4><div class="results-list">';
-        data.results.success.forEach(item => {
-          detailsHtml += `
-            <div class="result-item success">
-              <span class="result-type">${item.type}:${item.version}</span>
-              ${item.build ? `<span class="result-build">Build ${item.build}</span>` : ''}
-            </div>
-          `;
-        });
-        detailsHtml += '</div></div>';
-      }
-      
-      if (data.results.failed.length > 0) {
-        detailsHtml += '<div class="results-section"><h4>❌ Failed</h4><div class="results-list">';
-        data.results.failed.forEach(item => {
-          detailsHtml += `
-            <div class="result-item failed">
-              <span class="result-type">${item.type}${item.version ? ':' + item.version : ''}</span>
-              <span class="result-error">${item.error}</span>
-            </div>
-          `;
-        });
-        detailsHtml += '</div></div>';
-      }
-      
-      detailsDiv.innerHTML = detailsHtml || '<p>No detailed results available.</p>';
-      
-      // Reload config display
-      loadJarConfig();
-    }, 500);
-    
-  } catch (err) {
-    progressDiv.style.display = 'none';
-    resultsDiv.style.display = 'block';
-    summaryDiv.innerHTML = `<div class="error-text">Error: ${err.message}</div>`;
-    detailsDiv.innerHTML = '';
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '🔄 Update All URLs';
   }
 }
 

@@ -3349,1074 +3349,115 @@ def get_stats_history():
     return jsonify({'history': history})
 
 
-# ==================== JAR URL Fetcher API ====================
+# ==================== JAR Downloader API ====================
 
-# Default API endpoints for fetching Minecraft server JARs
-DEFAULT_MINECRAFT_APIS = {
-    'vanilla': 'https://jars.arcadiatech.org/manifest.json',
-    'bedrock': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links',
-    'paper': 'https://jars.arcadiatech.org/manifest.json',
-    'purpur': 'https://jars.arcadiatech.org/manifest.json',
-    'fabric': 'https://jars.arcadiatech.org/manifest.json',
-    'forge': 'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json',
-    'folia': 'https://jars.arcadiatech.org/manifest.json'
-}
+SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
 
-def load_minecraft_apis():
-    """Load API URLs from config file, falling back to defaults"""
-    if API_URLS_PATH.exists():
-        try:
-            with open(API_URLS_PATH, 'r') as f:
-                custom_apis = json.load(f)
-                # Merge with defaults (custom overrides default)
-                return {**DEFAULT_MINECRAFT_APIS, **custom_apis}
-        except Exception:
-            pass
-    return DEFAULT_MINECRAFT_APIS.copy()
-
-def save_minecraft_apis(apis):
-    """Save API URLs to config file"""
-    API_URLS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(API_URLS_PATH, 'w') as f:
-        json.dump(apis, f, indent=2)
-
-def get_api_url(server_type):
-    """Get the API URL for a server type"""
-    apis = load_minecraft_apis()
-    return apis.get(server_type, DEFAULT_MINECRAFT_APIS.get(server_type))
-
-# For backwards compatibility
-MINECRAFT_APIS = load_minecraft_apis()
-
-@app.route('/api/tools/jarfetcher/types', methods=['GET'])
+@app.route('/api/tools/jar-downloader/download', methods=['POST'])
 @admin_required
-def get_jar_types():
-    """Get available server types for JAR fetching"""
-    return jsonify({
-        'types': [
-            {'id': 'vanilla', 'name': 'Vanilla (Java)', 'description': 'Official Minecraft Java Edition Server'},
-            {'id': 'bedrock', 'name': 'Vanilla (Bedrock)', 'description': 'Official Minecraft Bedrock Dedicated Server'},
-            {'id': 'paper', 'name': 'Paper', 'description': 'High performance Spigot fork'},
-            {'id': 'purpur', 'name': 'Purpur', 'description': 'Paper fork with extra features'},
-            {'id': 'fabric', 'name': 'Fabric', 'description': 'Lightweight mod loader'},
-            {'id': 'folia', 'name': 'Folia', 'description': 'Paper fork for multi-threaded regions'},
-            {'id': 'forge', 'name': 'Forge', 'description': 'Mod loader for Minecraft mods'}
-        ]
-    })
-
-@app.route('/api/tools/jarfetcher/api-urls', methods=['GET'])
-@admin_required
-def get_api_urls():
-    """Get current API URLs for all server types"""
-    current_apis = load_minecraft_apis()
-    return jsonify({
-        'urls': current_apis,
-        'defaults': DEFAULT_MINECRAFT_APIS
-    })
-
-@app.route('/api/tools/jarfetcher/api-urls', methods=['PUT'])
-@admin_required
-def update_api_urls():
-    """Update API URLs for server types"""
+def download_jar():
+    """Download a JAR file to serverexecutables folder"""
     data = request.get_json()
-    server_type = data.get('type')
+    server_type = data.get('type', '').strip().lower()
+    version = data.get('version', '').strip()
     url = data.get('url', '').strip()
     
-    if not server_type:
-        return jsonify({'error': 'Missing server type'}), 400
+    if not server_type or not version or not url:
+        return jsonify({'error': 'Missing required fields: type, version, url'}), 400
     
-    if server_type not in DEFAULT_MINECRAFT_APIS:
-        return jsonify({'error': 'Invalid server type'}), 400
+    # Sanitize server type (only allow alphanumeric and dashes)
+    import re
+    if not re.match(r'^[a-z0-9-]+$', server_type):
+        return jsonify({'error': 'Invalid server type. Use only letters, numbers, and dashes.'}), 400
     
-    # Load current URLs
-    current_apis = load_minecraft_apis()
+    # Create directory structure
+    type_dir = SERVER_EXECUTABLES_DIR / server_type
+    type_dir.mkdir(parents=True, exist_ok=True)
     
-    if url:
-        # Update the URL
-        current_apis[server_type] = url
-    else:
-        # Reset to default if empty
-        current_apis[server_type] = DEFAULT_MINECRAFT_APIS[server_type]
-    
-    # Save to config
-    save_minecraft_apis(current_apis)
-    
-    # Update global variable
-    global MINECRAFT_APIS
-    MINECRAFT_APIS = current_apis
-    
-    return jsonify({
-        'success': True,
-        'type': server_type,
-        'url': current_apis[server_type],
-        'isDefault': current_apis[server_type] == DEFAULT_MINECRAFT_APIS[server_type]
-    })
-
-@app.route('/api/tools/jarfetcher/api-urls/reset', methods=['POST'])
-@admin_required
-def reset_api_urls():
-    """Reset all API URLs to defaults"""
-    save_minecraft_apis(DEFAULT_MINECRAFT_APIS.copy())
-    
-    global MINECRAFT_APIS
-    MINECRAFT_APIS = DEFAULT_MINECRAFT_APIS.copy()
-    
-    return jsonify({
-        'success': True,
-        'urls': DEFAULT_MINECRAFT_APIS
-    })
-
-def fetch_arcadia_manifest():
-    """Fetch the arcadiatech.org manifest.json and cache it"""
-    try:
-        response = requests.get('https://jars.arcadiatech.org/manifest.json', timeout=30)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass
-    return None
-
-def fetch_versions_from_arcadia(server_type):
-    """Fetch versions for a server type from arcadiatech.org manifest"""
-    manifest = fetch_arcadia_manifest()
-    if not manifest:
-        return None
-    
-    # Map our server types to manifest keys
-    type_mapping = {
-        'vanilla': ('mc_java_servers', 'vanilla'),
-        'paper': ('mc_java_servers', 'paper'),
-        'fabric': ('mc_java_servers', 'fabric'),
-        'folia': ('mc_java_servers', 'folia'),
-        'forge': ('mc_java_servers', 'forge-installer'),
-        'purpur': ('mc_java_servers', 'purpur'),
-    }
-    
-    if server_type not in type_mapping:
-        return None
-    
-    category, manifest_type = type_mapping[server_type]
+    # Determine filename: <TYPE>-<VERSION>.jar (or .zip for bedrock)
+    extension = '.zip' if 'bedrock' in server_type.lower() else '.jar'
+    filename = f"{server_type}-{version}{extension}"
+    filepath = type_dir / filename
     
     try:
-        types_data = manifest.get(category, {}).get('types', {})
-        server_data = types_data.get(manifest_type, {})
-        versions_data = server_data.get('versions', {})
+        # Download the file
+        response = requests.get(url, stream=True, timeout=120)
+        response.raise_for_status()
         
-        # Sort versions (reverse to get newest first)
-        sorted_versions = sorted(versions_data.keys(), reverse=True)[:30]
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
         
-        versions = []
-        for version in sorted_versions:
-            version_info = versions_data.get(version, {})
-            urls = version_info.get('url', [])
-            url = urls[0] if urls else 'API'
-            versions.append({
-                'version': version,
-                'type': 'release',
-                'url': url
-            })
-        
-        return versions
-    except Exception:
-        return None
-
-def get_arcadia_download_url(server_type, version):
-    """Get direct download URL from arcadiatech.org manifest"""
-    manifest = fetch_arcadia_manifest()
-    if not manifest:
-        return None
-    
-    # Map our server types to manifest keys
-    type_mapping = {
-        'vanilla': ('mc_java_servers', 'vanilla'),
-        'paper': ('mc_java_servers', 'paper'),
-        'fabric': ('mc_java_servers', 'fabric'),
-        'folia': ('mc_java_servers', 'folia'),
-        'forge': ('mc_java_servers', 'forge-installer'),
-        'purpur': ('mc_java_servers', 'purpur'),
-    }
-    
-    if server_type not in type_mapping:
-        return None
-    
-    category, manifest_type = type_mapping[server_type]
-    
-    try:
-        types_data = manifest.get(category, {}).get('types', {})
-        server_data = types_data.get(manifest_type, {})
-        versions_data = server_data.get('versions', {})
-        
-        version_info = versions_data.get(version, {})
-        urls = version_info.get('url', [])
-        
-        if urls:
-            return urls[0]
-    except Exception:
-        pass
-    
-    return None
-
-@app.route('/api/tools/jarfetcher/versions/<server_type>', methods=['GET'])
-@admin_required
-def get_jar_versions(server_type):
-    """Fetch available versions for a server type"""
-    try:
-        # Try arcadiatech.org manifest first (for most server types)
-        if server_type != 'bedrock':
-            arcadia_versions = fetch_versions_from_arcadia(server_type)
-            if arcadia_versions:
-                return jsonify({'versions': arcadia_versions})
-        
-        # Fallback to original APIs for specific types or if arcadia fails
-        if server_type == 'vanilla':
-            return fetch_vanilla_versions()
-        elif server_type == 'bedrock':
-            return fetch_bedrock_versions()
-        elif server_type == 'paper':
-            return fetch_papermc_versions('paper')
-        elif server_type == 'purpur':
-            return fetch_purpur_versions()
-        elif server_type == 'fabric':
-            return fetch_fabric_versions()
-        elif server_type == 'folia':
-            return fetch_papermc_versions('folia')
-        elif server_type == 'forge':
-            return fetch_forge_versions()
-        else:
-            return jsonify({'error': 'Unknown server type'}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-def fetch_bedrock_versions():
-    """Fetch Bedrock Dedicated Server versions from Minecraft services API"""
-    try:
-        response = requests.get(get_api_url('bedrock'), timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            # Find serverBedrockLinux entry and extract version from URL
-            links = data.get('result', {}).get('links', [])
-            for link in links:
-                if link.get('downloadType') == 'serverBedrockLinux':
-                    url = link.get('downloadUrl', '')
-                    # Extract version from URL like: bedrock-server-1.21.132.3.zip
-                    if 'bedrock-server-' in url:
-                        version = url.split('bedrock-server-')[1].replace('.zip', '')
-                        return jsonify({'versions': [{
-                            'version': version,
-                            'type': 'release',
-                            'url': url
-                        }]})
-    except Exception:
-        pass
-    
-    # Fallback: return known recent versions
-    known_versions = [
-        '1.21.51.02', '1.21.50.07', '1.21.44.01', '1.21.43.01',
-        '1.21.42.01', '1.21.41.01', '1.21.40.01', '1.21.31.04',
-        '1.21.30.03', '1.21.23.01', '1.21.22.01', '1.21.21.01',
-        '1.21.20.03', '1.21.2.02', '1.21.1.03', '1.21.0.03',
-        '1.20.81.01', '1.20.80.05', '1.20.73.01', '1.20.72.01'
-    ]
-    versions = [{'version': v, 'type': 'release', 'url': 'API'} for v in known_versions]
-    return jsonify({'versions': versions})
-
-def fetch_vanilla_versions():
-    """Fetch Vanilla Minecraft versions from Mojang"""
-    response = requests.get(get_api_url('vanilla'), timeout=30)
-    if response.status_code != 200:
-        return jsonify({'error': 'Failed to fetch from Mojang API'}), 502
-    
-    data = response.json()
-    versions = []
-    
-    for version in data.get('versions', []):
-        if version.get('type') == 'release':
-            versions.append({
-                'version': version['id'],
-                'type': 'release',
-                'url': version['url']  # This is the version manifest URL, not direct download
-            })
-    
-    return jsonify({'versions': versions[:30]})  # Limit to recent 30 versions
-
-def fetch_vanilla_download_url(version_url):
-    """Fetch the actual server.jar download URL from a version manifest"""
-    try:
-        response = requests.get(version_url, timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            server_download = data.get('downloads', {}).get('server', {})
-            return server_download.get('url')
-    except Exception:
-        pass
-    return None
-
-def fetch_papermc_versions(project):
-    """Fetch versions from PaperMC API (works for paper, folia)"""
-    base_url = f'https://api.papermc.io/v2/projects/{project}'
-    response = requests.get(base_url, timeout=30)
-    if response.status_code != 200:
-        return jsonify({'error': f'Failed to fetch from PaperMC API for {project}'}), 502
-    
-    data = response.json()
-    versions = []
-    
-    for version in reversed(data.get('versions', [])[-30:]):  # Get last 30 versions, newest first
-        versions.append({
-            'version': version,
-            'type': 'release',
-            'url': 'API'  # Will be resolved dynamically
-        })
-    
-    return jsonify({'versions': versions})
-
-def fetch_purpur_versions():
-    """Fetch versions from Purpur API"""
-    response = requests.get(get_api_url('purpur'), timeout=30)
-    if response.status_code != 200:
-        return jsonify({'error': 'Failed to fetch from Purpur API'}), 502
-    
-    data = response.json()
-    versions = []
-    
-    for version in reversed(data.get('versions', [])[-30:]):
-        versions.append({
-            'version': version,
-            'type': 'release',
-            'url': 'API'
-        })
-    
-    return jsonify({'versions': versions})
-
-def fetch_fabric_versions():
-    """Fetch versions from Fabric API"""
-    # Get game versions
-    response = requests.get('https://meta.fabricmc.net/v2/versions/game', timeout=30)
-    if response.status_code != 200:
-        return jsonify({'error': 'Failed to fetch from Fabric API'}), 502
-    
-    data = response.json()
-    versions = []
-    
-    for version in data[:30]:  # Already sorted newest first
-        if version.get('stable', False):
-            versions.append({
-                'version': version['version'],
-                'type': 'release',
-                'url': 'API'
-            })
-    
-    return jsonify({'versions': versions})
-
-def fetch_forge_versions():
-    """Fetch Forge versions from promotions file"""
-    try:
-        # Get promotions file which has recommended versions
-        response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
-        if response.status_code != 200:
-            return jsonify({'error': 'Failed to fetch from Forge API'}), 502
-        
-        data = response.json()
-        promos = data.get('promos', {})
-        
-        # Extract unique MC versions from promotions (format: "1.20.1-recommended", "1.20.1-latest")
-        versions_set = set()
-        for key in promos.keys():
-            if '-' in key:
-                mc_version = key.split('-')[0]
-                versions_set.add(mc_version)
-        
-        # Sort versions in reverse order
-        versions = []
-        for version in sorted(versions_set, reverse=True)[:30]:
-            versions.append({
-                'version': version,
-                'type': 'release',
-                'url': 'API'
-            })
-        
-        return jsonify({'versions': versions})
-    except Exception as e:
-        # Fallback to known recent versions
-        known_versions = [
-            '1.21.4', '1.21.3', '1.21.1', '1.21', '1.20.6', '1.20.4',
-            '1.20.2', '1.20.1', '1.20', '1.19.4', '1.19.3', '1.19.2',
-            '1.18.2', '1.17.1', '1.16.5'
-        ]
-        versions = [{'version': v, 'type': 'release', 'url': 'API'} for v in known_versions]
-        return jsonify({'versions': versions})
-
-@app.route('/api/tools/jarfetcher/download-url', methods=['POST'])
-@admin_required
-def get_jar_download_url():
-    """Get the direct download URL for a specific version"""
-    data = request.get_json()
-    server_type = data.get('type')
-    version = data.get('version')
-    platform = data.get('platform', 'linux')  # Default to Linux for Bedrock
-    
-    if not server_type or not version:
-        return jsonify({'error': 'Missing type or version'}), 400
-    
-    try:        
-        # Fallback to original APIs if arcadia fails
-        if server_type == 'vanilla':
-            # First get the version manifest URL from Mojang
-            manifest_response = requests.get('https://launchermeta.mojang.com/mc/game/version_manifest.json', timeout=30)
-            if manifest_response.status_code != 200:
-                return jsonify({'error': 'Failed to fetch manifest'}), 502
-            
-            manifest_data = manifest_response.json()
-            version_url = None
-            for v in manifest_data.get('versions', []):
-                if v['id'] == version:
-                    version_url = v['url']
-                    break
-            
-            if not version_url:
-                return jsonify({'error': 'Version not found'}), 404
-            
-            download_url = fetch_vanilla_download_url(version_url)
-            if download_url:
-                return jsonify({'url': download_url})
-            return jsonify({'error': 'No server JAR available for this version'}), 404
-        
-        elif server_type == 'bedrock':
-            # Fetch from Minecraft services API for serverBedrockLinux
-            try:
-                response = requests.get(get_api_url('bedrock'), timeout=30)
-                if response.status_code == 200:
-                    data = response.json()
-                    links = data.get('result', {}).get('links', [])
-                    for link in links:
-                        if link.get('downloadType') == 'serverBedrockLinux':
-                            url = link.get('downloadUrl', '')
-                            if url:
-                                return jsonify({
-                                    'url': url,
-                                    'note': 'Bedrock servers are .zip files, not .jar files'
-                                })
-            except Exception:
-                pass
-            # Fallback to known URL pattern
-            url = f'https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-{version}.zip'
-            return jsonify({
-                'url': url,
-                'note': 'Bedrock servers are .zip files, not .jar files'
-            })
-        
-        elif server_type == 'paper':
-            return get_papermc_download_url('paper', version)
-        
-        elif server_type == 'purpur':
-            # Purpur API: /v2/purpur/{version}/latest/download
-            url = f'https://api.purpurmc.org/v2/purpur/{version}/latest/download'
-            return jsonify({'url': url})
-        
-        elif server_type == 'fabric':
-            # Get latest loader and installer versions
-            loader_resp = requests.get('https://meta.fabricmc.net/v2/versions/loader', timeout=30)
-            installer_resp = requests.get('https://meta.fabricmc.net/v2/versions/installer', timeout=30)
-            
-            if loader_resp.status_code == 200 and installer_resp.status_code == 200:
-                loader_version = loader_resp.json()[0]['version']
-                installer_version = installer_resp.json()[0]['version']
-                url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar'
-                return jsonify({'url': url})
-            return jsonify({'error': 'Failed to fetch Fabric loader info'}), 502
-        
-        elif server_type == 'folia':
-            return get_papermc_download_url('folia', version)
-        
-        elif server_type == 'forge':
-            return get_forge_download_url(version)
-        
-        else:
-            return jsonify({'error': 'Unknown server type'}), 400
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-def get_papermc_download_url(project, version):
-    """Get download URL from PaperMC API"""
-    # Get builds for version
-    builds_url = f'https://api.papermc.io/v2/projects/{project}/versions/{version}/builds'
-    response = requests.get(builds_url, timeout=30)
-    
-    if response.status_code != 200:
-        return jsonify({'error': f'Failed to fetch builds for {project} {version}'}), 502
-    
-    builds_data = response.json()
-    builds = builds_data.get('builds', [])
-    
-    if not builds:
-        return jsonify({'error': 'No builds available'}), 404
-    
-    # Get latest build
-    latest_build = builds[-1]
-    build_number = latest_build['build']
-    downloads = latest_build.get('downloads', {})
-    application = downloads.get('application', {})
-    filename = application.get('name', f'{project}-{version}.jar')
-    
-    download_url = f'https://api.papermc.io/v2/projects/{project}/versions/{version}/builds/{build_number}/downloads/{filename}'
-    return jsonify({'url': download_url, 'build': build_number})
-
-def get_forge_download_url(version):
-    """Get download URL for Forge installer"""
-    try:
-        # Get promotions file to find the recommended build
-        response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
-        if response.status_code != 200:
-            return jsonify({'error': 'Failed to fetch Forge promotions'}), 502
-        
-        data = response.json()
-        promos = data.get('promos', {})
-        
-        # Try to get recommended version, fallback to latest
-        forge_version = promos.get(f'{version}-recommended') or promos.get(f'{version}-latest')
-        
-        if not forge_version:
-            return jsonify({'error': f'No Forge build found for Minecraft {version}'}), 404
-        
-        # Construct the download URL for the installer
-        url = f'https://maven.minecraftforge.net/net/minecraftforge/forge/{version}-{forge_version}/forge-{version}-{forge_version}-installer.jar'
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
         
         return jsonify({
-            'url': url,
-            'build': forge_version,
-            'note': 'This is a Forge installer JAR. Run it to install the server.'
+            'success': True,
+            'message': f'Downloaded {filename} successfully',
+            'path': str(filepath.relative_to(BASE_DIR)),
+            'size': downloaded
         })
+        
+    except requests.exceptions.RequestException as e:
+        # Clean up partial download
+        if filepath.exists():
+            filepath.unlink()
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        if filepath.exists():
+            filepath.unlink()
+        return jsonify({'error': f'Error: {str(e)}'}), 500
 
-@app.route('/api/tools/jarfetcher/config', methods=['GET'])
+@app.route('/api/tools/jar-downloader/list', methods=['GET'])
 @admin_required
-def get_jar_config():
-    """Get current jarurls.conf content"""
-    if JAR_URLS_PATH.exists():
-        with open(JAR_URLS_PATH, 'r') as f:
-            return jsonify({'content': f.read()})
-    return jsonify({'content': ''})
-
-@app.route('/api/tools/jarfetcher/test-urls', methods=['POST'])
-@admin_required
-def test_jar_urls():
-    """Test if URLs in jarurls.conf are accessible"""
-    data = request.get_json() or {}
-    test_all = data.get('testAll', True)
-    specific_entries = data.get('entries', [])  # List of "type:version" to test
+def list_downloaded_jars():
+    """List all downloaded JAR files"""
+    jars = {}
     
-    results = {
-        'valid': [],
-        'invalid': [],
-        'api': [],  # Entries that use API (not direct URLs)
-        'skipped': []
-    }
-    
-    if not JAR_URLS_PATH.exists():
-        return jsonify({'error': 'Config file not found'}), 404
-    
-    # Parse config file
-    entries = []
-    with open(JAR_URLS_PATH, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            if '=' in line:
-                key, url = line.split('=', 1)
-                if ':' in key:
-                    server_type, version = key.split(':', 1)
-                    entry_key = f'{server_type}:{version}'
-                    
-                    # Filter if specific entries requested
-                    if not test_all and specific_entries and entry_key not in specific_entries:
-                        continue
-                    
-                    entries.append({
-                        'type': server_type,
-                        'version': version,
-                        'url': url,
-                        'key': entry_key
-                    })
-    
-    # Test each URL
-    for entry in entries:
-        url = entry['url']
-        
-        # Skip API placeholders
-        if url.upper() == 'API':
-            results['api'].append({
-                'type': entry['type'],
-                'version': entry['version'],
-                'key': entry['key'],
-                'status': 'API endpoint - will be resolved at download time'
-            })
-            continue
-        
-        # Test the URL
-        try:
-            is_valid, status_code, content_type, content_length = test_url_detailed(url)
-            
-            if is_valid:
-                results['valid'].append({
-                    'type': entry['type'],
-                    'version': entry['version'],
-                    'key': entry['key'],
-                    'url': url,
-                    'status_code': status_code,
-                    'content_type': content_type,
-                    'size': content_length
-                })
-            else:
-                results['invalid'].append({
-                    'type': entry['type'],
-                    'version': entry['version'],
-                    'key': entry['key'],
-                    'url': url,
-                    'status_code': status_code,
-                    'error': f'HTTP {status_code}' if status_code else 'Connection failed'
-                })
-        except Exception as e:
-            results['invalid'].append({
-                'type': entry['type'],
-                'version': entry['version'],
-                'key': entry['key'],
-                'url': url,
-                'error': str(e)
-            })
-    
-    return jsonify({
-        'success': True,
-        'results': results,
-        'summary': {
-            'total': len(entries),
-            'valid': len(results['valid']),
-            'invalid': len(results['invalid']),
-            'api': len(results['api'])
-        }
-    })
-
-def test_url_detailed(url):
-    """Test a URL and return detailed info"""
-    try:
-        # Try HEAD request first (faster, doesn't download content)
-        response = requests.head(url, timeout=15, allow_redirects=True)
-        status_code = response.status_code
-        content_type = response.headers.get('Content-Type', 'unknown')
-        content_length = response.headers.get('Content-Length', 'unknown')
-        
-        # Accept various success codes
-        if status_code in [200, 301, 302, 307, 308]:
-            return True, status_code, content_type, content_length
-        
-        # Some servers don't support HEAD, try GET with stream
-        if status_code in [403, 405]:
-            response = requests.get(url, timeout=15, stream=True, allow_redirects=True)
-            response.close()
-            status_code = response.status_code
-            content_type = response.headers.get('Content-Type', 'unknown')
-            content_length = response.headers.get('Content-Length', 'unknown')
-            
-            if status_code in [200, 301, 302, 307, 308]:
-                return True, status_code, content_type, content_length
-        
-        return False, status_code, content_type, content_length
-    except requests.exceptions.Timeout:
-        return False, None, None, 'Timeout'
-    except requests.exceptions.ConnectionError:
-        return False, None, None, 'Connection failed'
-    except Exception as e:
-        return False, None, None, str(e)
-@admin_required
-def update_jar_config():
-    """Update jarurls.conf with new entry"""
-    data = request.get_json()
-    server_type = data.get('type')
-    version = data.get('version')
-    url = data.get('url')
-    
-    if not server_type or not version or not url:
-        return jsonify({'error': 'Missing required fields'}), 400
-    
-    # Read existing config
-    lines = []
-    if JAR_URLS_PATH.exists():
-        with open(JAR_URLS_PATH, 'r') as f:
-            lines = f.readlines()
-    
-    # Check if entry already exists and update it
-    entry = f'{server_type}:{version}={url}\n'
-    entry_prefix = f'{server_type}:{version}='
-    
-    found = False
-    for i, line in enumerate(lines):
-        if line.startswith(entry_prefix):
-            lines[i] = entry
-            found = True
-            break
-    
-    if not found:
-        # Find the right section to add the entry
-        section_header = f'# === {server_type.upper()}'
-        insert_index = len(lines)
-        
-        for i, line in enumerate(lines):
-            if line.startswith(section_header):
-                # Find the end of this section (next section or end of file)
-                for j in range(i + 1, len(lines)):
-                    if lines[j].startswith('# ==='):
-                        insert_index = j
-                        break
-                else:
-                    insert_index = len(lines)
-                break
-        
-        # Insert before the next section or at end
-        if insert_index == len(lines):
-            lines.append('\n' + entry)
-        else:
-            lines.insert(insert_index, entry)
-    
-    # Write back
-    with open(JAR_URLS_PATH, 'w') as f:
-        f.writelines(lines)
-    
-    return jsonify({'success': True, 'message': f'Added/updated {server_type}:{version}'})
-
-@app.route('/api/tools/jarfetcher/bulk-update', methods=['POST'])
-@admin_required
-def bulk_update_jar_urls():
-    """Fetch all versions from APIs and update jarurls.conf"""
-    data = request.get_json() or {}
-    server_types = data.get('types', ['vanilla', 'paper', 'purpur', 'fabric', 'folia', 'forge'])
-    max_versions = data.get('maxVersions', 10)  # Limit versions per type to avoid timeout
-    
-    results = {
-        'success': [],
-        'failed': [],
-        'skipped': []
-    }
-    
-    for server_type in server_types:
-        try:
-            # Fetch versions for this type
-            versions_data = fetch_versions_for_type(server_type)
-            if not versions_data:
-                results['failed'].append({
-                    'type': server_type,
-                    'error': 'Failed to fetch version list'
-                })
-                continue
-            
-            # Limit to max_versions
-            versions_to_fetch = versions_data[:max_versions]
-            
-            for version_info in versions_to_fetch:
-                version = version_info.get('version')
-                if not version:
-                    continue
-                
-                try:
-                    # Fetch download URL for this version
-                    url_data = fetch_download_url_for_type(server_type, version)
-                    
-                    if url_data and url_data.get('url'):
-                        # Verify the URL is accessible
-                        url = url_data['url']
-                        is_valid = verify_url(url)
-                        
-                        if is_valid:
-                            # Update the config file
-                            update_jar_config_entry(server_type, version, url)
-                            results['success'].append({
-                                'type': server_type,
-                                'version': version,
-                                'url': url,
-                                'build': url_data.get('build')
-                            })
-                        else:
-                            results['failed'].append({
-                                'type': server_type,
-                                'version': version,
-                                'error': 'URL not accessible or invalid'
-                            })
-                    else:
-                        results['failed'].append({
-                            'type': server_type,
-                            'version': version,
-                            'error': url_data.get('error', 'No URL returned')
+    if SERVER_EXECUTABLES_DIR.exists():
+        for type_dir in SERVER_EXECUTABLES_DIR.iterdir():
+            if type_dir.is_dir():
+                server_type = type_dir.name
+                jars[server_type] = []
+                for jar_file in sorted(type_dir.iterdir(), reverse=True):
+                    if jar_file.is_file() and (jar_file.suffix in ['.jar', '.zip']):
+                        jars[server_type].append({
+                            'filename': jar_file.name,
+                            'size': jar_file.stat().st_size,
+                            'path': str(jar_file.relative_to(BASE_DIR))
                         })
-                except Exception as e:
-                    results['failed'].append({
-                        'type': server_type,
-                        'version': version,
-                        'error': str(e)
-                    })
-                    
-        except Exception as e:
-            results['failed'].append({
-                'type': server_type,
-                'error': f'Failed to process type: {str(e)}'
-            })
     
-    return jsonify({
-        'success': True,
-        'results': results,
-        'summary': {
-            'updated': len(results['success']),
-            'failed': len(results['failed']),
-            'skipped': len(results['skipped'])
-        }
-    })
+    return jsonify({'jars': jars})
 
-def fetch_versions_for_type(server_type):
-    """Fetch version list for a server type (internal helper)"""
+@app.route('/api/tools/jar-downloader/delete', methods=['DELETE'])
+@admin_required
+def delete_downloaded_jar():
+    """Delete a downloaded JAR file"""
+    data = request.get_json()
+    server_type = data.get('type', '').strip().lower()
+    filename = data.get('filename', '').strip()
+    
+    if not server_type or not filename:
+        return jsonify({'error': 'Missing required fields: type, filename'}), 400
+    
+    filepath = SERVER_EXECUTABLES_DIR / server_type / filename
+    
+    if not filepath.exists():
+        return jsonify({'error': 'File not found'}), 404
+    
+    # Security check - ensure path is within serverexecutables
     try:
-        # Try arcadiatech.org first (for most server types except bedrock)
-        if server_type != 'bedrock':
-            arcadia_versions = fetch_versions_from_arcadia(server_type)
-            if arcadia_versions:
-                return [{'version': v['version'], 'url': v.get('url', 'API')} for v in arcadia_versions]
-        
-        # Fallback to original APIs
-        if server_type == 'vanilla':
-            response = requests.get('https://launchermeta.mojang.com/mc/game/version_manifest.json', timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                versions = []
-                for v in data.get('versions', []):
-                    if v.get('type') == 'release':
-                        versions.append({'version': v['id'], 'url': v['url']})
-                return versions
-        
-        elif server_type == 'bedrock':
-            # Fetch from Minecraft services API for serverBedrockLinux
-            try:
-                response = requests.get(get_api_url('bedrock'), timeout=30)
-                if response.status_code == 200:
-                    data = response.json()
-                    links = data.get('result', {}).get('links', [])
-                    for link in links:
-                        if link.get('downloadType') == 'serverBedrockLinux':
-                            url = link.get('downloadUrl', '')
-                            # Extract version from URL like: bedrock-server-1.21.132.3.zip
-                            if 'bedrock-server-' in url:
-                                version = url.split('bedrock-server-')[1].replace('.zip', '')
-                                return [{'version': version, 'url': url}]
-            except Exception:
-                pass
-            # Fallback to known versions
-            known = ['1.21.51.02', '1.21.50.07', '1.21.44.01', '1.21.43.01', '1.21.42.01']
-            return [{'version': v} for v in known]
-        
-        elif server_type in ['paper', 'folia']:
-            base_url = f'https://api.papermc.io/v2/projects/{server_type}'
-            response = requests.get(base_url, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                versions = list(reversed(data.get('versions', [])[-30:]))
-                return [{'version': v} for v in versions]
-        
-        elif server_type == 'purpur':
-            response = requests.get('https://api.purpurmc.org/v2/purpur', timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                versions = list(reversed(data.get('versions', [])[-30:]))
-                return [{'version': v} for v in versions]
-        
-        elif server_type == 'fabric':
-            response = requests.get('https://meta.fabricmc.net/v2/versions/game', timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                versions = []
-                for v in data[:30]:
-                    if v.get('stable', False):
-                        versions.append({'version': v['version']})
-                return versions
-        
-        elif server_type == 'forge':
-            response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                promos = data.get('promos', {})
-                versions_set = set()
-                for key in promos.keys():
-                    if '-' in key:
-                        mc_version = key.split('-')[0]
-                        versions_set.add(mc_version)
-                versions = [{'version': v} for v in sorted(versions_set, reverse=True)[:30]]
-                return versions
+        filepath.relative_to(SERVER_EXECUTABLES_DIR)
+    except ValueError:
+        return jsonify({'error': 'Invalid path'}), 400
+    
+    try:
+        filepath.unlink()
+        return jsonify({'success': True, 'message': f'Deleted {filename}'})
     except Exception as e:
-        print(f"Error fetching versions for {server_type}: {e}")
-    
-    return None
-
-def fetch_download_url_for_type(server_type, version):
-    """Fetch download URL for a specific version (internal helper)"""
-    try:
-        # Try arcadiatech.org first (for most server types except bedrock)
-        if server_type != 'bedrock':
-            arcadia_url = get_arcadia_download_url(server_type, version)
-            if arcadia_url:
-                return {'url': arcadia_url}
-        
-        # Fallback to original APIs
-        if server_type == 'vanilla':
-            # Get manifest first
-            manifest_response = requests.get('https://launchermeta.mojang.com/mc/game/version_manifest.json', timeout=30)
-            if manifest_response.status_code != 200:
-                return {'error': 'Failed to fetch manifest'}
-            
-            manifest_data = manifest_response.json()
-            version_url = None
-            for v in manifest_data.get('versions', []):
-                if v['id'] == version:
-                    version_url = v['url']
-                    break
-            
-            if not version_url:
-                return {'error': 'Version not found'}
-            
-            # Get version manifest
-            version_response = requests.get(version_url, timeout=30)
-            if version_response.status_code == 200:
-                data = version_response.json()
-                server_download = data.get('downloads', {}).get('server', {})
-                url = server_download.get('url')
-                if url:
-                    return {'url': url}
-            return {'error': 'No server download available'}
-        
-        elif server_type == 'bedrock':
-            # Fetch from Minecraft services API for serverBedrockLinux
-            try:
-                response = requests.get(get_api_url('bedrock'), timeout=30)
-                if response.status_code == 200:
-                    data = response.json()
-                    links = data.get('result', {}).get('links', [])
-                    for link in links:
-                        if link.get('downloadType') == 'serverBedrockLinux':
-                            url = link.get('downloadUrl', '')
-                            if url:
-                                return {'url': url}
-            except Exception:
-                pass
-            # Fallback
-            url = f'https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-{version}.zip'
-            return {'url': url}
-        
-        elif server_type in ['paper', 'folia']:
-            builds_url = f'https://api.papermc.io/v2/projects/{server_type}/versions/{version}/builds'
-            response = requests.get(builds_url, timeout=30)
-            
-            if response.status_code != 200:
-                return {'error': f'Failed to fetch builds'}
-            
-            builds_data = response.json()
-            builds = builds_data.get('builds', [])
-            
-            if not builds:
-                return {'error': 'No builds available'}
-            
-            latest_build = builds[-1]
-            build_number = latest_build['build']
-            downloads = latest_build.get('downloads', {})
-            application = downloads.get('application', {})
-            filename = application.get('name', f'{server_type}-{version}.jar')
-            
-            url = f'https://api.papermc.io/v2/projects/{server_type}/versions/{version}/builds/{build_number}/downloads/{filename}'
-            return {'url': url, 'build': build_number}
-        
-        elif server_type == 'purpur':
-            url = f'https://api.purpurmc.org/v2/purpur/{version}/latest/download'
-            return {'url': url}
-        
-        elif server_type == 'fabric':
-            loader_resp = requests.get('https://meta.fabricmc.net/v2/versions/loader', timeout=30)
-            installer_resp = requests.get('https://meta.fabricmc.net/v2/versions/installer', timeout=30)
-            
-            if loader_resp.status_code == 200 and installer_resp.status_code == 200:
-                loader_version = loader_resp.json()[0]['version']
-                installer_version = installer_resp.json()[0]['version']
-                url = f'https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar'
-                return {'url': url}
-            return {'error': 'Failed to fetch Fabric loader info'}
-        
-        elif server_type == 'forge':
-            response = requests.get('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                promos = data.get('promos', {})
-                forge_version = promos.get(f'{version}-recommended') or promos.get(f'{version}-latest')
-                
-                if forge_version:
-                    url = f'https://maven.minecraftforge.net/net/minecraftforge/forge/{version}-{forge_version}/forge-{version}-{forge_version}-installer.jar'
-                    return {'url': url, 'build': forge_version}
-            return {'error': f'No Forge build found for {version}'}
-        
-    except Exception as e:
-        return {'error': str(e)}
-    
-    return {'error': 'Unknown server type'}
-
-def verify_url(url):
-    """Verify that a URL is accessible (HEAD request)"""
-    try:
-        response = requests.head(url, timeout=10, allow_redirects=True)
-        # Accept 200, 301, 302, 307, 308 as valid
-        return response.status_code in [200, 301, 302, 307, 308]
-    except Exception:
-        # Try GET with stream to avoid downloading
-        try:
-            response = requests.get(url, timeout=10, stream=True, allow_redirects=True)
-            response.close()
-            return response.status_code in [200, 301, 302, 307, 308]
-        except Exception:
-            return False
-
-def update_jar_config_entry(server_type, version, url):
-    """Update a single entry in jarurls.conf"""
-    lines = []
-    if JAR_URLS_PATH.exists():
-        with open(JAR_URLS_PATH, 'r') as f:
-            lines = f.readlines()
-    
-    entry = f'{server_type}:{version}={url}\n'
-    entry_prefix = f'{server_type}:{version}='
-    
-    # Check if entry already exists
-    found = False
-    for i, line in enumerate(lines):
-        if line.startswith(entry_prefix):
-            lines[i] = entry
-            found = True
-            break
-    
-    if not found:
-        # Find the right section
-        section_header = f'# === {server_type.upper()}'
-        insert_index = len(lines)
-        
-        for i, line in enumerate(lines):
-            if line.upper().startswith(section_header.upper()):
-                # Find end of section
-                for j in range(i + 1, len(lines)):
-                    if lines[j].startswith('# ==='):
-                        insert_index = j
-                        break
-                else:
-                    insert_index = len(lines)
-                break
-        
-        if insert_index == len(lines):
-            lines.append(entry)
-        else:
-            lines.insert(insert_index, entry)
-    
-    with open(JAR_URLS_PATH, 'w') as f:
-        f.writelines(lines)
+        return jsonify({'error': f'Failed to delete: {str(e)}'}), 500
 
 
 # ==================== Tools API ====================

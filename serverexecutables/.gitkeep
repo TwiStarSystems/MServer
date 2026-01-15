@@ -1,0 +1,2 @@
+# This directory holds downloaded server JAR files
+# Structure: serverexecutables/<type>/<type>-<version>.jar
