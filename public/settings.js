@@ -637,29 +637,31 @@ async function loadDownloadedJars() {
       return;
     }
     
-    let html = '';
+    // Build table HTML
+    let html = '<table class="jars-table"><thead><tr>';
+    html += '<th>Type</th><th>Filename</th><th>Size</th><th>Actions</th>';
+    html += '</tr></thead><tbody>';
+    
+    let hasFiles = false;
     for (const [serverType, files] of Object.entries(data.jars)) {
       if (files.length === 0) continue;
       
-      html += `<div class="jar-type-group">
-        <h5>📂 ${serverType}</h5>
-        <div class="jar-files-list">`;
-      
       for (const file of files) {
+        hasFiles = true;
         html += `
-          <div class="jar-file-item">
-            <div class="jar-file-info">
-              <span class="jar-filename">${escapeHtml(file.filename)}</span>
-              <span class="jar-size">${formatBytes(file.size)}</span>
-            </div>
-            <button class="btn btn-small btn-danger" onclick="deleteJar('${serverType}', '${file.filename}')" title="Delete">🗑️</button>
-          </div>`;
+          <tr>
+            <td><span class="jar-type-badge">${escapeHtml(serverType)}</span></td>
+            <td class="jar-filename-cell">${escapeHtml(file.filename)}</td>
+            <td class="jar-size-cell">${formatBytes(file.size)}</td>
+            <td class="jar-actions-cell">
+              <button class="btn btn-small btn-danger" onclick="deleteJar('${serverType}', '${escapeHtml(file.filename)}')" title="Delete">🗑️</button>
+            </td>
+          </tr>`;
       }
-      
-      html += '</div></div>';
     }
     
-    container.innerHTML = html || '<div class="no-jars-text">No downloaded files yet</div>';
+    html += '</tbody></table>';
+    container.innerHTML = hasFiles ? html : '<div class="no-jars-text">No downloaded files yet</div>';
   } catch (err) {
     container.innerHTML = `<div class="error-text">Failed to load files: ${err.message}</div>`;
   }

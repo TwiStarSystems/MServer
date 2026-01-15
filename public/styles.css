@@ -1847,6 +1847,87 @@ select.form-control:disabled {
   gap: 8px;
 }
 
+/* Downloaded JARs Table */
+.jars-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #161b22;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.9rem;
+}
+
+.jars-table thead {
+  background: #0d1117;
+}
+
+.jars-table th {
+  text-align: left;
+  padding: 12px 15px;
+  font-weight: 600;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.jars-table td {
+  padding: 10px 15px;
+  border-bottom: 1px solid #30363d;
+  color: #e6edf3;
+}
+
+.jars-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.jars-table tbody tr:hover {
+  background: #1f2937;
+}
+
+.jar-type-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: rgba(88, 166, 255, 0.15);
+  color: #58a6ff;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.jar-filename-cell {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.85rem;
+  color: #e6edf3;
+  word-break: break-word;
+}
+
+.jar-size-cell {
+  color: #7ee787;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.jar-actions-cell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.downloaded-jars-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.no-jars-text {
+  text-align: center;
+  padding: 30px;
+  color: #8b949e;
+  font-size: 0.9rem;
+}
+
 /* Bulk URL Update */
 .bulk-update-options {
   display: flex;
