@@ -327,10 +327,23 @@
           <div class="tool-panel">
             <div class="tool-panel-header">
               <h3>📄 Current JAR URLs Config</h3>
-              <button class="btn btn-small" onclick="loadJarConfig()">🔄 Refresh</button>
+              <div class="tool-panel-actions">
+                <button class="btn btn-small" onclick="loadJarConfig()">🔄 Refresh</button>
+                <button class="btn btn-small btn-primary" onclick="testAllJarUrls()">🔍 Test All URLs</button>
+              </div>
             </div>
             <div class="tool-panel-body">
               <pre id="jar-config-content" class="config-viewer">Loading...</pre>
+              
+              <!-- URL Test Results -->
+              <div id="url-test-results" class="url-test-results" style="display: none;">
+                <div class="url-test-header">
+                  <h4>URL Test Results</h4>
+                  <button class="btn btn-small" onclick="hideUrlTestResults()">✕ Close</button>
+                </div>
+                <div class="url-test-summary" id="url-test-summary"></div>
+                <div class="url-test-details" id="url-test-details"></div>
+              </div>
             </div>
           </div>
           

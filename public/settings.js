@@ -638,6 +638,148 @@ async function loadJarConfig() {
   }
 }
 
+// ==================== URL Testing Functions ====================
+
+async function testAllJarUrls() {
+  const resultsDiv = document.getElementById('url-test-results');
+  const summaryDiv = document.getElementById('url-test-summary');
+  const detailsDiv = document.getElementById('url-test-details');
+  
+  // Show results area with loading state
+  resultsDiv.style.display = 'block';
+  summaryDiv.innerHTML = '<div class="loading-text">🔍 Testing URLs... This may take a moment.</div>';
+  detailsDiv.innerHTML = '';
+  
+  try {
+    const response = await fetch('/api/tools/jarfetcher/test-urls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testAll: true })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok && data.success) {
+      renderUrlTestResults(data);
+    } else {
+      summaryDiv.innerHTML = `<div class="error-text">❌ ${data.error || 'Failed to test URLs'}</div>`;
+    }
+  } catch (err) {
+    summaryDiv.innerHTML = `<div class="error-text">❌ Error: ${err.message}</div>`;
+  }
+}
+
+function renderUrlTestResults(data) {
+  const summaryDiv = document.getElementById('url-test-summary');
+  const detailsDiv = document.getElementById('url-test-details');
+  const summary = data.summary;
+  const results = data.results;
+  
+  // Summary
+  summaryDiv.innerHTML = `
+    <div class="test-summary-stats">
+      <div class="test-stat valid">
+        <span class="stat-icon">✅</span>
+        <span class="stat-value">${summary.valid}</span>
+        <span class="stat-label">Valid</span>
+      </div>
+      <div class="test-stat invalid">
+        <span class="stat-icon">❌</span>
+        <span class="stat-value">${summary.invalid}</span>
+        <span class="stat-label">Invalid</span>
+      </div>
+      <div class="test-stat api">
+        <span class="stat-icon">🔄</span>
+        <span class="stat-value">${summary.api}</span>
+        <span class="stat-label">API</span>
+      </div>
+      <div class="test-stat total">
+        <span class="stat-icon">📊</span>
+        <span class="stat-value">${summary.total}</span>
+        <span class="stat-label">Total</span>
+      </div>
+    </div>
+  `;
+  
+  // Details
+  let detailsHtml = '';
+  
+  // Invalid URLs first (most important)
+  if (results.invalid.length > 0) {
+    detailsHtml += `
+      <div class="test-section invalid-section">
+        <h5>❌ Invalid URLs (${results.invalid.length})</h5>
+        <div class="test-list">
+          ${results.invalid.map(item => `
+            <div class="test-item invalid">
+              <div class="test-item-header">
+                <span class="test-key">${item.key}</span>
+                <span class="test-error">${item.error || 'Unknown error'}</span>
+              </div>
+              <div class="test-item-url">${escapeHtml(item.url)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+  
+  // Valid URLs
+  if (results.valid.length > 0) {
+    detailsHtml += `
+      <div class="test-section valid-section">
+        <h5>✅ Valid URLs (${results.valid.length})</h5>
+        <div class="test-list collapsed" id="valid-urls-list">
+          ${results.valid.map(item => `
+            <div class="test-item valid">
+              <div class="test-item-header">
+                <span class="test-key">${item.key}</span>
+                <span class="test-status">HTTP ${item.status_code}</span>
+                ${item.size && item.size !== 'unknown' ? `<span class="test-size">${formatBytes(parseInt(item.size))}</span>` : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <button class="btn btn-small btn-link" onclick="toggleTestList('valid-urls-list')">Show/Hide Valid URLs</button>
+      </div>
+    `;
+  }
+  
+  // API entries
+  if (results.api.length > 0) {
+    detailsHtml += `
+      <div class="test-section api-section">
+        <h5>🔄 API Entries (${results.api.length})</h5>
+        <p class="test-note">These entries use dynamic API resolution at download time.</p>
+        <div class="test-list collapsed" id="api-urls-list">
+          ${results.api.map(item => `
+            <div class="test-item api">
+              <span class="test-key">${item.key}</span>
+            </div>
+          `).join('')}
+        </div>
+        <button class="btn btn-small btn-link" onclick="toggleTestList('api-urls-list')">Show/Hide API Entries</button>
+      </div>
+    `;
+  }
+  
+  detailsDiv.innerHTML = detailsHtml || '<p>No entries to test.</p>';
+}
+
+function toggleTestList(listId) {
+  const list = document.getElementById(listId);
+  if (list) {
+    list.classList.toggle('collapsed');
+  }
+}
+
+function hideUrlTestResults() {
+  const resultsDiv = document.getElementById('url-test-results');
+  if (resultsDiv) {
+    resultsDiv.style.display = 'none';
+  }
+}
+
 // ==================== API URL Configuration Functions ====================
 
 const SERVER_TYPE_NAMES = {

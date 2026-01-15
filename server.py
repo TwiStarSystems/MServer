@@ -3724,7 +3724,136 @@ def get_jar_config():
             return jsonify({'content': f.read()})
     return jsonify({'content': ''})
 
-@app.route('/api/tools/jarfetcher/config', methods=['PUT'])
+@app.route('/api/tools/jarfetcher/test-urls', methods=['POST'])
+@admin_required
+def test_jar_urls():
+    """Test if URLs in jarurls.conf are accessible"""
+    data = request.get_json() or {}
+    test_all = data.get('testAll', True)
+    specific_entries = data.get('entries', [])  # List of "type:version" to test
+    
+    results = {
+        'valid': [],
+        'invalid': [],
+        'api': [],  # Entries that use API (not direct URLs)
+        'skipped': []
+    }
+    
+    if not JAR_URLS_PATH.exists():
+        return jsonify({'error': 'Config file not found'}), 404
+    
+    # Parse config file
+    entries = []
+    with open(JAR_URLS_PATH, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                key, url = line.split('=', 1)
+                if ':' in key:
+                    server_type, version = key.split(':', 1)
+                    entry_key = f'{server_type}:{version}'
+                    
+                    # Filter if specific entries requested
+                    if not test_all and specific_entries and entry_key not in specific_entries:
+                        continue
+                    
+                    entries.append({
+                        'type': server_type,
+                        'version': version,
+                        'url': url,
+                        'key': entry_key
+                    })
+    
+    # Test each URL
+    for entry in entries:
+        url = entry['url']
+        
+        # Skip API placeholders
+        if url.upper() == 'API':
+            results['api'].append({
+                'type': entry['type'],
+                'version': entry['version'],
+                'key': entry['key'],
+                'status': 'API endpoint - will be resolved at download time'
+            })
+            continue
+        
+        # Test the URL
+        try:
+            is_valid, status_code, content_type, content_length = test_url_detailed(url)
+            
+            if is_valid:
+                results['valid'].append({
+                    'type': entry['type'],
+                    'version': entry['version'],
+                    'key': entry['key'],
+                    'url': url,
+                    'status_code': status_code,
+                    'content_type': content_type,
+                    'size': content_length
+                })
+            else:
+                results['invalid'].append({
+                    'type': entry['type'],
+                    'version': entry['version'],
+                    'key': entry['key'],
+                    'url': url,
+                    'status_code': status_code,
+                    'error': f'HTTP {status_code}' if status_code else 'Connection failed'
+                })
+        except Exception as e:
+            results['invalid'].append({
+                'type': entry['type'],
+                'version': entry['version'],
+                'key': entry['key'],
+                'url': url,
+                'error': str(e)
+            })
+    
+    return jsonify({
+        'success': True,
+        'results': results,
+        'summary': {
+            'total': len(entries),
+            'valid': len(results['valid']),
+            'invalid': len(results['invalid']),
+            'api': len(results['api'])
+        }
+    })
+
+def test_url_detailed(url):
+    """Test a URL and return detailed info"""
+    try:
+        # Try HEAD request first (faster, doesn't download content)
+        response = requests.head(url, timeout=15, allow_redirects=True)
+        status_code = response.status_code
+        content_type = response.headers.get('Content-Type', 'unknown')
+        content_length = response.headers.get('Content-Length', 'unknown')
+        
+        # Accept various success codes
+        if status_code in [200, 301, 302, 307, 308]:
+            return True, status_code, content_type, content_length
+        
+        # Some servers don't support HEAD, try GET with stream
+        if status_code in [403, 405]:
+            response = requests.get(url, timeout=15, stream=True, allow_redirects=True)
+            response.close()
+            status_code = response.status_code
+            content_type = response.headers.get('Content-Type', 'unknown')
+            content_length = response.headers.get('Content-Length', 'unknown')
+            
+            if status_code in [200, 301, 302, 307, 308]:
+                return True, status_code, content_type, content_length
+        
+        return False, status_code, content_type, content_length
+    except requests.exceptions.Timeout:
+        return False, None, None, 'Timeout'
+    except requests.exceptions.ConnectionError:
+        return False, None, None, 'Connection failed'
+    except Exception as e:
+        return False, None, None, str(e)
 @admin_required
 def update_jar_config():
     """Update jarurls.conf with new entry"""
