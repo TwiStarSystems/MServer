@@ -2757,9 +2757,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Custom JAR upload toggle
   document.getElementById('fresh-upload-jar').onchange = toggleCustomJarUpload;
   
-  // Version loading when type changes
-  document.getElementById('fresh-type').onchange = loadVersions;
-  
   // Server actions
   document.getElementById('start-btn').onclick = startServer;
   document.getElementById('stop-btn').onclick = stopServer;
