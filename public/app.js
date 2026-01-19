@@ -2627,6 +2627,8 @@ function switchTab(tabName) {
     loadLogs();
   } else if (tabName === 'tasks') {
     loadTasks();
+  } else if (tabName === 'resourcepack') {
+    loadResourcePack();
   }
 }
 
@@ -4254,6 +4256,153 @@ document.addEventListener('DOMContentLoaded', () => {
   
   if (refreshPropertiesBtn) {
     refreshPropertiesBtn.addEventListener('click', refreshProperties);
+  }
+});
+
+// ==================== Resource Pack Management ====================
+
+async function loadResourcePack() {
+  if (!currentServerId) return;
+  
+  const statusDiv = document.getElementById('resourcepack-status');
+  const uploadSection = document.getElementById('resourcepack-upload-section');
+  const detailsSection = document.getElementById('resourcepack-details');
+  
+  statusDiv.innerHTML = '<div class="loading">Loading resource pack information...</div>';
+  uploadSection.style.display = 'block';
+  detailsSection.style.display = 'none';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/resourcepack`);
+    
+    if (data.exists) {
+      // Show resource pack details
+      statusDiv.innerHTML = '<div class="success-message">✓ Resource pack is configured for this server</div>';
+      uploadSection.style.display = 'none';
+      detailsSection.style.display = 'block';
+      
+      document.getElementById('rp-filename').textContent = data.filename;
+      document.getElementById('rp-size').textContent = formatBytes(data.size);
+      document.getElementById('rp-uploaded').textContent = new Date(data.uploaded).toLocaleString();
+      document.getElementById('rp-sha1').textContent = data.sha1;
+      
+      const urlLink = document.getElementById('rp-url');
+      if (data.url) {
+        urlLink.href = data.url;
+        urlLink.textContent = data.url;
+      } else {
+        urlLink.href = '#';
+        urlLink.textContent = 'No base URL configured';
+      }
+    } else {
+      // No resource pack uploaded
+      statusDiv.innerHTML = '<div class="info-message">ℹ No resource pack uploaded yet</div>';
+      uploadSection.style.display = 'block';
+      detailsSection.style.display = 'none';
+    }
+  } catch (error) {
+    statusDiv.innerHTML = `<div class="error-message">Error loading resource pack: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function uploadResourcePack(file) {
+  if (!currentServerId) return;
+  
+  const statusDiv = document.getElementById('resourcepack-status');
+  
+  // Validate file
+  if (!file.name.toLowerCase().endsWith('.zip')) {
+    showNotification('File must be a .zip file', 'error');
+    return;
+  }
+  
+  // Check file size (100MB)
+  const maxSize = 100 * 1024 * 1024;
+  if (file.size > maxSize) {
+    showNotification(`File size exceeds 100MB limit (${(file.size / (1024*1024)).toFixed(2)}MB)`, 'error');
+    return;
+  }
+  
+  statusDiv.innerHTML = '<div class="loading">Uploading resource pack...</div>';
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await fetch(`/api/servers/${currentServerId}/resourcepack/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Upload failed');
+    }
+    
+    const data = await response.json();
+    
+    showNotification('Resource pack uploaded successfully!', 'success');
+    
+    if (data.propertiesUpdated) {
+      showNotification('server.properties updated with resource pack URL and SHA-1 hash', 'success');
+    }
+    
+    // Reload the resource pack info
+    loadResourcePack();
+  } catch (error) {
+    statusDiv.innerHTML = `<div class="error-message">Upload failed: ${escapeHtml(error.message)}</div>`;
+    showNotification('Failed to upload resource pack: ' + error.message, 'error');
+  }
+}
+
+async function deleteResourcePack() {
+  if (!currentServerId) return;
+  
+  if (!confirm('Are you sure you want to delete this resource pack? This will also remove the resource pack configuration from server.properties.')) {
+    return;
+  }
+  
+  const statusDiv = document.getElementById('resourcepack-status');
+  statusDiv.innerHTML = '<div class="loading">Deleting resource pack...</div>';
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/resourcepack`, {
+      method: 'DELETE'
+    });
+    
+    showNotification('Resource pack deleted successfully', 'success');
+    loadResourcePack();
+  } catch (error) {
+    statusDiv.innerHTML = `<div class="error-message">Delete failed: ${escapeHtml(error.message)}</div>`;
+    showNotification('Failed to delete resource pack: ' + error.message, 'error');
+  }
+}
+
+// Add event listeners for resource pack
+document.addEventListener('DOMContentLoaded', () => {
+  const uploadInput = document.getElementById('resourcepack-upload');
+  const replaceBtn = document.getElementById('replace-resourcepack-btn');
+  const deleteBtn = document.getElementById('delete-resourcepack-btn');
+  
+  if (uploadInput) {
+    uploadInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        uploadResourcePack(file);
+      }
+      // Reset input so same file can be selected again
+      e.target.value = '';
+    });
+  }
+  
+  if (replaceBtn) {
+    replaceBtn.addEventListener('click', () => {
+      uploadInput.click();
+    });
+  }
+  
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', deleteResourcePack);
   }
 });
 

@@ -96,6 +96,7 @@
           <button class="tab-button" data-tab="files">Files</button>
           <button class="tab-button" data-tab="mods" id="mods-tab-btn" style="display: none;">Mods</button>
           <button class="tab-button" data-tab="properties" id="properties-tab-btn" style="display: none;">Properties</button>
+          <button class="tab-button" data-tab="resourcepack">Resource Pack</button>
           <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
           <button class="tab-button" data-tab="tasks">Tasks</button>
@@ -226,6 +227,66 @@
             </div>
             
             <div id="properties-editor" class="properties-editor" style="display: none;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Resource Pack Tab -->
+        <div id="resourcepack-tab" class="tab-content">
+          <div class="resourcepack-container">
+            <div class="resourcepack-header">
+              <h3>📦 Server Resource Pack</h3>
+              <div class="resourcepack-info-box">
+                <p><strong>About Resource Packs:</strong></p>
+                <p>Upload a custom resource pack (.zip file, max 100MB) that players will be prompted to download when joining your server. The system will automatically calculate the SHA-1 hash and update your server.properties file.</p>
+                <p><strong>Note:</strong> Make sure to configure the Resource Pack Base URL in Settings > Branding before uploading.</p>
+              </div>
+            </div>
+            
+            <div id="resourcepack-status" class="resourcepack-status">
+              <div class="loading">Loading resource pack information...</div>
+            </div>
+            
+            <div id="resourcepack-upload-section" class="resourcepack-upload-section">
+              <div class="upload-box">
+                <div class="upload-icon">📦</div>
+                <h4>Upload Resource Pack</h4>
+                <p>Choose a .zip file (max 100MB)</p>
+                <label for="resourcepack-upload" class="btn btn-success">Select File</label>
+                <input type="file" id="resourcepack-upload" style="display: none;" accept=".zip">
+              </div>
+            </div>
+            
+            <div id="resourcepack-details" class="resourcepack-details" style="display: none;">
+              <div class="detail-card">
+                <h4>Current Resource Pack</h4>
+                <table class="info-table">
+                  <tr>
+                    <td><strong>Filename:</strong></td>
+                    <td id="rp-filename">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Size:</strong></td>
+                    <td id="rp-size">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Uploaded:</strong></td>
+                    <td id="rp-uploaded">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>SHA-1 Hash:</strong></td>
+                    <td id="rp-sha1" class="code-text">-</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Public URL:</strong></td>
+                    <td><a id="rp-url" href="#" target="_blank" class="code-text">-</a></td>
+                  </tr>
+                </table>
+                <div class="resourcepack-actions">
+                  <button id="replace-resourcepack-btn" class="btn btn-primary">Replace Pack</button>
+                  <button id="delete-resourcepack-btn" class="btn btn-danger">Delete Pack</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

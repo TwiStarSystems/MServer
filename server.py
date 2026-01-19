@@ -56,6 +56,7 @@ BASE_DIR = Path(__file__).parent.absolute()
 SERVERS_DIR = BASE_DIR / 'servers'
 BACKUPS_DIR = BASE_DIR / 'backups'
 UPLOADS_DIR = BASE_DIR / 'uploads'
+RESOURCEPACKS_DIR = BASE_DIR / 'public' / 'resourcepacks'
 CONFIG_PATH = BASE_DIR / 'config.json'
 USERS_PATH = BASE_DIR / 'users.json'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
@@ -67,7 +68,7 @@ API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
 
 # Ensure directories exist
-for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, TOOLS_DIR]:
+for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, TOOLS_DIR, RESOURCEPACKS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -80,7 +81,8 @@ class SettingsManager:
         'branding': {
             'siteTitle': 'MServerController',
             'siteIcon': '',
-            'footerAddition': ''
+            'footerAddition': '',
+            'resourcePackBaseUrl': ''
         },
         'app': {
             'enableRegistration': True,
@@ -129,7 +131,7 @@ class SettingsManager:
         if 'branding' not in self.settings:
             self.settings['branding'] = {}
         
-        for key in ['siteTitle', 'siteIcon', 'footerAddition']:
+        for key in ['siteTitle', 'siteIcon', 'footerAddition', 'resourcePackBaseUrl']:
             if key in branding_data:
                 self.settings['branding'][key] = branding_data[key]
         
@@ -4251,6 +4253,163 @@ def save_properties(server_id):
         # Write back to file
         with open(properties_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== Resource Pack API ====================
+
+@app.route('/api/servers/<server_id>/resourcepack', methods=['GET'])
+@server_access_required
+def get_resourcepack_info(server_id):
+    """Get resource pack information for a server"""
+    server_path = server_manager.get_server_path(server_id)
+    resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
+    
+    if not resourcepack_path.exists():
+        return jsonify({'exists': False})
+    
+    try:
+        stat = resourcepack_path.stat()
+        
+        # Calculate SHA1 hash
+        sha1_hash = hashlib.sha1()
+        with open(resourcepack_path, 'rb') as f:
+            while chunk := f.read(8192):
+                sha1_hash.update(chunk)
+        
+        # Get base URL from settings
+        base_url = settings_manager.get_branding().get('resourcePackBaseUrl', '')
+        pack_url = f"{base_url}/{server_id}.zip" if base_url else ''
+        
+        return jsonify({
+            'exists': True,
+            'filename': resourcepack_path.name,
+            'size': stat.st_size,
+            'uploaded': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            'sha1': sha1_hash.hexdigest(),
+            'url': pack_url
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/resourcepack/upload', methods=['POST'])
+@server_access_required
+def upload_resourcepack(server_id):
+    """Upload a resource pack for a server"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    # Check file extension
+    if not file.filename.lower().endswith('.zip'):
+        return jsonify({'error': 'File must be a .zip file'}), 400
+    
+    # Check file size (100MB limit)
+    MAX_SIZE = 100 * 1024 * 1024  # 100MB in bytes
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    file.seek(0)
+    
+    if file_size > MAX_SIZE:
+        return jsonify({'error': f'File size exceeds 100MB limit (size: {file_size / (1024*1024):.2f}MB)'}), 400
+    
+    try:
+        # Save the file
+        resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
+        file.save(str(resourcepack_path))
+        
+        # Calculate SHA1 hash
+        sha1_hash = hashlib.sha1()
+        with open(resourcepack_path, 'rb') as f:
+            while chunk := f.read(8192):
+                sha1_hash.update(chunk)
+        
+        sha1_hex = sha1_hash.hexdigest()
+        
+        # Get base URL from settings
+        base_url = settings_manager.get_branding().get('resourcePackBaseUrl', '')
+        if not base_url:
+            return jsonify({'error': 'Resource Pack Base URL is not configured. Please set it in Settings > Branding.'}), 400
+        
+        pack_url = f"{base_url}/{server_id}.zip"
+        
+        # Update server.properties if it exists
+        properties_path = server_manager.get_server_path(server_id) / 'server.properties'
+        if properties_path.exists():
+            # Read existing properties
+            lines = []
+            resource_pack_found = False
+            resource_pack_sha1_found = False
+            
+            with open(properties_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.startswith('resource-pack='):
+                        lines.append(f'resource-pack={pack_url}\n')
+                        resource_pack_found = True
+                    elif stripped.startswith('resource-pack-sha1='):
+                        lines.append(f'resource-pack-sha1={sha1_hex}\n')
+                        resource_pack_sha1_found = True
+                    else:
+                        lines.append(line)
+            
+            # Add properties if they don't exist
+            if not resource_pack_found or not resource_pack_sha1_found:
+                lines.append('\n# Resource Pack Configuration (added by MServerController)\n')
+                if not resource_pack_found:
+                    lines.append(f'resource-pack={pack_url}\n')
+                if not resource_pack_sha1_found:
+                    lines.append(f'resource-pack-sha1={sha1_hex}\n')
+            
+            # Write back
+            with open(properties_path, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+        
+        stat = resourcepack_path.stat()
+        
+        return jsonify({
+            'success': True,
+            'filename': resourcepack_path.name,
+            'size': stat.st_size,
+            'sha1': sha1_hex,
+            'url': pack_url,
+            'propertiesUpdated': properties_path.exists()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/resourcepack', methods=['DELETE'])
+@server_access_required
+def delete_resourcepack(server_id):
+    """Delete resource pack for a server"""
+    resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
+    
+    if not resourcepack_path.exists():
+        return jsonify({'error': 'No resource pack found'}), 404
+    
+    try:
+        resourcepack_path.unlink()
+        
+        # Remove from server.properties if it exists
+        properties_path = server_manager.get_server_path(server_id) / 'server.properties'
+        if properties_path.exists():
+            lines = []
+            with open(properties_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    # Remove resource pack lines
+                    if not stripped.startswith('resource-pack=') and not stripped.startswith('resource-pack-sha1='):
+                        lines.append(line)
+            
+            with open(properties_path, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
         
         return jsonify({'success': True})
     except Exception as e:
