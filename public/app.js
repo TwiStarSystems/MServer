@@ -165,12 +165,14 @@ function connectWebSocket() {
         appendTerminalOutput(data.data);
       }
       if (data.type === 'status') {
-        updateServerStatus(data.running);
+        const status = data.status || (data.running ? 'running' : 'stopped');
+        updateServerStatus(status, data.running);
       }
     }
     // Update server list status
     if (data.type === 'status') {
-      updateServerInList(data.serverId, data.running);
+      const status = data.status || (data.running ? 'running' : 'stopped');
+      updateServerInList(data.serverId, data.running, status);
     }
   });
   
@@ -256,30 +258,42 @@ function renderServerList() {
   }
   
   container.innerHTML = servers.map(server => {
-    // Build status text with port if running
-    let statusText = server.running ? 'Running' : 'Stopped';
-    if (server.running && server.port) {
-      statusText += ` - ${server.port}`;
-    }
+    const status = server.status || 'stopped';
+    const statusClasses = {
+      'stopped': 'status-stopped',
+      'starting': 'status-starting',
+      'running': 'status-running',
+      'stopping': 'status-stopping',
+      'unresponsive': 'status-unresponsive'
+    };
+    
+    const statusTexts = {
+      'stopped': 'Stopped',
+      'starting': 'Starting...',
+      'running': server.port ? `Running - ${server.port}` : 'Running',
+      'stopping': 'Stopping...',
+      'unresponsive': 'Unresponsive'
+    };
     
     return `
       <div class="server-item ${server.id === currentServerId ? 'active' : ''}" 
            data-server-id="${server.id}" 
            onclick="selectServer('${server.id}')">
-        <div class="server-item-status ${server.running ? 'status-running' : 'status-stopped'}">●</div>
+        <div class="server-item-status ${statusClasses[status]}">●</div>
         <div class="server-item-info">
           <div class="server-item-name">${escapeHtml(server.name)}</div>
-          <div class="server-item-state">${statusText}</div>
+          <div class="server-item-state">${statusTexts[status]}</div>
         </div>
       </div>
     `;
   }).join('');
 }
 
-function updateServerInList(serverId, isRunning) {
+function updateServerInList(serverId, isRunning, status) {
   const server = servers.find(s => s.id === serverId);
   if (server) {
     server.running = isRunning;
+    server.status = status || (isRunning ? 'running' : 'stopped');
     renderServerList();
   }
 }
@@ -320,7 +334,8 @@ async function loadServerDetails() {
     
     // Update header
     document.getElementById('server-name').textContent = server.name;
-    updateServerStatus(server.running);
+    const status = server.status || (server.running ? 'running' : 'stopped');
+    updateServerStatus(status, server.running);
     
     // Show/hide Mods tab based on server category
     const modsTabBtn = document.getElementById('mods-tab-btn');
@@ -354,7 +369,7 @@ async function loadServerDetails() {
   }
 }
 
-function updateServerStatus(isRunning) {
+function updateServerStatus(status, isRunning) {
   const indicator = document.getElementById('status-indicator');
   const text = document.getElementById('status-text');
   const startBtn = document.getElementById('start-btn');
@@ -363,26 +378,40 @@ function updateServerStatus(isRunning) {
   const terminalInput = document.getElementById('terminal-input');
   const sendBtn = document.getElementById('send-btn');
   
-  if (isRunning) {
-    indicator.className = 'status-running';
-    text.textContent = 'Running';
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
-    killBtn.disabled = false;
-    terminalInput.disabled = false;
-    sendBtn.disabled = false;
-  } else {
-    indicator.className = 'status-stopped';
-    text.textContent = 'Stopped';
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    killBtn.disabled = true;
-    terminalInput.disabled = true;
-    sendBtn.disabled = true;
-  }
+  // Update status indicator and text
+  const statusClasses = {
+    'stopped': 'status-stopped',
+    'starting': 'status-starting',
+    'running': 'status-running',
+    'stopping': 'status-stopping',
+    'unresponsive': 'status-unresponsive'
+  };
+  
+  const statusTexts = {
+    'stopped': 'Stopped',
+    'starting': 'Starting...',
+    'running': 'Running',
+    'stopping': 'Stopping...',
+    'unresponsive': 'Unresponsive'
+  };
+  
+  indicator.className = statusClasses[status] || 'status-stopped';
+  text.textContent = statusTexts[status] || 'Unknown';
+  
+  // Button states based on status
+  const canStart = status === 'stopped';
+  const canStop = status === 'running' || status === 'unresponsive';
+  const canKill = status === 'starting' || status === 'running' || status === 'stopping' || status === 'unresponsive';
+  const canCommand = status === 'running';
+  
+  startBtn.disabled = !canStart;
+  stopBtn.disabled = !canStop;
+  killBtn.disabled = !canKill;
+  terminalInput.disabled = !canCommand;
+  sendBtn.disabled = !canCommand;
   
   // Update server in list
-  updateServerInList(currentServerId, isRunning);
+  updateServerInList(currentServerId, isRunning, status);
 }
 
 // ==================== Server Actions ====================
@@ -1410,6 +1439,28 @@ function clearTerminal() {
   terminalUpdatePending = false;
 }
 
+// ==================== Logs Functions ====================
+
+async function loadLogs() {
+  if (!currentServerId) return;
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/logs`);
+    const logsOutput = document.getElementById('logs-output');
+    logsOutput.textContent = data.content || 'No logs available';
+    logsOutput.scrollTop = logsOutput.scrollHeight;
+  } catch (error) {
+    console.error('Failed to load logs:', error);
+    const logsOutput = document.getElementById('logs-output');
+    logsOutput.textContent = 'Failed to load logs: ' + error.message;
+  }
+}
+
+function clearLogsView() {
+  const logsOutput = document.getElementById('logs-output');
+  logsOutput.textContent = '';
+}
+
 function sendCommand(command) {
   if (!currentServerId || !socket || !socket.connected) return;
   
@@ -2306,6 +2357,245 @@ async function deleteSchedule() {
   }
 }
 
+// ==================== Task Scheduler ====================
+
+let editingTaskId = null;
+
+async function loadTasks() {
+  if (!currentServerId) return;
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/tasks`);
+    const taskList = document.getElementById('task-list');
+    taskList.innerHTML = '';
+    
+    if (!data.tasks || data.tasks.length === 0) {
+      taskList.innerHTML = '<tr><td colspan="8" class="empty-message">No tasks configured. Create one to get started!</td></tr>';
+      return;
+    }
+    
+    data.tasks.forEach(task => {
+      const row = document.createElement('tr');
+      
+      const statusCell = document.createElement('td');
+      const statusBadge = document.createElement('span');
+      statusBadge.className = task.enabled ? 'badge badge-success' : 'badge badge-secondary';
+      statusBadge.textContent = task.enabled ? 'Enabled' : 'Disabled';
+      statusCell.appendChild(statusBadge);
+      
+      const nameCell = document.createElement('td');
+      nameCell.textContent = task.name;
+      
+      const actionCell = document.createElement('td');
+      const actionBadge = document.createElement('span');
+      actionBadge.className = 'badge';
+      switch (task.action) {
+        case 'START':
+          actionBadge.classList.add('badge-success');
+          actionBadge.textContent = '▶️ Start';
+          break;
+        case 'STOP':
+          actionBadge.classList.add('badge-danger');
+          actionBadge.textContent = '⏹️ Stop';
+          break;
+        case 'REBOOT':
+          actionBadge.classList.add('badge-warning');
+          actionBadge.textContent = '🔄 Reboot';
+          break;
+        case 'COMMAND':
+          actionBadge.classList.add('badge-info');
+          actionBadge.textContent = '⌨️ Command';
+          break;
+      }
+      actionCell.appendChild(actionBadge);
+      
+      const intervalCell = document.createElement('td');
+      intervalCell.textContent = task.interval;
+      intervalCell.style.fontFamily = 'monospace';
+      intervalCell.style.fontSize = '12px';
+      
+      const runsCell = document.createElement('td');
+      if (task.runs > 0) {
+        runsCell.textContent = `${task.runCount || 0}/${task.runs}`;
+      } else {
+        runsCell.textContent = task.runCount || 0;
+      }
+      
+      const lastRunCell = document.createElement('td');
+      lastRunCell.textContent = task.lastRun ? new Date(task.lastRun).toLocaleString() : 'Never';
+      
+      const nextRunCell = document.createElement('td');
+      nextRunCell.textContent = task.nextRun ? new Date(task.nextRun).toLocaleString() : '-';
+      
+      const actionsCell = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.textContent = 'Edit';
+      editBtn.className = 'btn btn-small action-btn';
+      editBtn.onclick = () => openEditTaskModal(task);
+      
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'btn btn-danger btn-small action-btn';
+      deleteBtn.onclick = () => deleteTask(task.id);
+      
+      actionsCell.appendChild(editBtn);
+      actionsCell.appendChild(deleteBtn);
+      
+      row.appendChild(statusCell);
+      row.appendChild(nameCell);
+      row.appendChild(actionCell);
+      row.appendChild(intervalCell);
+      row.appendChild(runsCell);
+      row.appendChild(lastRunCell);
+      row.appendChild(nextRunCell);
+      row.appendChild(actionsCell);
+      
+      taskList.appendChild(row);
+    });
+  } catch (error) {
+    console.error('Failed to load tasks:', error);
+    showNotification('Failed to load tasks', 'error');
+  }
+}
+
+function openCreateTaskModal() {
+  editingTaskId = null;
+  document.getElementById('task-modal-title').textContent = 'Create Task';
+  document.getElementById('task-name').value = '';
+  document.getElementById('task-action').value = 'START';
+  document.getElementById('task-interval').value = '0 3 * * *';
+  document.getElementById('task-command').value = '';
+  document.getElementById('task-runs').value = '0';
+  document.getElementById('task-enabled').checked = true;
+  document.getElementById('task-delete-after').checked = false;
+  document.getElementById('task-delete-after-runs').checked = false;
+  
+  updateTaskActionOptions();
+  document.getElementById('task-modal').classList.add('active');
+}
+
+function openEditTaskModal(task) {
+  editingTaskId = task.id;
+  document.getElementById('task-modal-title').textContent = 'Edit Task';
+  document.getElementById('task-name').value = task.name;
+  document.getElementById('task-action').value = task.action;
+  document.getElementById('task-interval').value = task.interval;
+  document.getElementById('task-command').value = task.command || '';
+  document.getElementById('task-runs').value = task.runs || 0;
+  document.getElementById('task-enabled').checked = task.enabled;
+  document.getElementById('task-delete-after').checked = task.deleteAfterExecution;
+  document.getElementById('task-delete-after-runs').checked = task.deleteAfterRunsCount;
+  
+  updateTaskActionOptions();
+  document.getElementById('task-modal').classList.add('active');
+}
+
+function closeTaskModal() {
+  document.getElementById('task-modal').classList.remove('active');
+  editingTaskId = null;
+}
+
+function updateTaskActionOptions() {
+  const action = document.getElementById('task-action').value;
+  const commandGroup = document.getElementById('task-command-group');
+  
+  if (action === 'COMMAND') {
+    commandGroup.style.display = 'block';
+  } else {
+    commandGroup.style.display = 'none';
+  }
+}
+
+function updateTaskRunsRequired() {
+  const deleteAfterRuns = document.getElementById('task-delete-after-runs').checked;
+  const runsInput = document.getElementById('task-runs');
+  
+  if (deleteAfterRuns && runsInput.value === '0') {
+    runsInput.value = '1';
+  }
+}
+
+async function saveTask() {
+  if (!currentServerId) return;
+  
+  const name = document.getElementById('task-name').value.trim();
+  const action = document.getElementById('task-action').value;
+  const interval = document.getElementById('task-interval').value.trim();
+  const command = document.getElementById('task-command').value.trim();
+  const runs = parseInt(document.getElementById('task-runs').value) || 0;
+  const enabled = document.getElementById('task-enabled').checked;
+  const deleteAfterExecution = document.getElementById('task-delete-after').checked;
+  const deleteAfterRunsCount = document.getElementById('task-delete-after-runs').checked;
+  
+  if (!name) {
+    showNotification('Please enter a task name', 'error');
+    return;
+  }
+  
+  if (action === 'COMMAND' && !command) {
+    showNotification('Please enter a command', 'error');
+    return;
+  }
+  
+  if (deleteAfterRunsCount && runs === 0) {
+    showNotification('Please set a run limit when using "Delete after runs"', 'error');
+    return;
+  }
+  
+  try {
+    const taskData = {
+      name,
+      action,
+      interval,
+      command,
+      runs,
+      enabled,
+      deleteAfterExecution,
+      deleteAfterRunsCount
+    };
+    
+    if (editingTaskId) {
+      await apiRequest(`/api/servers/${currentServerId}/tasks/${editingTaskId}`, {
+        method: 'PUT',
+        body: JSON.stringify(taskData)
+      });
+      showNotification('Task updated successfully', 'success');
+    } else {
+      await apiRequest(`/api/servers/${currentServerId}/tasks`, {
+        method: 'POST',
+        body: JSON.stringify(taskData)
+      });
+      showNotification('Task created successfully', 'success');
+    }
+    
+    closeTaskModal();
+    loadTasks();
+  } catch (error) {
+    console.error('Failed to save task:', error);
+    showNotification('Failed to save task: ' + error.message, 'error');
+  }
+}
+
+async function deleteTask(taskId) {
+  if (!currentServerId || !taskId) return;
+  
+  if (!confirm('Are you sure you want to delete this task?')) {
+    return;
+  }
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/tasks/${taskId}`, {
+      method: 'DELETE'
+    });
+    
+    showNotification('Task deleted successfully', 'success');
+    loadTasks();
+  } catch (error) {
+    console.error('Failed to delete task:', error);
+    showNotification('Failed to delete task', 'error');
+  }
+}
+
 // ==================== Tab Switching ====================
 
 function switchTab(tabName) {
@@ -2330,6 +2620,10 @@ function switchTab(tabName) {
     loadMods();
   } else if (tabName === 'properties') {
     loadProperties();
+  } else if (tabName === 'logs') {
+    loadLogs();
+  } else if (tabName === 'tasks') {
+    loadTasks();
   }
 }
 
@@ -2956,6 +3250,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     input.value = '';
   };
   
+  // Logs controls
+  document.getElementById('refresh-logs-btn').onclick = loadLogs;
+  document.getElementById('clear-logs-view-btn').onclick = clearLogsView;
+  
   // File explorer controls
   document.getElementById('new-file-btn').onclick = createNewFile;
   document.getElementById('new-folder-btn').onclick = createNewFolder;
@@ -2992,6 +3290,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('schedule-backup-btn').onclick = openScheduleModal;
   document.getElementById('refresh-backups-btn').onclick = loadBackups;
   
+  // Task controls
+  document.getElementById('create-task-btn').onclick = openCreateTaskModal;
+  document.getElementById('refresh-tasks-btn').onclick = loadTasks;
+  
   // Close modals on background click
   document.getElementById('server-modal').onclick = (e) => {
     if (e.target.id === 'server-modal') closeServerModal();
@@ -3003,6 +3305,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   document.getElementById('schedule-modal').onclick = (e) => {
     if (e.target.id === 'schedule-modal') closeScheduleModal();
+  };
+  
+  document.getElementById('task-modal').onclick = (e) => {
+    if (e.target.id === 'task-modal') closeTaskModal();
   };
 });
 
@@ -3671,7 +3977,7 @@ function getPropertyMetadata(key) {
       type: 'string',
       default: 'world',
       description: 'Name of the world folder',
-      maxLength: 100
+      maxLength: 25
     },
     'level-seed': {
       type: 'string',
@@ -3681,9 +3987,9 @@ function getPropertyMetadata(key) {
     },
     'level-type': {
       type: 'string',
-      default: 'minecraft:normal',
+      default: 'normal',
       description: 'World preset for generation',
-      allowedValues: ['minecraft:normal', 'minecraft:flat', 'minecraft:large_biomes', 'minecraft:amplified', 'minecraft:single_biome_surface']
+      allowedValues: ['normal', 'flat', 'large_biomes', 'amplified', 'single_biome_surface']
     },
     'log-ips': {
       type: 'boolean',
@@ -3717,7 +4023,7 @@ function getPropertyMetadata(key) {
     },
     'motd': {
       type: 'string',
-      default: 'A Minecraft Server',
+      default: 'A Minecraft Server, Powered by MServer',
       description: 'Message shown in server list (59 character limit, supports formatting codes)',
       maxLength: 59
     },

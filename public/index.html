@@ -92,11 +92,13 @@
 
         <nav class="tabs">
           <button class="tab-button active" data-tab="terminal">Terminal</button>
+          <button class="tab-button" data-tab="logs">Logs</button>
           <button class="tab-button" data-tab="files">Files</button>
           <button class="tab-button" data-tab="mods" id="mods-tab-btn" style="display: none;">Mods</button>
           <button class="tab-button" data-tab="properties" id="properties-tab-btn" style="display: none;">Properties</button>
           <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
+          <button class="tab-button" data-tab="tasks">Tasks</button>
         </nav>
 
         <!-- Terminal Tab -->
@@ -107,6 +109,17 @@
               <input type="text" id="terminal-input" class="terminal-input" placeholder="Enter command..." disabled>
               <button id="send-btn" class="btn" disabled>Send</button>
             </div>
+          </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div id="logs-tab" class="tab-content">
+          <div class="terminal-container">
+            <div class="logs-controls">
+              <button id="refresh-logs-btn" class="btn btn-small">Refresh</button>
+              <button id="clear-logs-view-btn" class="btn btn-small">Clear View</button>
+            </div>
+            <div id="logs-output" class="terminal"></div>
           </div>
         </div>
 
@@ -349,6 +362,34 @@
                 </tr>
               </thead>
               <tbody id="backup-list">
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tasks Tab -->
+        <div id="tasks-tab" class="tab-content">
+          <div class="task-controls">
+            <button id="create-task-btn" class="btn btn-success">Create Task</button>
+            <button id="refresh-tasks-btn" class="btn">Refresh</button>
+          </div>
+          
+          <div class="task-list">
+            <table class="task-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Name</th>
+                  <th>Action</th>
+                  <th>Interval</th>
+                  <th>Runs</th>
+                  <th>Last Run</th>
+                  <th>Next Run</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="task-list">
+                <tr><td colspan="8" class="empty-message">No tasks configured</td></tr>
               </tbody>
             </table>
           </div>
@@ -896,6 +937,78 @@
         <div class="modal-footer">
           <button class="btn btn-success" onclick="saveSchedule()">Save Schedule</button>
           <button class="btn" onclick="closeScheduleModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Task Scheduler Modal -->
+    <div id="task-modal" class="modal">
+      <div class="modal-content modal-medium">
+        <div class="modal-header">
+          <h2 id="task-modal-title">Create Task</h2>
+          <button class="close-btn" onclick="closeTaskModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px;">
+          <div class="form-group">
+            <label>Task Name</label>
+            <input type="text" id="task-name" class="form-control" placeholder="e.g., Daily Restart">
+          </div>
+          
+          <div class="form-group">
+            <label>Action</label>
+            <select id="task-action" class="form-control" onchange="updateTaskActionOptions()">
+              <option value="START">Start Server</option>
+              <option value="STOP">Stop Server</option>
+              <option value="REBOOT">Reboot Server</option>
+              <option value="COMMAND">Custom Command</option>
+            </select>
+          </div>
+          
+          <div id="task-command-group" class="form-group" style="display: none;">
+            <label>Server Command</label>
+            <input type="text" id="task-command" class="form-control" placeholder="e.g., say Server maintenance in 5 minutes">
+            <small class="form-help">Enter the Minecraft server command (without the /)</small>
+          </div>
+          
+          <div class="form-group">
+            <label>Schedule (Cron Expression)</label>
+            <input type="text" id="task-interval" class="form-control" placeholder="0 3 * * *" value="0 3 * * *">
+            <small class="form-help">Format: minute hour day month day-of-week. Examples:<br>
+            • <code>0 3 * * *</code> - Daily at 3:00 AM<br>
+            • <code>0 */6 * * *</code> - Every 6 hours<br>
+            • <code>0 0 * * 0</code> - Weekly on Sunday at midnight</small>
+          </div>
+          
+          <div class="form-group">
+            <label>Run Limit</label>
+            <input type="number" id="task-runs" class="form-control" min="0" value="0">
+            <small class="form-help">Number of times to run (0 = unlimited). Task will be disabled after reaching limit.</small>
+          </div>
+          
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="task-enabled" checked>
+              Enable task immediately
+            </label>
+          </div>
+          
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="task-delete-after">
+              Delete task after execution
+            </label>
+          </div>
+          
+          <div class="form-group" id="task-delete-after-runs-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="task-delete-after-runs" onchange="updateTaskRunsRequired()">
+              Delete task after reaching run limit
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="saveTask()">Save Task</button>
+          <button class="btn" onclick="closeTaskModal()">Cancel</button>
         </div>
       </div>
     </div>

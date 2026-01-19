@@ -453,6 +453,14 @@ body {
   border-radius: 0;
 }
 
+.logs-controls {
+  display: flex;
+  gap: 10px;
+  padding: 10px 15px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+}
+
 /* ==================== File Explorer ==================== */
 
 .file-controls {
@@ -996,6 +1004,77 @@ body {
   cursor: pointer;
 }
 
+/* ==================== Task Scheduler ==================== */
+
+.task-controls {
+  display: flex;
+  gap: 10px;
+  padding: 15px 0;
+}
+
+.task-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #16213e;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.task-table thead {
+  background: #0f3460;
+}
+
+.task-table th {
+  padding: 15px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: #a0aec0;
+  text-transform: uppercase;
+}
+
+.task-table td {
+  padding: 15px;
+  border-top: 1px solid #0f3460;
+}
+
+.task-table tbody tr:hover {
+  background: rgba(102, 126, 234, 0.05);
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.badge-success {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.badge-danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.badge-warning {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+}
+
+.badge-info {
+  background: rgba(59, 130, 246, 0.2);
+  color: #3b82f6;
+}
+
+.badge-secondary {
+  background: rgba(107, 114, 128, 0.2);
+  color: #6b7280;
+}
+
 /* ==================== Modal ==================== */
 
 .modal {
@@ -1458,14 +1537,34 @@ select.form-control:disabled {
   color: #ef4444;
 }
 
+.status-starting {
+  color: #f59e0b;
+  animation: pulse 1.5s infinite;
+}
+
 .status-running {
   color: #10b981;
   animation: pulse 2s infinite;
 }
 
+.status-stopping {
+  color: #f59e0b;
+  animation: pulse 1.5s infinite;
+}
+
+.status-unresponsive {
+  color: #ef4444;
+  animation: blink 1s infinite;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.3; }
 }
 
 /* ==================== Empty State ==================== */

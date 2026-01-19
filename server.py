@@ -18,6 +18,8 @@ import struct
 import requests
 import hashlib
 import secrets
+import socket
+from enum import Enum
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -57,6 +59,7 @@ CONFIG_PATH = BASE_DIR / 'config.json'
 USERS_PATH = BASE_DIR / 'users.json'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
 SCHEDULES_PATH = BASE_DIR / 'schedules.json'
+TASKS_PATH = BASE_DIR / 'tasks.json'
 STATS_PATH = BASE_DIR / 'stats.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
@@ -575,6 +578,316 @@ class BackupScheduler:
             except:
                 pass
         return schedules
+
+
+# ==================== Task Scheduler ====================
+
+class TaskScheduler:
+    """Manages scheduled tasks for servers (start/stop/reboot/commands)"""
+    
+    def __init__(self, server_manager, socketio):
+        self.server_manager = server_manager
+        self.socketio = socketio
+        self.tasks = self._load_tasks()
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        self._restore_tasks()
+    
+    def _load_tasks(self):
+        """Load tasks from file"""
+        if TASKS_PATH.exists():
+            try:
+                with open(TASKS_PATH, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {'tasks': {}}
+    
+    def _save_tasks(self):
+        """Save tasks to file"""
+        with open(TASKS_PATH, 'w') as f:
+            json.dump(self.tasks, f, indent=2)
+    
+    def _restore_tasks(self):
+        """Restore all tasks from saved config on startup"""
+        for server_id, server_tasks in self.tasks.get('tasks', {}).items():
+            for task_id, task in server_tasks.items():
+                if task.get('enabled', False):
+                    self._add_job(server_id, task_id, task)
+    
+    def _add_job(self, server_id, task_id, task):
+        """Add a scheduled task job"""
+        job_id = f"task_{server_id}_{task_id}"
+        
+        # Remove existing job if any
+        try:
+            self.scheduler.remove_job(job_id)
+        except:
+            pass
+        
+        # Parse cron expression
+        cron_expr = task.get('interval', '0 3 * * *')
+        try:
+            parts = cron_expr.split()
+            if len(parts) == 5:
+                trigger = CronTrigger(
+                    minute=parts[0],
+                    hour=parts[1],
+                    day=parts[2],
+                    month=parts[3],
+                    day_of_week=parts[4]
+                )
+                
+                self.scheduler.add_job(
+                    self._execute_task,
+                    trigger=trigger,
+                    id=job_id,
+                    args=[server_id, task_id]
+                )
+                print(f"[TaskScheduler] Added job {job_id} with schedule: {cron_expr}")
+        except Exception as e:
+            print(f"[TaskScheduler] Failed to add job {job_id}: {e}")
+    
+    def _execute_task(self, server_id, task_id):
+        """Execute a scheduled task"""
+        print(f"[TaskScheduler] Executing task {task_id} for server {server_id}")
+        
+        try:
+            task = self.tasks.get('tasks', {}).get(server_id, {}).get(task_id)
+            if not task:
+                print(f"[TaskScheduler] Task {task_id} not found")
+                return
+            
+            if not task.get('enabled', False):
+                print(f"[TaskScheduler] Task {task_id} is disabled")
+                return
+            
+            action = task.get('action', '')
+            
+            # Execute the action
+            if action == 'START':
+                self._execute_start(server_id, task)
+            elif action == 'STOP':
+                self._execute_stop(server_id, task)
+            elif action == 'REBOOT':
+                self._execute_reboot(server_id, task)
+            elif action == 'COMMAND':
+                self._execute_command(server_id, task)
+            
+            # Update task execution count
+            if 'tasks' not in self.tasks:
+                self.tasks['tasks'] = {}
+            if server_id not in self.tasks['tasks']:
+                self.tasks['tasks'][server_id] = {}
+            
+            self.tasks['tasks'][server_id][task_id]['lastRun'] = datetime.now().isoformat()
+            self.tasks['tasks'][server_id][task_id]['runCount'] = self.tasks['tasks'][server_id][task_id].get('runCount', 0) + 1
+            
+            # Check if task should be disabled or deleted
+            run_limit = task.get('runs', 0)
+            run_count = self.tasks['tasks'][server_id][task_id]['runCount']
+            delete_after_execution = task.get('deleteAfterExecution', False)
+            delete_after_runs = task.get('deleteAfterRunsCount', False)
+            
+            if delete_after_execution:
+                # Delete task immediately
+                self.delete_task(server_id, task_id)
+                print(f"[TaskScheduler] Deleted task {task_id} after execution")
+            elif run_limit > 0 and run_count >= run_limit:
+                if delete_after_runs:
+                    # Delete task after reaching run limit
+                    self.delete_task(server_id, task_id)
+                    print(f"[TaskScheduler] Deleted task {task_id} after {run_count} runs")
+                else:
+                    # Just disable the task
+                    self.tasks['tasks'][server_id][task_id]['enabled'] = False
+                    self._save_tasks()
+                    try:
+                        self.scheduler.remove_job(f"task_{server_id}_{task_id}")
+                    except:
+                        pass
+                    print(f"[TaskScheduler] Disabled task {task_id} after {run_count} runs")
+            else:
+                self._save_tasks()
+            
+            print(f"[TaskScheduler] Task {task_id} executed successfully")
+            
+        except Exception as e:
+            print(f"[TaskScheduler] Task execution failed for {task_id}: {e}")
+    
+    def _execute_start(self, server_id, task):
+        """Start the server"""
+        try:
+            if not self.server_manager.is_running(server_id):
+                self.server_manager.start_server(server_id)
+                print(f"[TaskScheduler] Started server {server_id}")
+            else:
+                print(f"[TaskScheduler] Server {server_id} is already running")
+        except Exception as e:
+            print(f"[TaskScheduler] Failed to start server {server_id}: {e}")
+    
+    def _execute_stop(self, server_id, task):
+        """Stop the server"""
+        try:
+            if self.server_manager.is_running(server_id):
+                self.server_manager.stop_server(server_id)
+                print(f"[TaskScheduler] Stopped server {server_id}")
+            else:
+                print(f"[TaskScheduler] Server {server_id} is not running")
+        except Exception as e:
+            print(f"[TaskScheduler] Failed to stop server {server_id}: {e}")
+    
+    def _execute_reboot(self, server_id, task):
+        """Reboot the server (stop, wait, start)"""
+        try:
+            if self.server_manager.is_running(server_id):
+                print(f"[TaskScheduler] Rebooting server {server_id}...")
+                
+                # Stop the server
+                self.server_manager.stop_server(server_id)
+                
+                # Wait for process to end
+                import time
+                max_wait = 60  # Maximum 60 seconds wait
+                waited = 0
+                while self.server_manager.is_running(server_id) and waited < max_wait:
+                    time.sleep(1)
+                    waited += 1
+                
+                # Wait additional 3 seconds
+                time.sleep(3)
+                
+                # Start the server
+                self.server_manager.start_server(server_id)
+                print(f"[TaskScheduler] Server {server_id} rebooted successfully")
+            else:
+                # Server not running, just start it
+                self.server_manager.start_server(server_id)
+                print(f"[TaskScheduler] Server {server_id} was not running, started it")
+        except Exception as e:
+            print(f"[TaskScheduler] Failed to reboot server {server_id}: {e}")
+    
+    def _execute_command(self, server_id, task):
+        """Execute a custom server command"""
+        try:
+            command = task.get('command', '')
+            if command and self.server_manager.is_running(server_id):
+                self.server_manager.send_command(server_id, command)
+                print(f"[TaskScheduler] Executed command '{command}' on server {server_id}")
+            elif not command:
+                print(f"[TaskScheduler] No command specified for task")
+            else:
+                print(f"[TaskScheduler] Server {server_id} is not running, cannot execute command")
+        except Exception as e:
+            print(f"[TaskScheduler] Failed to execute command on server {server_id}: {e}")
+    
+    def create_task(self, server_id, task_config):
+        """Create a new task for a server"""
+        if 'tasks' not in self.tasks:
+            self.tasks['tasks'] = {}
+        if server_id not in self.tasks['tasks']:
+            self.tasks['tasks'][server_id] = {}
+        
+        # Generate task ID
+        task_id = str(int(datetime.now().timestamp() * 1000))
+        
+        self.tasks['tasks'][server_id][task_id] = {
+            'id': task_id,
+            'name': task_config.get('name', 'Unnamed Task'),
+            'action': task_config.get('action', 'START'),
+            'interval': task_config.get('interval', '0 3 * * *'),
+            'command': task_config.get('command', ''),
+            'runs': task_config.get('runs', 0),
+            'runCount': 0,
+            'enabled': task_config.get('enabled', True),
+            'deleteAfterExecution': task_config.get('deleteAfterExecution', False),
+            'deleteAfterRunsCount': task_config.get('deleteAfterRunsCount', False),
+            'createdAt': datetime.now().isoformat(),
+            'lastRun': None
+        }
+        
+        self._save_tasks()
+        
+        if task_config.get('enabled', True):
+            self._add_job(server_id, task_id, self.tasks['tasks'][server_id][task_id])
+        
+        return self.tasks['tasks'][server_id][task_id]
+    
+    def update_task(self, server_id, task_id, task_config):
+        """Update an existing task"""
+        if server_id not in self.tasks.get('tasks', {}) or task_id not in self.tasks['tasks'][server_id]:
+            return None
+        
+        task = self.tasks['tasks'][server_id][task_id]
+        
+        # Update fields
+        task['name'] = task_config.get('name', task['name'])
+        task['action'] = task_config.get('action', task['action'])
+        task['interval'] = task_config.get('interval', task['interval'])
+        task['command'] = task_config.get('command', task.get('command', ''))
+        task['runs'] = task_config.get('runs', task['runs'])
+        task['enabled'] = task_config.get('enabled', task['enabled'])
+        task['deleteAfterExecution'] = task_config.get('deleteAfterExecution', task['deleteAfterExecution'])
+        task['deleteAfterRunsCount'] = task_config.get('deleteAfterRunsCount', task['deleteAfterRunsCount'])
+        
+        self._save_tasks()
+        
+        # Update or remove job
+        if task['enabled']:
+            self._add_job(server_id, task_id, task)
+        else:
+            try:
+                self.scheduler.remove_job(f"task_{server_id}_{task_id}")
+            except:
+                pass
+        
+        return task
+    
+    def delete_task(self, server_id, task_id):
+        """Delete a task"""
+        if server_id in self.tasks.get('tasks', {}) and task_id in self.tasks['tasks'][server_id]:
+            del self.tasks['tasks'][server_id][task_id]
+            self._save_tasks()
+            
+            try:
+                self.scheduler.remove_job(f"task_{server_id}_{task_id}")
+            except:
+                pass
+            
+            return True
+        return False
+    
+    def get_tasks(self, server_id):
+        """Get all tasks for a server"""
+        tasks = self.tasks.get('tasks', {}).get(server_id, {})
+        result = []
+        
+        for task_id, task in tasks.items():
+            task_copy = task.copy()
+            # Add next run time if job exists
+            try:
+                job = self.scheduler.get_job(f"task_{server_id}_{task_id}")
+                if job and job.next_run_time:
+                    task_copy['nextRun'] = job.next_run_time.isoformat()
+            except:
+                pass
+            result.append(task_copy)
+        
+        return result
+    
+    def get_task(self, server_id, task_id):
+        """Get a specific task"""
+        task = self.tasks.get('tasks', {}).get(server_id, {}).get(task_id)
+        if task:
+            task_copy = task.copy()
+            try:
+                job = self.scheduler.get_job(f"task_{server_id}_{task_id}")
+                if job and job.next_run_time:
+                    task_copy['nextRun'] = job.next_run_time.isoformat()
+            except:
+                pass
+            return task_copy
+        return None
 
 
 # ==================== User Management & RBAC ====================
@@ -1530,7 +1843,19 @@ class NBTEditor:
 nbt_editor = NBTEditor()
 
 
-# Multi-server state management
+# ==================== Server Status Enum ====================
+
+class ServerStatus(Enum):
+    """Server status states"""
+    STOPPED = "stopped"
+    STARTING = "starting"
+    RUNNING = "running"
+    STOPPING = "stopping"
+    UNRESPONSIVE = "unresponsive"
+
+
+# ==================== Server Manager ====================
+
 class ServerManager:
     """Manages multiple Minecraft server instances"""
     
@@ -1563,6 +1888,7 @@ class ServerManager:
                 
             instance = self.servers.get(server_id)
             is_running = instance is not None and instance.is_running()
+            status = instance.get_status().value if instance else ServerStatus.STOPPED.value
             
             # Get server port if available
             port = self.get_server_port(server_id)
@@ -1580,6 +1906,7 @@ class ServerManager:
                 'created': server_config.get('created'),
                 'approved': is_approved,
                 'running': is_running,
+                'status': status,
                 'port': port
             })
         return servers
@@ -2100,11 +2427,19 @@ class ServerInstance:
         self.process = None
         self.output_buffer = []
         self.max_buffer_size = 1000
+        self.status = ServerStatus.STOPPED
+        self.start_time = None
+        self.server_port = None
+        self._status_monitor_thread = None
+        self._stop_status_monitor = False
     
     def start(self):
         """Start the server process"""
         # Clear the output buffer on start for fresh logs
         self.output_buffer = []
+        self.status = ServerStatus.STARTING
+        self.start_time = time.time()
+        self.server_port = None  # Will be read from properties
         
         args = ['java'] + self.java_args.split() + ['-jar', self.executable, 'nogui']
         
@@ -2123,9 +2458,17 @@ class ServerInstance:
             env=env
         )
         
-        # Start single unified output reader thread
+        # Start threads
         threading.Thread(target=self._read_output_unbuffered, daemon=True).start()
         threading.Thread(target=self._monitor_process, daemon=True).start()
+        
+        # Start status monitoring
+        self._stop_status_monitor = False
+        self._status_monitor_thread = threading.Thread(target=self._monitor_status, daemon=True)
+        self._status_monitor_thread.start()
+        
+        # Broadcast initial status
+        self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': True})
     
     def _read_output_unbuffered(self):
         """Read output from the process in real-time and broadcast to clients"""
@@ -2164,8 +2507,10 @@ class ServerInstance:
         if self.process:
             self.process.wait()
             code = self.process.returncode
+            self._stop_status_monitor = True
+            self.status = ServerStatus.STOPPED
             self._broadcast({'type': 'info', 'data': f'Server stopped with code {code}\n', 'serverId': self.server_id})
-            self._broadcast({'type': 'status', 'serverId': self.server_id, 'running': False})
+            self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': False})
     
     def _broadcast(self, data):
         """Broadcast message to all clients"""
@@ -2176,6 +2521,83 @@ class ServerInstance:
         self.output_buffer.append(line)
         if len(self.output_buffer) > self.max_buffer_size:
             self.output_buffer.pop(0)
+    
+    def _check_tcp_port(self, port, timeout=1):
+        """Check if server is responding on TCP port"""
+        if not port:
+            return False
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex(('localhost', port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+    
+    def _get_server_port(self):
+        """Extract server port from server.properties"""
+        if self.server_port:
+            return self.server_port
+        
+        props_file = self.server_path / 'server.properties'
+        if props_file.exists():
+            try:
+                with open(props_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('server-port='):
+                            self.server_port = int(line.split('=')[1])
+                            return self.server_port
+            except Exception:
+                pass
+        return 25565  # Default Minecraft port
+    
+    def _monitor_status(self):
+        """Background thread to monitor server status"""
+        while not self._stop_status_monitor:
+            if self.process is None or self.process.poll() is not None:
+                # Process not running
+                if self.status != ServerStatus.STOPPED:
+                    self.status = ServerStatus.STOPPED
+                    self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value})
+                time.sleep(2)
+                continue
+            
+            # Process is running, check state
+            elapsed = time.time() - self.start_time if self.start_time else 0
+            port = self._get_server_port()
+            tcp_responsive = self._check_tcp_port(port)
+            
+            new_status = None
+            
+            if tcp_responsive:
+                # Server is responding on TCP port
+                if self.status != ServerStatus.RUNNING:
+                    new_status = ServerStatus.RUNNING
+            elif elapsed < 30:
+                # Within startup grace period
+                if self.status != ServerStatus.STARTING:
+                    new_status = ServerStatus.STARTING
+            else:
+                # Process running but not responding after 30s
+                if self.status != ServerStatus.UNRESPONSIVE:
+                    new_status = ServerStatus.UNRESPONSIVE
+            
+            if new_status and new_status != self.status:
+                self.status = new_status
+                self._broadcast({
+                    'type': 'status',
+                    'serverId': self.server_id,
+                    'status': self.status.value,
+                    'running': self.status in [ServerStatus.STARTING, ServerStatus.RUNNING, ServerStatus.UNRESPONSIVE]
+                })
+            
+            time.sleep(2)  # Check every 2 seconds
+    
+    def get_status(self):
+        """Get current server status"""
+        return self.status
     
     def is_running(self):
         """Check if the server is running"""
@@ -2191,6 +2613,8 @@ class ServerInstance:
     def stop(self):
         """Stop the server gracefully by sending 'stop' command"""
         if self.is_running():
+            self.status = ServerStatus.STOPPING
+            self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': True})
             self.send_command('stop')
             
             def force_kill():
@@ -2203,8 +2627,12 @@ class ServerInstance:
     def kill(self):
         """Forcefully kill the server process immediately"""
         if self.is_running():
+            self.status = ServerStatus.STOPPING
+            self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value})
             self.process.kill()
             self.process.wait()
+            self._stop_status_monitor = True
+            self.status = ServerStatus.STOPPED
     
     def get_recent_output(self, lines=100):
         """Get recent output from the buffer"""
@@ -2216,6 +2644,9 @@ server_manager = ServerManager()
 
 # Initialize backup scheduler
 backup_scheduler = BackupScheduler()
+
+# Initialize task scheduler
+task_scheduler = TaskScheduler(server_manager, socketio)
 
 
 def is_safe_path(base_path, requested_path):
@@ -2965,6 +3396,22 @@ def write_server_file(server_id):
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/logs', methods=['GET'])
+@server_access_required
+def read_server_logs(server_id):
+    """Read latest.log from the logs folder"""
+    server_path = server_manager.get_server_path(server_id)
+    logs_path = server_path / 'logs' / 'latest.log'
+    
+    if not logs_path.exists():
+        return jsonify({'content': 'No logs available. The server may not have been started yet.', 'success': False})
+    
+    try:
+        content = logs_path.read_text(encoding='utf-8', errors='replace')
+        return jsonify({'content': content, 'success': True})
+    except Exception as e:
+        return jsonify({'content': f'Error reading logs: {str(e)}', 'success': False})
 
 # ==================== NBT File Endpoints ====================
 
@@ -4012,6 +4459,88 @@ def get_all_backup_schedules():
             user_schedules[server_id] = schedule
     
     return jsonify({'schedules': user_schedules})
+
+
+# ==================== Task Scheduler API ====================
+
+@app.route('/api/servers/<server_id>/tasks', methods=['GET'])
+@server_access_required
+def get_server_tasks(server_id):
+    """Get all tasks for a server"""
+    tasks = task_scheduler.get_tasks(server_id)
+    return jsonify({'tasks': tasks})
+
+@app.route('/api/servers/<server_id>/tasks', methods=['POST'])
+@server_access_required
+def create_server_task(server_id):
+    """Create a new task for a server"""
+    data = request.get_json()
+    
+    # Validate server exists
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    # Validate required fields
+    if not data.get('name'):
+        return jsonify({'error': 'Task name is required'}), 400
+    
+    if not data.get('action'):
+        return jsonify({'error': 'Task action is required'}), 400
+    
+    if data.get('action') == 'COMMAND' and not data.get('command'):
+        return jsonify({'error': 'Command is required for COMMAND action'}), 400
+    
+    task = task_scheduler.create_task(server_id, {
+        'name': data.get('name'),
+        'action': data.get('action', 'START'),
+        'interval': data.get('interval', '0 3 * * *'),
+        'command': data.get('command', ''),
+        'runs': data.get('runs', 0),
+        'enabled': data.get('enabled', True),
+        'deleteAfterExecution': data.get('deleteAfterExecution', False),
+        'deleteAfterRunsCount': data.get('deleteAfterRunsCount', False)
+    })
+    
+    return jsonify({'success': True, 'task': task})
+
+@app.route('/api/servers/<server_id>/tasks/<task_id>', methods=['GET'])
+@server_access_required
+def get_server_task(server_id, task_id):
+    """Get a specific task"""
+    task = task_scheduler.get_task(server_id, task_id)
+    if task:
+        return jsonify({'task': task})
+    return jsonify({'error': 'Task not found'}), 404
+
+@app.route('/api/servers/<server_id>/tasks/<task_id>', methods=['PUT'])
+@server_access_required
+def update_server_task(server_id, task_id):
+    """Update an existing task"""
+    data = request.get_json()
+    
+    task = task_scheduler.update_task(server_id, task_id, {
+        'name': data.get('name'),
+        'action': data.get('action'),
+        'interval': data.get('interval'),
+        'command': data.get('command', ''),
+        'runs': data.get('runs'),
+        'enabled': data.get('enabled'),
+        'deleteAfterExecution': data.get('deleteAfterExecution'),
+        'deleteAfterRunsCount': data.get('deleteAfterRunsCount')
+    })
+    
+    if task:
+        return jsonify({'success': True, 'task': task})
+    return jsonify({'error': 'Task not found'}), 404
+
+@app.route('/api/servers/<server_id>/tasks/<task_id>', methods=['DELETE'])
+@server_access_required
+def delete_server_task(server_id, task_id):
+    """Delete a task"""
+    if task_scheduler.delete_task(server_id, task_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Task not found'}), 404
 
 
 # ==================== Settings API ====================
