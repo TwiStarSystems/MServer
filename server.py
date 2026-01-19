@@ -19,6 +19,7 @@ import requests
 import hashlib
 import secrets
 import socket
+import select
 from enum import Enum
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2474,31 +2475,39 @@ class ServerInstance:
         """Read output from the process in real-time and broadcast to clients"""
         try:
             buffer = b''
+            fd = self.process.stdout.fileno()
+            
             while self.process.poll() is None:
-                # Read available data in larger chunks for better performance
-                chunk = self.process.stdout.read(4096)
-                if chunk:
-                    buffer += chunk
-                    # Process all complete lines in the buffer
-                    while b'\n' in buffer:
-                        line_bytes, buffer = buffer.split(b'\n', 1)
-                        line_bytes += b'\n'
-                        try:
-                            line = line_bytes.decode('utf-8', errors='replace')
-                        except:
-                            line = line_bytes.decode('latin-1', errors='replace')
-                        self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
-                        self._add_to_buffer(line)
-                    
-                    # If we have partial line data (no newline yet), send it immediately
-                    if buffer and len(buffer) > 0:
-                        try:
-                            line = buffer.decode('utf-8', errors='replace')
-                        except:
-                            line = buffer.decode('latin-1', errors='replace')
-                        self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
-                        self._add_to_buffer(line)
-                        buffer = b''
+                # Use select to check if data is available (timeout 0.1s for responsiveness)
+                ready, _, _ = select.select([fd], [], [], 0.1)
+                
+                if ready:
+                    # Data is available, read it
+                    chunk = os.read(fd, 4096)
+                    if chunk:
+                        buffer += chunk
+                        
+                        # Process all complete lines in the buffer
+                        while b'\n' in buffer:
+                            line_bytes, buffer = buffer.split(b'\n', 1)
+                            line_bytes += b'\n'
+                            try:
+                                line = line_bytes.decode('utf-8', errors='replace')
+                            except:
+                                line = line_bytes.decode('latin-1', errors='replace')
+                            self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
+                            self._add_to_buffer(line)
+                        
+                        # Send partial line immediately if it's been sitting in buffer
+                        # This ensures progress bars and non-newline terminated output appears
+                        if buffer and len(buffer) > 0:
+                            try:
+                                line = buffer.decode('utf-8', errors='replace')
+                            except:
+                                line = buffer.decode('latin-1', errors='replace')
+                            self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
+                            self._add_to_buffer(line)
+                            buffer = b''
             
             # Read any remaining output after process exits
             remaining = self.process.stdout.read()

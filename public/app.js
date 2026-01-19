@@ -454,7 +454,7 @@ async function startServer() {
     const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
     if (result.success) {
       appendTerminalOutput('Starting server...\n');
-      updateServerStatus(true);
+      updateServerStatus('starting', false);
     }
   } catch (error) {
     // Error already shown by apiRequest
