@@ -300,6 +300,18 @@ async function loadServerDetails() {
     // Update header
     document.getElementById('server-name').textContent = server.name;
     updateServerStatus(server.running);
+    
+    // Show/hide Mods tab based on server category
+    const modsTabBtn = document.getElementById('mods-tab-btn');
+    if (server.category === 'modded') {
+      modsTabBtn.style.display = '';
+    } else {
+      modsTabBtn.style.display = 'none';
+      // If currently on mods tab, switch to terminal
+      if (document.querySelector('.tab-button.active[data-tab="mods"]')) {
+        switchTab('terminal');
+      }
+    }
   } catch (error) {
     console.error('Failed to load server details:', error);
   }
@@ -571,25 +583,38 @@ async function openAddServerModal() {
   
   // Reset fresh server form
   document.getElementById('fresh-name').value = '';
-  document.getElementById('fresh-type').value = '';
+  document.getElementById('fresh-category').value = '';
   document.getElementById('fresh-version').value = '';
   document.getElementById('fresh-version').disabled = true;
   document.getElementById('fresh-jar-name').value = 'server.jar';
-  document.getElementById('fresh-java-args').value = '-Xmx2G -Xms1G';
+  document.getElementById('fresh-min-ram').value = '1G';
+  document.getElementById('fresh-max-ram').value = '2G';
   document.getElementById('fresh-upload-jar').checked = false;
   document.getElementById('custom-jar-upload').style.display = 'none';
+  
+  // Hide conditional fields
+  document.getElementById('engine-group').style.display = 'none';
+  document.getElementById('version-group').style.display = 'none';
+  document.getElementById('jar-name-group').style.display = 'none';
+  document.getElementById('ram-fields-group').style.display = 'none';
+  document.getElementById('upload-jar-group').style.display = 'none';
   
   // Reset import form
   document.getElementById('import-name').value = '';
   document.getElementById('import-file').value = '';
-  document.getElementById('import-java-args').value = '-Xmx2G -Xms1G';
+  document.getElementById('import-category').value = 'unmodded';
+  document.getElementById('import-jar-name').value = 'server.jar';
+  document.getElementById('import-min-ram').value = '1G';
+  document.getElementById('import-max-ram').value = '2G';
   
   // Reset manual form with default path placeholder
   document.getElementById('input-name').value = '';
+  document.getElementById('input-category').value = 'unmodded';
   document.getElementById('input-path').value = '';
   document.getElementById('input-path').placeholder = defaultServerPath ? `${defaultServerPath}/<server-id>` : '/path/to/minecraft/server';
   document.getElementById('input-executable').value = 'server.jar';
-  document.getElementById('input-java-args').value = '-Xmx2G -Xms1G';
+  document.getElementById('input-min-ram').value = '1G';
+  document.getElementById('input-max-ram').value = '2G';
   
   // Update path hint with actual default path
   const pathHint = document.getElementById('path-hint');
@@ -597,8 +622,8 @@ async function openAddServerModal() {
     pathHint.innerHTML = `Leave empty to auto-create in <code>${defaultServerPath}/</code>`;
   }
   
-  // Load server types for fresh server option
-  loadServerTypes();
+  // Load server engines for fresh server option
+  loadServerEngines();
   
   document.getElementById('server-modal').classList.add('active');
 }
@@ -633,63 +658,135 @@ function backToCreationType() {
   document.getElementById('creation-type-section').style.display = 'block';
 }
 
-async function loadServerTypes() {
+// Handle category change for fresh server form
+function onCategoryChange() {
+  const category = document.getElementById('fresh-category').value;
+  const engineGroup = document.getElementById('engine-group');
+  const versionGroup = document.getElementById('version-group');
+  const jarNameGroup = document.getElementById('jar-name-group');
+  const ramFieldsGroup = document.getElementById('ram-fields-group');
+  const uploadJarGroup = document.getElementById('upload-jar-group');
+  const versionSelect = document.getElementById('fresh-version');
+  const categoryDesc = document.getElementById('category-description');
+  
+  if (!category) {
+    // Hide all conditional fields
+    engineGroup.style.display = 'none';
+    versionGroup.style.display = 'none';
+    jarNameGroup.style.display = 'none';
+    ramFieldsGroup.style.display = 'none';
+    uploadJarGroup.style.display = 'none';
+    categoryDesc.textContent = 'Choose whether you want a vanilla or modded server';
+    return;
+  }
+  
+  if (category === 'unmodded') {
+    // Unmodded: Hide engine, show version directly
+    engineGroup.style.display = 'none';
+    versionGroup.style.display = 'block';
+    jarNameGroup.style.display = 'block';
+    ramFieldsGroup.style.display = 'block';
+    uploadJarGroup.style.display = 'block';
+    categoryDesc.textContent = 'Official Minecraft server - no mods or plugins';
+    
+    // Load vanilla versions
+    loadVersionsForEngine('vanilla');
+  } else if (category === 'modded') {
+    // Modded: Show engine selector
+    engineGroup.style.display = 'block';
+    versionGroup.style.display = 'none';
+    jarNameGroup.style.display = 'none';
+    ramFieldsGroup.style.display = 'none';
+    uploadJarGroup.style.display = 'none';
+    categoryDesc.textContent = 'Supports plugins and/or mods';
+    
+    // Reset engine and version
+    document.getElementById('fresh-engine').value = '';
+    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
+    versionSelect.disabled = true;
+  }
+}
+
+async function loadServerEngines() {
   try {
-    const result = await apiRequest('/api/server-types');
-    serverTypes = result.types || [];
+    const result = await apiRequest('/api/server-engines');
+    serverTypes = result.engines || [];
     
-    const typeSelect = document.getElementById('fresh-type');
+    const engineSelect = document.getElementById('fresh-engine');
     
-    if (serverTypes.length === 0) {
-      typeSelect.innerHTML = '<option value="">No server JARs available</option>';
-      typeSelect.disabled = true;
-      document.getElementById('type-description').textContent = 
-        'No server JAR files found. Use the Settings page JAR Downloader to download server files first.';
+    // Filter to only modded engines (exclude vanilla)
+    const moddedEngines = serverTypes.filter(e => e.id !== 'vanilla');
+    
+    if (moddedEngines.length === 0) {
+      engineSelect.innerHTML = '<option value="">No modded server JARs available</option>';
+      engineSelect.disabled = true;
+      document.getElementById('engine-description').textContent = 
+        'No modded server JAR files found. Use the Settings page JAR Downloader to download server files first.';
       return;
     }
     
-    typeSelect.innerHTML = '<option value="">Select server type...</option>';
-    typeSelect.disabled = false;
+    engineSelect.innerHTML = '<option value="">Select server engine...</option>';
+    engineSelect.disabled = false;
     
-    serverTypes.forEach(type => {
+    moddedEngines.forEach(engine => {
       const option = document.createElement('option');
-      option.value = type.id;
+      option.value = engine.id;
       // Show JAR count in the option text
-      const jarCount = type.jarCount || 0;
-      option.textContent = `${type.name} (${jarCount} ${jarCount === 1 ? 'version' : 'versions'})`;
-      option.dataset.description = type.description || '';
-      typeSelect.appendChild(option);
+      const jarCount = engine.jarCount || 0;
+      option.textContent = `${engine.name} (${jarCount} ${jarCount === 1 ? 'version' : 'versions'})`;
+      option.dataset.description = engine.description || '';
+      engineSelect.appendChild(option);
     });
   } catch (error) {
-    console.error('Failed to load server types:', error);
-    const typeSelect = document.getElementById('fresh-type');
-    typeSelect.innerHTML = '<option value="">Error loading server types</option>';
+    console.error('Failed to load server engines:', error);
+    const engineSelect = document.getElementById('fresh-engine');
+    engineSelect.innerHTML = '<option value="">Error loading server engines</option>';
   }
 }
 
 async function loadVersions() {
-  const typeSelect = document.getElementById('fresh-type');
+  const engineSelect = document.getElementById('fresh-engine');
   const versionSelect = document.getElementById('fresh-version');
-  const typeDesc = document.getElementById('type-description');
+  const engineDesc = document.getElementById('engine-description');
+  const versionGroup = document.getElementById('version-group');
+  const jarNameGroup = document.getElementById('jar-name-group');
+  const ramFieldsGroup = document.getElementById('ram-fields-group');
+  const uploadJarGroup = document.getElementById('upload-jar-group');
   
-  const serverType = typeSelect.value;
+  const serverEngine = engineSelect.value;
   
-  if (!serverType) {
-    versionSelect.innerHTML = '<option value="">Select server type first...</option>';
+  if (!serverEngine) {
+    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
     versionSelect.disabled = true;
-    typeDesc.textContent = '';
+    versionGroup.style.display = 'none';
+    jarNameGroup.style.display = 'none';
+    ramFieldsGroup.style.display = 'none';
+    uploadJarGroup.style.display = 'none';
+    engineDesc.textContent = '';
     return;
   }
   
-  // Show type description
-  const selectedOption = typeSelect.options[typeSelect.selectedIndex];
-  typeDesc.textContent = selectedOption.dataset.description || '';
+  // Show engine description
+  const selectedOption = engineSelect.options[engineSelect.selectedIndex];
+  engineDesc.textContent = selectedOption.dataset.description || '';
+  
+  // Show remaining fields
+  versionGroup.style.display = 'block';
+  jarNameGroup.style.display = 'block';
+  ramFieldsGroup.style.display = 'block';
+  uploadJarGroup.style.display = 'block';
+  
+  await loadVersionsForEngine(serverEngine);
+}
+
+async function loadVersionsForEngine(serverEngine) {
+  const versionSelect = document.getElementById('fresh-version');
   
   try {
     versionSelect.innerHTML = '<option value="">Loading versions...</option>';
     versionSelect.disabled = true;
     
-    const result = await apiRequest(`/api/server-types/${serverType}/versions`);
+    const result = await apiRequest(`/api/server-engines/${serverEngine}/versions`);
     const versions = result.versions || [];
     
     versionSelect.innerHTML = '<option value="">Select version...</option>';
@@ -729,7 +826,16 @@ async function openEditServerModal() {
     document.getElementById('input-name').value = server.name || '';
     document.getElementById('input-path').value = server.serverPath || '';
     document.getElementById('input-executable').value = server.executable || 'server.jar';
-    document.getElementById('input-java-args').value = server.javaArgs || '-Xmx2G -Xms1G';
+    document.getElementById('input-category').value = server.category || 'unmodded';
+    
+    // Parse RAM values from javaArgs
+    const javaArgs = server.javaArgs || '-Xms1G -Xmx2G';
+    const minRamMatch = javaArgs.match(/-Xms(\d+[GMK])/i);
+    const maxRamMatch = javaArgs.match(/-Xmx(\d+[GMK])/i);
+    
+    document.getElementById('input-min-ram').value = minRamMatch ? minRamMatch[1] : '1G';
+    document.getElementById('input-max-ram').value = maxRamMatch ? maxRamMatch[1] : '2G';
+    
     document.getElementById('server-modal').classList.add('active');
   } catch (error) {
     console.error('Failed to load server for editing:', error);
@@ -746,11 +852,17 @@ function closeServerModal() {
 async function saveServer(e) {
   e.preventDefault();
   
+  const category = document.getElementById('input-category').value;
+  const minRam = document.getElementById('input-min-ram').value;
+  const maxRam = document.getElementById('input-max-ram').value;
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
+  
   const serverData = {
     name: document.getElementById('input-name').value,
     serverPath: document.getElementById('input-path').value,
     executable: document.getElementById('input-executable').value,
-    javaArgs: document.getElementById('input-java-args').value
+    javaArgs: javaArgs,
+    category: category
   };
   
   try {
@@ -794,14 +906,29 @@ async function createFreshServer(e) {
   e.preventDefault();
   
   const name = document.getElementById('fresh-name').value;
-  const serverType = document.getElementById('fresh-type').value;
+  const category = document.getElementById('fresh-category').value;
+  const serverEngine = category === 'modded' 
+    ? document.getElementById('fresh-engine').value 
+    : 'vanilla';
   const version = document.getElementById('fresh-version').value;
   const executable = document.getElementById('fresh-jar-name').value || 'server.jar';
-  const javaArgs = document.getElementById('fresh-java-args').value || '-Xmx2G -Xms1G';
+  const minRam = document.getElementById('fresh-min-ram').value;
+  const maxRam = document.getElementById('fresh-max-ram').value;
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
   const uploadCustom = document.getElementById('fresh-upload-jar').checked;
   
-  if (!uploadCustom && (!serverType || !version)) {
-    showNotification('Please select a server type and version', 'error');
+  if (!category) {
+    showNotification('Please select a category', 'error');
+    return;
+  }
+  
+  if (category === 'modded' && !serverEngine) {
+    showNotification('Please select a server engine', 'error');
+    return;
+  }
+  
+  if (!uploadCustom && !version) {
+    showNotification('Please select a version', 'error');
     return;
   }
   
@@ -829,7 +956,8 @@ async function createFreshServer(e) {
           name,
           executable,
           javaArgs,
-          serverType: 'custom'
+          category,
+          serverEngine: 'custom'
         })
       });
       
@@ -859,7 +987,8 @@ async function createFreshServer(e) {
           name,
           executable,
           javaArgs,
-          serverType,
+          category,
+          serverEngine,
           version,
           downloadJar: true
         })
@@ -896,10 +1025,19 @@ async function importServer(e) {
   
   const name = document.getElementById('import-name').value;
   const fileInput = document.getElementById('import-file');
-  const javaArgs = document.getElementById('import-java-args').value || '-Xmx2G -Xms1G';
+  const jarName = document.getElementById('import-jar-name').value || 'server.jar';
+  const category = document.getElementById('import-category').value;
+  const minRam = document.getElementById('import-min-ram').value;
+  const maxRam = document.getElementById('import-max-ram').value;
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
   
   if (!fileInput.files.length) {
     showNotification('Please select a ZIP file to import', 'error');
+    return;
+  }
+  
+  if (!category) {
+    showNotification('Please select a category', 'error');
     return;
   }
   
@@ -913,7 +1051,9 @@ async function importServer(e) {
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
     formData.append('name', name);
+    formData.append('jarName', jarName);
     formData.append('javaArgs', javaArgs);
+    formData.append('category', category);
     
     const response = await fetch('/api/servers/import', {
       method: 'POST',
@@ -950,16 +1090,21 @@ async function importServer(e) {
 function toggleCustomJarUpload() {
   const checkbox = document.getElementById('fresh-upload-jar');
   const customSection = document.getElementById('custom-jar-upload');
-  const typeGroup = document.getElementById('fresh-type').closest('.form-group');
+  const categoryGroup = document.getElementById('fresh-category').closest('.form-group');
+  const engineGroup = document.getElementById('fresh-engine').closest('.form-group');
   const versionGroup = document.getElementById('fresh-version').closest('.form-group');
   
   if (checkbox.checked) {
     customSection.style.display = 'block';
-    typeGroup.style.display = 'none';
+    categoryGroup.style.display = 'none';
+    engineGroup.style.display = 'none';
     versionGroup.style.display = 'none';
   } else {
     customSection.style.display = 'none';
-    typeGroup.style.display = 'block';
+    categoryGroup.style.display = 'block';
+    // Engine visibility depends on category selection
+    const category = document.getElementById('fresh-category').value;
+    engineGroup.style.display = category === 'modded' ? 'block' : 'none';
     versionGroup.style.display = 'block';
   }
 }
@@ -2010,7 +2155,204 @@ function switchTab(tabName) {
     loadBackups();
   } else if (tabName === 'players') {
     loadAllPlayerData();
+  } else if (tabName === 'mods') {
+    loadMods();
   }
+}
+
+// ==================== Mods Management ====================
+
+async function loadMods() {
+  if (!currentServerId) return;
+  
+  const pluginsList = document.getElementById('plugins-list');
+  const modsList = document.getElementById('mods-list');
+  
+  pluginsList.innerHTML = '<tr><td colspan="4" class="empty-message">Loading plugins...</td></tr>';
+  modsList.innerHTML = '<tr><td colspan="4" class="empty-message">Loading mods...</td></tr>';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/mods`);
+    
+    // Render plugins
+    if (data.plugins && data.plugins.length > 0) {
+      pluginsList.innerHTML = '';
+      data.plugins.forEach(plugin => {
+        pluginsList.appendChild(createModRow(plugin, 'plugins'));
+      });
+    } else {
+      pluginsList.innerHTML = '<tr><td colspan="4" class="empty-message">No plugins installed</td></tr>';
+    }
+    
+    // Render mods
+    if (data.mods && data.mods.length > 0) {
+      modsList.innerHTML = '';
+      data.mods.forEach(mod => {
+        modsList.appendChild(createModRow(mod, 'mods'));
+      });
+    } else {
+      modsList.innerHTML = '<tr><td colspan="4" class="empty-message">No mods installed</td></tr>';
+    }
+  } catch (error) {
+    console.error('Failed to load mods:', error);
+    pluginsList.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load plugins</td></tr>';
+    modsList.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load mods</td></tr>';
+  }
+}
+
+function createModRow(mod, type) {
+  const row = document.createElement('tr');
+  
+  const nameCell = document.createElement('td');
+  nameCell.innerHTML = `<span class="file-icon">📦</span> ${escapeHtml(mod.name)}`;
+  
+  const sizeCell = document.createElement('td');
+  sizeCell.textContent = formatBytes(mod.size);
+  
+  const modifiedCell = document.createElement('td');
+  modifiedCell.textContent = mod.modified ? new Date(mod.modified).toLocaleString() : '-';
+  
+  const actionsCell = document.createElement('td');
+  const actionsDiv = document.createElement('div');
+  actionsDiv.className = 'file-actions-cell';
+  
+  const toggleBtn = document.createElement('button');
+  const isEnabled = !mod.name.endsWith('.disabled');
+  toggleBtn.textContent = isEnabled ? 'Disable' : 'Enable';
+  toggleBtn.className = `btn btn-small action-btn ${isEnabled ? '' : 'btn-success'}`;
+  toggleBtn.onclick = () => toggleMod(mod.name, type, isEnabled);
+  actionsDiv.appendChild(toggleBtn);
+  
+  const deleteBtn = document.createElement('button');
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.className = 'btn btn-danger btn-small action-btn';
+  deleteBtn.onclick = () => deleteMod(mod.name, type);
+  actionsDiv.appendChild(deleteBtn);
+  
+  actionsCell.appendChild(actionsDiv);
+  
+  row.appendChild(nameCell);
+  row.appendChild(sizeCell);
+  row.appendChild(modifiedCell);
+  row.appendChild(actionsCell);
+  
+  return row;
+}
+
+async function toggleMod(filename, type, isEnabled) {
+  if (!currentServerId) return;
+  
+  const action = isEnabled ? 'disable' : 'enable';
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/mods/${type}/${encodeURIComponent(filename)}/${action}`, {
+      method: 'POST'
+    });
+    showNotification(`Mod ${action}d successfully`, 'success');
+    loadMods();
+  } catch (error) {
+    console.error('Failed to toggle mod:', error);
+  }
+}
+
+async function deleteMod(filename, type) {
+  if (!currentServerId) return;
+  
+  if (!confirm(`Are you sure you want to delete "${filename}"? This cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/mods/${type}/${encodeURIComponent(filename)}`, {
+      method: 'DELETE'
+    });
+    showNotification('Mod deleted successfully', 'success');
+    loadMods();
+  } catch (error) {
+    console.error('Failed to delete mod:', error);
+  }
+}
+
+async function uploadMod(file, type) {
+  if (!currentServerId || !file) return;
+  
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('type', type);
+  
+  try {
+    const response = await fetch(`/api/servers/${currentServerId}/mods/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Upload failed');
+    }
+    
+    showNotification('Mod uploaded successfully', 'success');
+    loadMods();
+  } catch (error) {
+    console.error('Failed to upload mod:', error);
+    showNotification('Failed to upload mod: ' + error.message, 'error');
+  }
+}
+
+function showModUploadDialog() {
+  return new Promise((resolve) => {
+    // Remove existing modal if any
+    const existing = document.getElementById('mod-upload-dialog');
+    if (existing) existing.remove();
+    
+    const modal = document.createElement('div');
+    modal.id = 'mod-upload-dialog';
+    modal.className = 'modal active';
+    modal.innerHTML = `
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>📦 Upload Mod/Plugin</h2>
+          <button class="close-btn" onclick="this.closest('.modal').remove()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>Where would you like to upload the file(s)?</p>
+          <div class="mod-upload-choices">
+            <button class="btn btn-primary" id="upload-to-plugins">
+              🔌 Plugins Folder
+              <small>For Bukkit/Spigot/Paper plugins</small>
+            </button>
+            <button class="btn btn-primary" id="upload-to-mods">
+              🔧 Mods Folder
+              <small>For Forge/NeoForge/Fabric mods</small>
+            </button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="this.closest('.modal').remove()">Cancel</button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    document.getElementById('upload-to-plugins').onclick = () => {
+      modal.remove();
+      resolve('plugins');
+    };
+    
+    document.getElementById('upload-to-mods').onclick = () => {
+      modal.remove();
+      resolve('mods');
+    };
+    
+    // Cancel on backdrop click
+    modal.onclick = (e) => {
+      if (e.target === modal) {
+        modal.remove();
+        resolve(null);
+      }
+    };
+  });
 }
 
 // ==================== Player Management ====================
@@ -2456,6 +2798,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
   
+  // Mods controls
+  document.getElementById('refresh-mods-btn').onclick = loadMods;
+  
+  document.getElementById('mod-upload').onchange = async (e) => {
+    if (e.target.files.length > 0) {
+      // Ask user which folder to upload to
+      const choice = await showModUploadDialog();
+      if (choice) {
+        for (const file of e.target.files) {
+          await uploadMod(file, choice);
+        }
+      }
+      e.target.value = '';
+    }
+  };
+  
   // File editor
   document.getElementById('save-file-btn').onclick = saveFile;
   
@@ -2630,21 +2988,77 @@ async function changeUserRole(userId, role) {
 }
 
 async function resetUserPassword(userId) {
-  const newPassword = prompt('Enter new password (min 8 characters):');
-  if (!newPassword) return;
-  if (newPassword.length < 8) {
-    alert('Password must be at least 8 characters');
+  openPasswordResetModal(userId);
+}
+
+function openPasswordResetModal(userId) {
+  const modal = document.createElement('div');
+  modal.id = 'password-reset-modal';
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h2>Reset User Password</h2>
+        <button class="close-btn" onclick="closePasswordResetModal()">&times;</button>
+      </div>
+      <form id="password-reset-form" onsubmit="submitPasswordReset(event, '${userId}')">
+        <div class="form-group">
+          <label for="reset-new-password">New Password</label>
+          <input type="password" id="reset-new-password" class="form-control" required minlength="6" placeholder="Enter new password (min 6 characters)">
+        </div>
+        <div class="form-group">
+          <label for="reset-confirm-password">Confirm Password</label>
+          <input type="password" id="reset-confirm-password" class="form-control" required minlength="6" placeholder="Confirm new password">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="closePasswordResetModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Reset Password</button>
+        </div>
+      </form>
+    </div>
+  `;
+  modal.style.display = 'flex';
+  document.body.appendChild(modal);
+  
+  modal.onclick = (e) => {
+    if (e.target.id === 'password-reset-modal') closePasswordResetModal();
+  };
+  
+  // Focus on first input
+  setTimeout(() => document.getElementById('reset-new-password').focus(), 100);
+}
+
+function closePasswordResetModal() {
+  const modal = document.getElementById('password-reset-modal');
+  if (modal) modal.remove();
+}
+
+async function submitPasswordReset(event, userId) {
+  event.preventDefault();
+  
+  const newPassword = document.getElementById('reset-new-password').value;
+  const confirmPassword = document.getElementById('reset-confirm-password').value;
+  
+  if (newPassword !== confirmPassword) {
+    showNotification('Passwords do not match', 'error');
+    return;
+  }
+  
+  if (newPassword.length < 6) {
+    showNotification('Password must be at least 6 characters', 'error');
     return;
   }
   
   try {
     await apiRequest(`/api/admin/users/${userId}/password`, {
-      method: 'PUT',
+      method: 'POST',
       body: JSON.stringify({ password: newPassword })
     });
-    alert('Password reset successfully');
+    showNotification('Password reset successfully', 'success');
+    closePasswordResetModal();
   } catch (err) {
     console.error('Failed to reset password:', err);
+    showNotification('Failed to reset password: ' + err.message, 'error');
   }
 }
 

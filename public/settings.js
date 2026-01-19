@@ -930,21 +930,76 @@ async function changeUserRole(userId, role) {
 }
 
 async function resetUserPassword(userId) {
-  const newPassword = prompt('Enter new password (min 8 characters):');
-  if (!newPassword) return;
-  if (newPassword.length < 8) {
-    alert('Password must be at least 8 characters');
+  openPasswordResetModal(userId);
+}
+
+function openPasswordResetModal(userId) {
+  const modal = document.createElement('div');
+  modal.id = 'password-reset-modal';
+  modal.className = 'modal';
+  modal.innerHTML = `
+    <div class="modal-content modal-small">
+      <div class="modal-header">
+        <h2>Reset User Password</h2>
+        <button class="close-btn" onclick="closePasswordResetModal()">&times;</button>
+      </div>
+      <form id="password-reset-form" onsubmit="submitPasswordReset(event, '${userId}')">
+        <div class="form-group">
+          <label for="reset-new-password">New Password</label>
+          <input type="password" id="reset-new-password" class="form-control" required minlength="6" placeholder="Enter new password (min 6 characters)">
+        </div>
+        <div class="form-group">
+          <label for="reset-confirm-password">Confirm Password</label>
+          <input type="password" id="reset-confirm-password" class="form-control" required minlength="6" placeholder="Confirm new password">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="closePasswordResetModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Reset Password</button>
+        </div>
+      </form>
+    </div>
+  `;
+  modal.style.display = 'flex';
+  document.body.appendChild(modal);
+  
+  modal.onclick = (e) => {
+    if (e.target.id === 'password-reset-modal') closePasswordResetModal();
+  };
+  
+  // Focus on first input
+  setTimeout(() => document.getElementById('reset-new-password').focus(), 100);
+}
+
+function closePasswordResetModal() {
+  const modal = document.getElementById('password-reset-modal');
+  if (modal) modal.remove();
+}
+
+async function submitPasswordReset(event, userId) {
+  event.preventDefault();
+  
+  const newPassword = document.getElementById('reset-new-password').value;
+  const confirmPassword = document.getElementById('reset-confirm-password').value;
+  
+  if (newPassword !== confirmPassword) {
+    alert('Passwords do not match');
+    return;
+  }
+  
+  if (newPassword.length < 6) {
+    alert('Password must be at least 6 characters');
     return;
   }
   
   try {
     const response = await fetch(`/api/admin/users/${userId}/password`, {
-      method: 'PUT',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: newPassword })
     });
     if (!response.ok) throw new Error('Failed to reset password');
     alert('Password reset successfully');
+    closePasswordResetModal();
   } catch (err) {
     console.error('Failed to reset password:', err);
     alert('Failed to reset password: ' + err.message);

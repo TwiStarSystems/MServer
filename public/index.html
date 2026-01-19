@@ -93,6 +93,7 @@
         <nav class="tabs">
           <button class="tab-button active" data-tab="terminal">Terminal</button>
           <button class="tab-button" data-tab="files">Files</button>
+          <button class="tab-button" data-tab="mods" id="mods-tab-btn" style="display: none;">Mods</button>
           <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
         </nav>
@@ -136,6 +137,57 @@
               <tbody id="file-list">
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- Mods Tab (for modded servers) -->
+        <div id="mods-tab" class="tab-content">
+          <div class="mods-container">
+            <div class="mods-header">
+              <h3>🧩 Server Mods & Plugins</h3>
+              <div class="mods-actions">
+                <label for="mod-upload" class="btn btn-success">Upload Mod/Plugin</label>
+                <input type="file" id="mod-upload" style="display: none;" accept=".jar" multiple>
+                <button id="refresh-mods-btn" class="btn">Refresh</button>
+              </div>
+            </div>
+            <p class="mods-info">Manage JAR files in your server's mods and plugins folders. Upload new mods or remove existing ones.</p>
+            
+            <div class="mods-section">
+              <h4>📦 Plugins</h4>
+              <p class="section-info">For Bukkit/Spigot/Paper compatible plugins</p>
+              <table class="mods-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Size</th>
+                    <th>Modified</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="plugins-list">
+                  <tr><td colspan="4" class="empty-message">No plugins installed</td></tr>
+                </tbody>
+              </table>
+            </div>
+            
+            <div class="mods-section">
+              <h4>🔧 Mods</h4>
+              <p class="section-info">For Forge/NeoForge/Fabric compatible mods</p>
+              <table class="mods-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Size</th>
+                    <th>Modified</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="mods-list">
+                  <tr><td colspan="4" class="empty-message">No mods installed</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -316,34 +368,77 @@
           </div>
           
           <div class="form-group">
-            <label for="fresh-type">Server Type:</label>
-            <select id="fresh-type" class="form-control" onchange="loadVersions()">
-              <option value="">Select server type...</option>
+            <label for="fresh-category">Category:</label>
+            <select id="fresh-category" class="form-control" onchange="onCategoryChange()">
+              <option value="">Select category...</option>
+              <option value="unmodded">Unmodded (Vanilla)</option>
+              <option value="modded">Modded (Paper, Folia, Purpur, etc.)</option>
             </select>
-            <small id="type-description" class="type-desc">Select from locally downloaded server JARs</small>
+            <small id="category-description" class="type-desc">Choose whether you want a vanilla or modded server</small>
           </div>
           
-          <div class="form-group">
+          <div class="form-group" id="engine-group" style="display: none;">
+            <label for="fresh-engine">Server Engine:</label>
+            <select id="fresh-engine" class="form-control" onchange="loadVersions()">
+              <option value="">Select server engine...</option>
+            </select>
+            <small id="engine-description" class="type-desc">Select from locally downloaded server JARs</small>
+          </div>
+          
+          <div class="form-group" id="version-group" style="display: none;">
             <label for="fresh-version">Version:</label>
             <select id="fresh-version" class="form-control" disabled>
-              <option value="">Select server type first...</option>
+              <option value="">Select category first...</option>
             </select>
           </div>
           
-          <div class="form-row">
-            <div class="form-group half">
-              <label for="fresh-jar-name">JAR File Name:</label>
-              <input type="text" id="fresh-jar-name" class="form-control" value="server.jar">
-            </div>
-            <div class="form-group half">
-              <label for="fresh-java-args">Java Arguments:</label>
-              <input type="text" id="fresh-java-args" class="form-control" value="-Xmx2G -Xms1G">
+          <div class="form-group" id="jar-name-group" style="display: none;">
+            <label for="fresh-jar-name">JAR File Name:</label>
+            <input type="text" id="fresh-jar-name" class="form-control" value="server.jar">
+            <small>Name for the server JAR file</small>
+          </div>
+          
+          <div id="ram-fields-group" style="display: none;">
+            <div class="form-group">
+              <label>Memory Allocation:</label>
+              <div class="ram-inputs">
+                <div class="ram-field">
+                  <label for="fresh-min-ram">Min RAM:</label>
+                  <select id="fresh-min-ram" class="form-control">
+                    <option value="512M">512 MB</option>
+                    <option value="1G" selected>1 GB</option>
+                    <option value="2G">2 GB</option>
+                    <option value="3G">3 GB</option>
+                    <option value="4G">4 GB</option>
+                    <option value="6G">6 GB</option>
+                    <option value="8G">8 GB</option>
+                    <option value="12G">12 GB</option>
+                    <option value="16G">16 GB</option>
+                  </select>
+                </div>
+                <div class="ram-field">
+                  <label for="fresh-max-ram">Max RAM:</label>
+                  <select id="fresh-max-ram" class="form-control">
+                    <option value="1G">1 GB</option>
+                    <option value="2G" selected>2 GB</option>
+                    <option value="3G">3 GB</option>
+                    <option value="4G">4 GB</option>
+                    <option value="6G">6 GB</option>
+                    <option value="8G">8 GB</option>
+                    <option value="12G">12 GB</option>
+                    <option value="16G">16 GB</option>
+                    <option value="24G">24 GB</option>
+                    <option value="32G">32 GB</option>
+                  </select>
+                </div>
+              </div>
+              <small>Minimum and maximum memory for the JVM</small>
             </div>
           </div>
           
-          <div class="form-group">
+          <div class="form-group" id="upload-jar-group" style="display: none;">
             <label>
-              <input type="checkbox" id="fresh-upload-jar"> Upload my own JAR file instead
+              <input type="checkbox" id="fresh-upload-jar" onchange="toggleCustomJarUpload()"> Upload my own JAR file instead
             </label>
           </div>
           
@@ -360,10 +455,19 @@
         </form>
 
         <!-- Import Server Form -->
-        <form id="import-server-form" class="server-form" style="display: none;">
+        <form id="import-server-form" class="server-form" style="display: none;" onsubmit="importServer(event)">
           <div class="form-group">
             <label for="import-name">Server Name:</label>
             <input type="text" id="import-name" class="form-control" placeholder="Imported Server" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="import-category">Category:</label>
+            <select id="import-category" class="form-control">
+              <option value="unmodded">Unmodded (Vanilla)</option>
+              <option value="modded">Modded (Paper, Folia, Purpur, etc.)</option>
+            </select>
+            <small>Select the type of server you're importing</small>
           </div>
           
           <div class="form-group">
@@ -373,9 +477,45 @@
           </div>
           
           <div class="form-group">
-            <label for="import-java-args">Java Arguments:</label>
-            <input type="text" id="import-java-args" class="form-control" value="-Xmx2G -Xms1G">
-            <small>JVM arguments for memory allocation</small>
+            <label for="import-jar-name">JAR File Name:</label>
+            <input type="text" id="import-jar-name" class="form-control" value="server.jar">
+            <small>Name of the server JAR file in the ZIP</small>
+          </div>
+          
+          <div class="form-group">
+            <label>Memory Allocation:</label>
+            <div class="ram-inputs">
+              <div class="ram-field">
+                <label for="import-min-ram">Min RAM:</label>
+                <select id="import-min-ram" class="form-control">
+                  <option value="512M">512 MB</option>
+                  <option value="1G" selected>1 GB</option>
+                  <option value="2G">2 GB</option>
+                  <option value="3G">3 GB</option>
+                  <option value="4G">4 GB</option>
+                  <option value="6G">6 GB</option>
+                  <option value="8G">8 GB</option>
+                  <option value="12G">12 GB</option>
+                  <option value="16G">16 GB</option>
+                </select>
+              </div>
+              <div class="ram-field">
+                <label for="import-max-ram">Max RAM:</label>
+                <select id="import-max-ram" class="form-control">
+                  <option value="1G">1 GB</option>
+                  <option value="2G" selected>2 GB</option>
+                  <option value="3G">3 GB</option>
+                  <option value="4G">4 GB</option>
+                  <option value="6G">6 GB</option>
+                  <option value="8G">8 GB</option>
+                  <option value="12G">12 GB</option>
+                  <option value="16G">16 GB</option>
+                  <option value="24G">24 GB</option>
+                  <option value="32G">32 GB</option>
+                </select>
+              </div>
+            </div>
+            <small>Minimum and maximum memory for the JVM</small>
           </div>
           
           <div class="modal-footer">
@@ -385,10 +525,18 @@
         </form>
 
         <!-- Manual Configuration Form (Edit mode uses this too) -->
-        <form id="manual-server-form" class="server-form" style="display: none;">
+        <form id="manual-server-form" class="server-form" style="display: none;" onsubmit="saveServer(event)">
           <div class="form-group">
             <label for="input-name">Server Name:</label>
             <input type="text" id="input-name" class="form-control" placeholder="My Minecraft Server" required>
+          </div>
+          
+          <div class="form-group">
+            <label for="input-category">Category:</label>
+            <select id="input-category" class="form-control">
+              <option value="unmodded">Unmodded (Vanilla)</option>
+              <option value="modded">Modded (Paper, Folia, Purpur, etc.)</option>
+            </select>
           </div>
           
           <div class="form-group">
@@ -404,9 +552,39 @@
           </div>
           
           <div class="form-group">
-            <label for="input-java-args">Java Arguments:</label>
-            <input type="text" id="input-java-args" class="form-control" placeholder="-Xmx2G -Xms1G" value="-Xmx2G -Xms1G">
-            <small>JVM arguments for memory allocation</small>
+            <label>Memory Allocation:</label>
+            <div class="ram-inputs">
+              <div class="ram-field">
+                <label for="input-min-ram">Min RAM:</label>
+                <select id="input-min-ram" class="form-control">
+                  <option value="512M">512 MB</option>
+                  <option value="1G" selected>1 GB</option>
+                  <option value="2G">2 GB</option>
+                  <option value="3G">3 GB</option>
+                  <option value="4G">4 GB</option>
+                  <option value="6G">6 GB</option>
+                  <option value="8G">8 GB</option>
+                  <option value="12G">12 GB</option>
+                  <option value="16G">16 GB</option>
+                </select>
+              </div>
+              <div class="ram-field">
+                <label for="input-max-ram">Max RAM:</label>
+                <select id="input-max-ram" class="form-control">
+                  <option value="1G">1 GB</option>
+                  <option value="2G" selected>2 GB</option>
+                  <option value="3G">3 GB</option>
+                  <option value="4G">4 GB</option>
+                  <option value="6G">6 GB</option>
+                  <option value="8G">8 GB</option>
+                  <option value="12G">12 GB</option>
+                  <option value="16G">16 GB</option>
+                  <option value="24G">24 GB</option>
+                  <option value="32G">32 GB</option>
+                </select>
+              </div>
+            </div>
+            <small>Minimum and maximum memory for the JVM</small>
           </div>
           
           <div class="modal-footer">

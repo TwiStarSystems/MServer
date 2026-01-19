@@ -881,15 +881,16 @@ def server_access_required(f):
 class JarVersionManager:
     """Manager for Minecraft server JAR files and versions"""
     
-    # Server type metadata
+    # Server type metadata - now categorized as 'unmodded' or 'modded'
     SERVER_TYPE_INFO = {
-        'vanilla': {'name': 'Vanilla', 'description': 'Official Minecraft Java Edition server', 'modded': False},
-        'bedrock': {'name': 'Bedrock', 'description': 'Official Minecraft Bedrock Edition server (not yet supported)', 'modded': False},
-        'paper': {'name': 'Paper', 'description': 'High-performance Spigot fork', 'modded': False},
-        'folia': {'name': 'Folia', 'description': 'Paper fork for multi-threaded regions', 'modded': False},
-        'purpur': {'name': 'Purpur', 'description': 'Paper fork with extra features', 'modded': False},
-        'forge': {'name': 'Forge', 'description': 'Mod loader for Minecraft mods (installer)', 'modded': True},
-        'neoforge': {'name': 'NeoForge', 'description': 'Modern Forge fork (installer)', 'modded': True}
+        'vanilla': {'name': 'Vanilla', 'description': 'Official Minecraft Java Edition server', 'category': 'unmodded'},
+        'bedrock': {'name': 'Bedrock', 'description': 'Official Minecraft Bedrock Edition server (not yet supported)', 'category': 'unmodded'},
+        'paper': {'name': 'Paper', 'description': 'High-performance Spigot fork', 'category': 'modded'},
+        'folia': {'name': 'Folia', 'description': 'Paper fork for multi-threaded regions', 'category': 'modded'},
+        'purpur': {'name': 'Purpur', 'description': 'Paper fork with extra features', 'category': 'modded'},
+        'spigot': {'name': 'Spigot', 'description': 'Bukkit-compatible server with plugins', 'category': 'modded'},
+        'forge': {'name': 'Forge', 'description': 'Mod loader for Minecraft mods (installer)', 'category': 'modded'},
+        'neoforge': {'name': 'NeoForge', 'description': 'Modern Forge fork (installer)', 'category': 'modded'}
     }
     
     # Server executables directory
@@ -1014,20 +1015,56 @@ class JarVersionManager:
             info = self.SERVER_TYPE_INFO.get(server_type, {
                 'name': server_type.title(),
                 'description': f'{server_type.title()} server',
-                'modded': False
+                'category': 'modded'
             })
             
             available_types.append({
                 'id': server_type,
                 'name': info['name'],
                 'description': info['description'],
-                'modded': info['modded'],
+                'category': info['category'],
                 'jarCount': len(jars)
             })
         
         # Sort by name
         available_types.sort(key=lambda x: x['name'])
         return available_types
+    
+    def get_server_engines(self, category=None):
+        """
+        Get list of server engines filtered by category.
+        category: 'modded', 'unmodded', or None for all
+        Only returns engines with at least one downloaded JAR.
+        """
+        local_jars = self._scan_local_jars()
+        
+        available_engines = []
+        for server_type, jars in local_jars.items():
+            if not jars:
+                continue
+            
+            # Get metadata or create default
+            info = self.SERVER_TYPE_INFO.get(server_type, {
+                'name': server_type.title(),
+                'description': f'{server_type.title()} server',
+                'category': 'modded'
+            })
+            
+            # Filter by category if specified
+            if category and info['category'] != category:
+                continue
+            
+            available_engines.append({
+                'id': server_type,
+                'name': info['name'],
+                'description': info['description'],
+                'category': info['category'],
+                'jarCount': len(jars)
+            })
+        
+        # Sort by name
+        available_engines.sort(key=lambda x: x['name'])
+        return available_engines
     
     def get_versions(self, server_type):
         """
@@ -1573,7 +1610,7 @@ class ServerManager:
         return self.config.get('servers', {}).get(server_id)
     
     def create_server(self, name, server_path='', executable='server.jar', java_args='-Xmx2G -Xms1G', 
-                      server_type=None, version=None, owner=None, approved=True):
+                      server_type=None, version=None, owner=None, approved=True, category='unmodded'):
         """Create a new server configuration"""
         server_id = str(uuid.uuid4())[:8]
         
@@ -1584,8 +1621,11 @@ class ServerManager:
         server_dir = Path(server_path) if server_path else SERVERS_DIR / server_id
         server_dir.mkdir(parents=True, exist_ok=True)
         
+        # Determine if modded based on category
+        is_modded = category == 'modded'
+        
         # Create managed.conf file
-        self._create_managed_conf(server_dir, server_id, name)
+        self._create_managed_conf(server_dir, server_id, name, modded=is_modded)
         
         self.config['servers'][server_id] = {
             'name': name,
@@ -1597,19 +1637,21 @@ class ServerManager:
             'owner': owner,
             'autoStart': False,
             'approved': approved,
+            'category': category,
             'created': datetime.now().isoformat()
         }
         
         self._save_config()
         return server_id
     
-    def _create_managed_conf(self, server_dir, server_id, name):
+    def _create_managed_conf(self, server_dir, server_id, name, modded=False):
         """Create or update the managed.conf file for a server"""
         managed_conf_path = Path(server_dir) / 'managed.conf'
         config = {
             'ManagedBy': 'MServerController',
             'ServerId': server_id,
             'ServerName': name,
+            'Modded': 'true' if modded else 'false',
             'CreatedAt': datetime.now().isoformat(),
             'EULAAccepted': 'false'
         }
@@ -1620,6 +1662,7 @@ class ServerManager:
             config.update(existing)
             config['ServerId'] = server_id  # Always update these
             config['ServerName'] = name
+            config['Modded'] = 'true' if modded else 'false'
         
         self._write_managed_conf(server_dir, config)
     
@@ -1678,7 +1721,9 @@ class ServerManager:
         
         # Create managed.conf
         name = server_config.get('name', 'Unknown Server')
-        self._create_managed_conf(server_dir, server_id, name)
+        category = server_config.get('category', 'unmodded')
+        is_modded = category == 'modded'
+        self._create_managed_conf(server_dir, server_id, name, modded=is_modded)
         
         return True, "Management enabled"
     
@@ -1717,7 +1762,7 @@ class ServerManager:
         except Exception as e:
             return False, f"Failed to write eula.txt: {e}"
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx2G -Xms1G', owner=None, approved=True):
+    def import_server_from_zip(self, name, zip_path, java_args='-Xmx2G -Xms1G', jar_name=None, owner=None, approved=True, category='unmodded'):
         """Import a server from a ZIP file"""
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
@@ -1731,15 +1776,23 @@ class ServerManager:
                 zipf.extractall(server_dir)
             
             # Find server JAR file
+            # Use provided jar_name if specified and exists, otherwise auto-detect
             executable = 'server.jar'
-            for item in server_dir.iterdir():
-                if item.suffix == '.jar' and item.is_file():
-                    # Prioritize common server jar names
-                    if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
-                        executable = item.name
-                        break
-                    elif 'server' in item.name.lower() or 'paper' in item.name.lower():
-                        executable = item.name
+            if jar_name:
+                jar_path = server_dir / jar_name
+                if jar_path.exists() and jar_path.suffix == '.jar':
+                    executable = jar_name
+            
+            # If jar_name not provided or not found, auto-detect
+            if not jar_name or executable == 'server.jar':
+                for item in server_dir.iterdir():
+                    if item.suffix == '.jar' and item.is_file():
+                        # Prioritize common server jar names
+                        if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
+                            executable = item.name
+                            break
+                        elif 'server' in item.name.lower() or 'paper' in item.name.lower():
+                            executable = item.name
             
             # Check if files are in a subdirectory (common with some ZIPs)
             subdirs = [d for d in server_dir.iterdir() if d.is_dir()]
@@ -1750,20 +1803,29 @@ class ServerManager:
                     shutil.move(str(item), str(server_dir / item.name))
                 subdir.rmdir()
                 
-                # Re-check for JAR
-                for item in server_dir.iterdir():
-                    if item.suffix == '.jar' and item.is_file():
-                        if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
-                            executable = item.name
-                            break
-                        elif 'server' in item.name.lower() or 'paper' in item.name.lower():
-                            executable = item.name
+                # Re-check for JAR if we're auto-detecting
+                if not jar_name or executable == 'server.jar':
+                    for item in server_dir.iterdir():
+                        if item.suffix == '.jar' and item.is_file():
+                            if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
+                                executable = item.name
+                                break
+                            elif 'server' in item.name.lower() or 'paper' in item.name.lower():
+                                executable = item.name
+                elif jar_name:
+                    # Check if the specified jar_name exists after moving
+                    jar_path = server_dir / jar_name
+                    if jar_path.exists() and jar_path.suffix == '.jar':
+                        executable = jar_name
             
             if 'servers' not in self.config:
                 self.config['servers'] = {}
             
+            # Determine if modded based on category
+            is_modded = category == 'modded'
+            
             # Create managed.conf file
-            self._create_managed_conf(server_dir, server_id, name)
+            self._create_managed_conf(server_dir, server_id, name, modded=is_modded)
             
             self.config['servers'][server_id] = {
                 'name': name,
@@ -1771,6 +1833,7 @@ class ServerManager:
                 'executable': executable,
                 'javaArgs': java_args,
                 'serverType': 'imported',
+                'category': category,
                 'owner': owner,
                 'autoStart': False,
                 'approved': approved,
@@ -1792,6 +1855,17 @@ class ServerManager:
         
         self.config['servers'][server_id].update(kwargs)
         self._save_config()
+        
+        # If category was updated, also update managed.conf
+        if 'category' in kwargs:
+            server_config = self.config['servers'][server_id]
+            server_dir = Path(server_config.get('serverPath', ''))
+            managed_conf_path = server_dir / 'managed.conf'
+            if managed_conf_path.exists():
+                managed_config = self._read_managed_conf(server_dir)
+                managed_config['Modded'] = 'true' if kwargs['category'] == 'modded' else 'false'
+                self._write_managed_conf(server_dir, managed_config)
+        
         return True
     
     def delete_server(self, server_id, delete_files=False):
@@ -2136,6 +2210,10 @@ def api_logout():
 @limiter.limit("5 per hour")
 def api_register():
     """Register new user"""
+    # Check if registration is enabled
+    if not settings_manager.get_app_settings().get('enableRegistration', True):
+        return jsonify({'error': 'Registration is currently disabled'}), 403
+    
     data = request.get_json()
     username = data.get('username', '')
     password = data.get('password', '')
@@ -2329,6 +2407,20 @@ def get_server_versions(server_type):
     versions = jar_manager.get_versions(server_type)
     return jsonify({'versions': versions})
 
+@app.route('/api/server-engines', methods=['GET'])
+@login_required
+def get_server_engines():
+    """Get list of available server engines, optionally filtered by category"""
+    category = request.args.get('category')
+    return jsonify({'engines': jar_manager.get_server_engines(category)})
+
+@app.route('/api/server-engines/<engine>/versions', methods=['GET'])
+@login_required
+def get_engine_versions(engine):
+    """Get available versions for a server engine"""
+    versions = jar_manager.get_versions(engine)
+    return jsonify({'versions': versions})
+
 @app.route('/api/default-server-path', methods=['GET'])
 @login_required
 def get_default_server_path():
@@ -2364,7 +2456,9 @@ def create_server():
     server_path = data.get('serverPath', '')
     executable = data.get('executable', 'server.jar')
     java_args = data.get('javaArgs', '-Xmx2G -Xms1G')
-    server_type = data.get('serverType')
+    category = data.get('category', 'unmodded')
+    server_engine = data.get('serverEngine')  # New: engine (paper, folia, etc.)
+    server_type = data.get('serverType') or server_engine  # Backward compat
     version = data.get('version')
     download_jar = data.get('downloadJar', False)
     
@@ -2382,7 +2476,8 @@ def create_server():
         server_type=server_type,
         version=version,
         owner=user_id,
-        approved=approved
+        approved=approved,
+        category=category
     )
     
     # Copy JAR from serverexecutables if requested
@@ -2425,7 +2520,9 @@ def import_server():
         return jsonify({'error': 'File must be a ZIP archive'}), 400
     
     name = request.form.get('name', 'Imported Server')
+    jar_name = request.form.get('jarName', 'server.jar')
     java_args = request.form.get('javaArgs', '-Xmx2G -Xms1G')
+    category = request.form.get('category', 'unmodded')
     
     # Check if server approval is required (admins are always auto-approved)
     is_admin = user.get('role') == 'admin'
@@ -2439,7 +2536,13 @@ def import_server():
     try:
         file.save(str(temp_path))
         
-        success, result = server_manager.import_server_from_zip(name, temp_path, java_args, owner=user_id, approved=approved)
+        success, result = server_manager.import_server_from_zip(
+            name, temp_path, java_args, 
+            jar_name=jar_name, 
+            owner=user_id, 
+            approved=approved,
+            category=category
+        )
         
         if success:
             response = {'success': True, 'serverId': result}
@@ -3278,6 +3381,162 @@ def upload_server_file(server_id):
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== Mods/Plugins API ====================
+
+@app.route('/api/servers/<server_id>/mods', methods=['GET'])
+@server_access_required
+def list_mods(server_id):
+    """List mods and plugins for a server"""
+    server_path = server_manager.get_server_path(server_id)
+    
+    result = {
+        'plugins': [],
+        'mods': []
+    }
+    
+    # List plugins folder
+    plugins_dir = server_path / 'plugins'
+    if plugins_dir.exists():
+        for item in plugins_dir.iterdir():
+            if item.is_file() and (item.suffix == '.jar' or item.name.endswith('.jar.disabled')):
+                stat = item.stat()
+                result['plugins'].append({
+                    'name': item.name,
+                    'size': stat.st_size,
+                    'modified': stat.st_mtime * 1000
+                })
+    
+    # List mods folder
+    mods_dir = server_path / 'mods'
+    if mods_dir.exists():
+        for item in mods_dir.iterdir():
+            if item.is_file() and (item.suffix == '.jar' or item.name.endswith('.jar.disabled')):
+                stat = item.stat()
+                result['mods'].append({
+                    'name': item.name,
+                    'size': stat.st_size,
+                    'modified': stat.st_mtime * 1000
+                })
+    
+    # Sort by name
+    result['plugins'].sort(key=lambda x: x['name'].lower())
+    result['mods'].sort(key=lambda x: x['name'].lower())
+    
+    return jsonify(result)
+
+@app.route('/api/servers/<server_id>/mods/upload', methods=['POST'])
+@limiter.limit("20 per 15 minutes")
+@server_access_required
+def upload_mod(server_id):
+    """Upload a mod or plugin"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+    
+    file = request.files['file']
+    mod_type = request.form.get('type', 'plugins')
+    
+    if mod_type not in ['plugins', 'mods']:
+        return jsonify({'error': 'Invalid mod type'}), 400
+    
+    if not file.filename.endswith('.jar'):
+        return jsonify({'error': 'File must be a JAR file'}), 400
+    
+    server_path = server_manager.get_server_path(server_id)
+    target_dir = server_path / mod_type
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = secure_filename(file.filename)
+    dest_path = target_dir / filename
+    
+    try:
+        file.save(str(dest_path))
+        return jsonify({'success': True, 'filename': filename})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>/enable', methods=['POST'])
+@server_access_required
+def enable_mod(server_id, mod_type, filename):
+    """Enable a disabled mod"""
+    if mod_type not in ['plugins', 'mods']:
+        return jsonify({'error': 'Invalid mod type'}), 400
+    
+    server_path = server_manager.get_server_path(server_id)
+    mod_dir = server_path / mod_type
+    
+    # Security: Validate filename doesn't contain path traversal
+    safe_filename = secure_filename(filename)
+    if safe_filename != filename or '..' in filename or '/' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    
+    disabled_path = mod_dir / filename
+    if not disabled_path.exists() or not filename.endswith('.disabled'):
+        return jsonify({'error': 'Disabled mod not found'}), 404
+    
+    # Enable by removing .disabled extension
+    enabled_name = filename.rsplit('.disabled', 1)[0]
+    enabled_path = mod_dir / enabled_name
+    
+    try:
+        disabled_path.rename(enabled_path)
+        return jsonify({'success': True, 'filename': enabled_name})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>/disable', methods=['POST'])
+@server_access_required
+def disable_mod(server_id, mod_type, filename):
+    """Disable a mod by renaming it"""
+    if mod_type not in ['plugins', 'mods']:
+        return jsonify({'error': 'Invalid mod type'}), 400
+    
+    server_path = server_manager.get_server_path(server_id)
+    mod_dir = server_path / mod_type
+    
+    # Security: Validate filename doesn't contain path traversal
+    safe_filename = secure_filename(filename)
+    if safe_filename != filename or '..' in filename or '/' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    
+    mod_path = mod_dir / filename
+    if not mod_path.exists():
+        return jsonify({'error': 'Mod not found'}), 404
+    
+    # Disable by adding .disabled extension
+    disabled_path = mod_dir / (filename + '.disabled')
+    
+    try:
+        mod_path.rename(disabled_path)
+        return jsonify({'success': True, 'filename': filename + '.disabled'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>', methods=['DELETE'])
+@server_access_required
+def delete_mod(server_id, mod_type, filename):
+    """Delete a mod or plugin"""
+    if mod_type not in ['plugins', 'mods']:
+        return jsonify({'error': 'Invalid mod type'}), 400
+    
+    server_path = server_manager.get_server_path(server_id)
+    mod_dir = server_path / mod_type
+    
+    # Security: Validate filename doesn't contain path traversal
+    safe_filename = secure_filename(filename)
+    if safe_filename != filename or '..' in filename or '/' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    
+    mod_path = mod_dir / filename
+    if not mod_path.exists():
+        return jsonify({'error': 'Mod not found'}), 404
+    
+    try:
+        mod_path.unlink()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== Backup API ====================
 
 @app.route('/api/servers/<server_id>/backups', methods=['GET'])
@@ -3339,7 +3598,21 @@ def create_backup(server_id):
 def download_backup(server_id):
     """Download a backup"""
     backup_name = request.args.get('name', '')
+    
+    # Security: sanitize filename and prevent path traversal
+    backup_name = secure_filename(backup_name)
+    if not backup_name or '..' in backup_name or '/' in backup_name:
+        return jsonify({'error': 'Invalid backup name'}), 400
+    
     backup_path = BACKUPS_DIR / server_id / backup_name
+    
+    # Additional security check: ensure path is within backups directory
+    try:
+        backup_path = backup_path.resolve()
+        if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
+            return jsonify({'error': 'Invalid backup path'}), 400
+    except Exception:
+        return jsonify({'error': 'Invalid backup path'}), 400
     
     if not backup_path.exists():
         return jsonify({'error': 'Backup not found'}), 404
@@ -3352,7 +3625,21 @@ def delete_backup(server_id):
     """Delete a backup"""
     data = request.get_json()
     backup_name = data.get('name', '')
+    
+    # Security: sanitize filename and prevent path traversal
+    backup_name = secure_filename(backup_name)
+    if not backup_name or '..' in backup_name or '/' in backup_name:
+        return jsonify({'error': 'Invalid backup name'}), 400
+    
     backup_path = BACKUPS_DIR / server_id / backup_name
+    
+    # Additional security check: ensure path is within backups directory
+    try:
+        backup_path = backup_path.resolve()
+        if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
+            return jsonify({'error': 'Invalid backup path'}), 400
+    except Exception:
+        return jsonify({'error': 'Invalid backup path'}), 400
     
     if not backup_path.exists():
         return jsonify({'error': 'Backup not found'}), 404
@@ -3369,7 +3656,21 @@ def restore_backup(server_id):
     """Restore a backup"""
     data = request.get_json()
     backup_name = data.get('name', '')
+    
+    # Security: sanitize filename and prevent path traversal
+    backup_name = secure_filename(backup_name)
+    if not backup_name or '..' in backup_name or '/' in backup_name:
+        return jsonify({'error': 'Invalid backup name'}), 400
+    
     backup_path = BACKUPS_DIR / server_id / backup_name
+    
+    # Additional security check: ensure path is within backups directory
+    try:
+        backup_path = backup_path.resolve()
+        if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
+            return jsonify({'error': 'Invalid backup path'}), 400
+    except Exception:
+        return jsonify({'error': 'Invalid backup path'}), 400
     
     if not backup_path.exists():
         return jsonify({'error': 'Backup not found'}), 404

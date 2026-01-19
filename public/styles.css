@@ -539,6 +539,107 @@ body {
   border-radius: 4px;
 }
 
+/* ==================== Mods Tab ==================== */
+
+.mods-container {
+  padding: 15px 0;
+}
+
+.mods-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.mods-header h3 {
+  font-size: 1.2rem;
+  color: #fff;
+}
+
+.mods-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.mods-info {
+  color: #888;
+  margin-bottom: 20px;
+  font-size: 14px;
+}
+
+.mods-section {
+  background: #16213e;
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 20px;
+}
+
+.mods-section h4 {
+  font-size: 1rem;
+  color: #fff;
+  margin-bottom: 5px;
+}
+
+.mods-section .section-info {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 15px;
+}
+
+.mods-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.mods-table thead {
+  background: #0f3460;
+}
+
+.mods-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: #fff;
+  font-size: 13px;
+}
+
+.mods-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #0f3460;
+  font-size: 14px;
+}
+
+.mods-table tbody tr:hover {
+  background: #1a1a2e;
+}
+
+.mods-table .empty-message {
+  text-align: center;
+  color: #666;
+  font-style: italic;
+}
+
+.mod-upload-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+.mod-upload-choices .btn {
+  display: flex;
+  flex-direction: column;
+  padding: 15px;
+  text-align: left;
+}
+
+.mod-upload-choices .btn small {
+  font-weight: normal;
+  opacity: 0.8;
+  margin-top: 5px;
+}
+
 /* ==================== Backups ==================== */
 
 .backup-controls {
@@ -917,6 +1018,28 @@ select.form-control:disabled {
   margin-top: 5px;
   color: #888;
   font-size: 12px;
+}
+
+/* RAM Input Fields */
+.ram-inputs {
+  display: flex;
+  gap: 15px;
+}
+
+.ram-field {
+  flex: 1;
+}
+
+.ram-field label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 400;
+  color: #aaa;
+  font-size: 13px;
+}
+
+.ram-field select {
+  width: 100%;
 }
 
 /* ==================== File Editor ==================== */
