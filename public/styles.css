@@ -3674,6 +3674,47 @@ select.form-control:disabled {
   border-left: 3px solid #667eea;
 }
 
+/* ==================== Missing Fields Modal ==================== */
+
+.missing-fields-content {
+  padding: 20px;
+}
+
+.missing-fields-content > p {
+  margin-bottom: 15px;
+  line-height: 1.6;
+  color: #e0e0e0;
+}
+
+.missing-fields-content code {
+  background: #252536;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  color: #667eea;
+}
+
+.missing-fields-info {
+  color: #f5a623 !important;
+  font-size: 0.95rem;
+  padding: 12px 15px;
+  background: rgba(245, 166, 35, 0.1);
+  border-radius: 6px;
+  border-left: 3px solid #f5a623;
+  margin-bottom: 20px;
+}
+
+#missing-fields-form .form-group {
+  margin-bottom: 15px;
+}
+
+#missing-fields-form label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: #ccc;
+}
+
 /* ==================== Players Management ==================== */
 
 .players-container {

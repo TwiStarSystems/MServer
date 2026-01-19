@@ -1624,8 +1624,13 @@ class ServerManager:
         # Determine if modded based on category
         is_modded = category == 'modded'
         
+        # Determine engine name
+        engine_name = 'Vanilla'
+        if is_modded and server_type:
+            engine_name = server_type.title()  # paper -> Paper, folia -> Folia, etc.
+        
         # Create managed.conf file
-        self._create_managed_conf(server_dir, server_id, name, modded=is_modded)
+        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
         
         self.config['servers'][server_id] = {
             'name': name,
@@ -1644,14 +1649,33 @@ class ServerManager:
         self._save_config()
         return server_id
     
-    def _create_managed_conf(self, server_dir, server_id, name, modded=False):
+    # Required fields for managed.conf
+    MANAGED_CONF_REQUIRED_FIELDS = [
+        'ManagedBy',
+        'ServerId',
+        'ServerName',
+        'Modded',
+        'Engine',
+        'Owner',
+        'CreatedAt',
+        'EULAAccepted'
+    ]
+    
+    def _create_managed_conf(self, server_dir, server_id, name, modded=False, engine=None, owner=None):
         """Create or update the managed.conf file for a server"""
         managed_conf_path = Path(server_dir) / 'managed.conf'
+        
+        # Determine engine based on modded status
+        if engine is None:
+            engine = 'Vanilla' if not modded else 'Unknown'
+        
         config = {
             'ManagedBy': 'MServerController',
             'ServerId': server_id,
             'ServerName': name,
             'Modded': 'true' if modded else 'false',
+            'Engine': engine,
+            'Owner': owner or 'admin',
             'CreatedAt': datetime.now().isoformat(),
             'EULAAccepted': 'false'
         }
@@ -1663,6 +1687,9 @@ class ServerManager:
             config['ServerId'] = server_id  # Always update these
             config['ServerName'] = name
             config['Modded'] = 'true' if modded else 'false'
+            config['Engine'] = engine
+            if owner:
+                config['Owner'] = owner
         
         self._write_managed_conf(server_dir, config)
     
@@ -1694,6 +1721,42 @@ class ServerManager:
         except Exception as e:
             print(f"Error writing managed.conf: {e}")
     
+    def validate_managed_conf(self, server_id):
+        """
+        Validate that managed.conf has all required fields.
+        Returns (is_valid, missing_fields) tuple.
+        """
+        server_config = self.get_server_config(server_id)
+        if not server_config:
+            return False, ['Server not found']
+        
+        server_dir = Path(server_config.get('serverPath', ''))
+        managed_conf_path = server_dir / 'managed.conf'
+        
+        if not managed_conf_path.exists():
+            return False, ['managed.conf file not found']
+        
+        config = self._read_managed_conf(server_dir)
+        
+        missing_fields = []
+        for field in self.MANAGED_CONF_REQUIRED_FIELDS:
+            if field not in config or not config[field]:
+                missing_fields.append(field)
+        
+        return len(missing_fields) == 0, missing_fields
+    
+    def update_managed_conf_field(self, server_id, field, value):
+        """Update a single field in managed.conf"""
+        server_config = self.get_server_config(server_id)
+        if not server_config:
+            return False, "Server not found"
+        
+        server_dir = Path(server_config.get('serverPath', ''))
+        config = self._read_managed_conf(server_dir)
+        config[field] = value
+        self._write_managed_conf(server_dir, config)
+        return True, f"{field} updated"
+    
     def is_managed(self, server_id):
         """Check if a server has a managed.conf file"""
         server_config = self.get_server_config(server_id)
@@ -1723,7 +1786,15 @@ class ServerManager:
         name = server_config.get('name', 'Unknown Server')
         category = server_config.get('category', 'unmodded')
         is_modded = category == 'modded'
-        self._create_managed_conf(server_dir, server_id, name, modded=is_modded)
+        server_type = server_config.get('serverType', '')
+        owner = server_config.get('owner', 'admin')
+        
+        # Determine engine name
+        engine_name = 'Vanilla'
+        if is_modded and server_type:
+            engine_name = server_type.title()
+        
+        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
         
         return True, "Management enabled"
     
@@ -1824,8 +1895,9 @@ class ServerManager:
             # Determine if modded based on category
             is_modded = category == 'modded'
             
-            # Create managed.conf file
-            self._create_managed_conf(server_dir, server_id, name, modded=is_modded)
+            # Create managed.conf file (imported servers have unknown engine)
+            engine_name = 'Vanilla' if not is_modded else 'Unknown'
+            self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
             
             self.config['servers'][server_id] = {
                 'name': name,
@@ -2662,9 +2734,26 @@ def delete_server(server_id):
 @app.route('/api/servers/<server_id>/managed', methods=['GET'])
 @server_access_required
 def check_managed(server_id):
-    """Check if a server has managed.conf"""
+    """Check if a server has managed.conf and validate its fields"""
     is_managed = server_manager.is_managed(server_id)
-    return jsonify({'managed': is_managed})
+    
+    if not is_managed:
+        return jsonify({'managed': False, 'valid': False, 'missingFields': ['managed.conf file not found']})
+    
+    # Validate managed.conf
+    is_valid, missing_fields = server_manager.validate_managed_conf(server_id)
+    
+    # Get current managed.conf data
+    server_config = server_manager.get_server_config(server_id)
+    server_dir = Path(server_config.get('serverPath', ''))
+    managed_data = server_manager._read_managed_conf(server_dir)
+    
+    return jsonify({
+        'managed': True, 
+        'valid': is_valid, 
+        'missingFields': missing_fields,
+        'data': managed_data
+    })
 
 @app.route('/api/servers/<server_id>/managed/enable', methods=['POST'])
 @server_access_required
@@ -2674,6 +2763,31 @@ def enable_management(server_id):
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 400
+
+@app.route('/api/servers/<server_id>/managed/update', methods=['POST'])
+@server_access_required
+def update_managed_conf(server_id):
+    """Update fields in managed.conf"""
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    server_dir = Path(server_config.get('serverPath', ''))
+    managed_conf = server_manager._read_managed_conf(server_dir)
+    
+    # Update provided fields
+    for field, value in data.items():
+        if field in server_manager.MANAGED_CONF_REQUIRED_FIELDS or field == 'EULAAcceptedAt':
+            managed_conf[field] = value
+    
+    server_manager._write_managed_conf(server_dir, managed_conf)
+    
+    return jsonify({'success': True, 'message': 'Configuration updated'})
 
 @app.route('/api/servers/<server_id>/eula', methods=['GET'])
 @server_access_required

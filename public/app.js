@@ -354,12 +354,18 @@ async function startServer() {
   if (!currentServerId) return;
   
   try {
-    // First check if server is managed (has managed.conf)
+    // First check if server is managed (has managed.conf) and validate fields
     const managedCheck = await apiRequest(`/api/servers/${currentServerId}/managed`);
     
     if (!managedCheck.managed) {
       // Show management modal
       showManagementModal();
+      return;
+    }
+    
+    // Check if managed.conf has all required fields
+    if (!managedCheck.valid && managedCheck.missingFields && managedCheck.missingFields.length > 0) {
+      showMissingFieldsModal(managedCheck.missingFields, managedCheck.data);
       return;
     }
     
@@ -383,6 +389,134 @@ async function startServer() {
     }
   } catch (error) {
     // Error already shown by apiRequest
+  }
+}
+
+function showMissingFieldsModal(missingFields, currentData) {
+  // Remove existing modal if any
+  const existing = document.getElementById('missing-fields-modal');
+  if (existing) existing.remove();
+  
+  const server = servers.find(s => s.id === currentServerId);
+  
+  // Build form fields for missing items
+  let fieldsHtml = '';
+  
+  for (const field of missingFields) {
+    let inputHtml = '';
+    
+    switch(field) {
+      case 'Engine':
+        inputHtml = `
+          <select id="missing-${field}" class="form-control" required>
+            <option value="">Select engine...</option>
+            <option value="Vanilla">Vanilla</option>
+            <option value="Paper">Paper</option>
+            <option value="Folia">Folia</option>
+            <option value="Purpur">Purpur</option>
+            <option value="Spigot">Spigot</option>
+            <option value="Forge">Forge</option>
+            <option value="NeoForge">NeoForge</option>
+            <option value="Fabric">Fabric</option>
+          </select>
+        `;
+        break;
+      case 'Modded':
+        inputHtml = `
+          <select id="missing-${field}" class="form-control" required>
+            <option value="">Select...</option>
+            <option value="false">No (Vanilla)</option>
+            <option value="true">Yes (Modded/Plugins)</option>
+          </select>
+        `;
+        break;
+      case 'EULAAccepted':
+        inputHtml = `
+          <select id="missing-${field}" class="form-control" required>
+            <option value="false">Not Accepted</option>
+            <option value="true">Accepted</option>
+          </select>
+        `;
+        break;
+      case 'Owner':
+        inputHtml = `<input type="text" id="missing-${field}" class="form-control" placeholder="Username" value="${currentUser?.username || 'admin'}" required>`;
+        break;
+      case 'ServerName':
+        inputHtml = `<input type="text" id="missing-${field}" class="form-control" placeholder="Server name" value="${escapeHtml(server?.name || '')}" required>`;
+        break;
+      default:
+        inputHtml = `<input type="text" id="missing-${field}" class="form-control" placeholder="Enter value..." required>`;
+    }
+    
+    fieldsHtml += `
+      <div class="form-group">
+        <label for="missing-${field}">${field}:</label>
+        ${inputHtml}
+      </div>
+    `;
+  }
+  
+  const modal = document.createElement('div');
+  modal.id = 'missing-fields-modal';
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>⚠️ Configuration Incomplete</h2>
+        <button class="close-btn" onclick="closeMissingFieldsModal()">&times;</button>
+      </div>
+      <div class="missing-fields-content">
+        <p>The <code>managed.conf</code> file for <strong>"${escapeHtml(server?.name || 'this server')}"</strong> is missing some required fields.</p>
+        <p class="missing-fields-info">Please provide the following information:</p>
+        <form id="missing-fields-form" onsubmit="submitMissingFields(event)">
+          ${fieldsHtml}
+          <div class="modal-footer">
+            <button type="button" class="btn" onclick="closeMissingFieldsModal()">Cancel</button>
+            <button type="submit" class="btn btn-success">Save & Continue</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Close on background click
+  modal.onclick = (e) => {
+    if (e.target.id === 'missing-fields-modal') closeMissingFieldsModal();
+  };
+}
+
+function closeMissingFieldsModal() {
+  const modal = document.getElementById('missing-fields-modal');
+  if (modal) modal.remove();
+}
+
+async function submitMissingFields(e) {
+  e.preventDefault();
+  
+  const form = document.getElementById('missing-fields-form');
+  const inputs = form.querySelectorAll('input, select');
+  
+  const data = {};
+  for (const input of inputs) {
+    const field = input.id.replace('missing-', '');
+    data[field] = input.value;
+  }
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/managed/update`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    
+    closeMissingFieldsModal();
+    showNotification('Configuration updated successfully', 'success');
+    
+    // Try starting the server again
+    startServer();
+  } catch (error) {
+    console.error('Failed to update managed.conf:', error);
   }
 }
 
