@@ -255,17 +255,25 @@ function renderServerList() {
     return;
   }
   
-  container.innerHTML = servers.map(server => `
-    <div class="server-item ${server.id === currentServerId ? 'active' : ''}" 
-         data-server-id="${server.id}" 
-         onclick="selectServer('${server.id}')">
-      <div class="server-item-status ${server.running ? 'status-running' : 'status-stopped'}">●</div>
-      <div class="server-item-info">
-        <div class="server-item-name">${escapeHtml(server.name)}</div>
-        <div class="server-item-state">${server.running ? 'Running' : 'Stopped'}</div>
+  container.innerHTML = servers.map(server => {
+    // Build status text with port if running
+    let statusText = server.running ? 'Running' : 'Stopped';
+    if (server.running && server.port) {
+      statusText += ` - ${server.port}`;
+    }
+    
+    return `
+      <div class="server-item ${server.id === currentServerId ? 'active' : ''}" 
+           data-server-id="${server.id}" 
+           onclick="selectServer('${server.id}')">
+        <div class="server-item-status ${server.running ? 'status-running' : 'status-stopped'}">●</div>
+        <div class="server-item-info">
+          <div class="server-item-name">${escapeHtml(server.name)}</div>
+          <div class="server-item-state">${statusText}</div>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function updateServerInList(serverId, isRunning) {
@@ -3390,25 +3398,46 @@ function renderPropertiesEditor(properties) {
       nameSpan.textContent = key;
       label.appendChild(nameSpan);
       
+      // Get property metadata
+      const metadata = getPropertyMetadata(key);
+      
       // Add description if available
-      const description = getPropertyDescription(key);
-      if (description) {
+      if (metadata.description) {
         const descSpan = document.createElement('span');
         descSpan.className = 'property-description';
-        descSpan.textContent = description;
+        descSpan.textContent = metadata.description;
         label.appendChild(descSpan);
       }
       
-      propertyDiv.appendChild(label);
+      // Add type and default info
+      if (metadata.type || metadata.default) {
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'property-type-info';
+        let typeText = '';
+        if (metadata.type) {
+          if (metadata.type === 'integer' && metadata.allowedValues) {
+            typeText = `${metadata.type} [${metadata.allowedValues}]`;
+          } else if (Array.isArray(metadata.allowedValues)) {
+            typeText = `${metadata.type} (${metadata.allowedValues.join(', ')})`;
+          } else {
+            typeText = metadata.type;
+          }
+        }
+        if (metadata.default) {
+          typeText += typeText ? ` • default: ${metadata.default}` : `default: ${metadata.default}`;
+        }
+        typeSpan.textContent = typeText;
+        label.appendChild(typeSpan);
+      }
       
-      // Determine input type based on value
-      const inputType = determineInputType(key, value);
+      propertyDiv.appendChild(label);
       
       // Create container for the value/input
       const valueContainer = document.createElement('div');
       valueContainer.className = 'property-value-container';
       
-      if (inputType === 'boolean') {
+      // Determine input based on metadata type
+      if (metadata.type === 'boolean' || (value === 'true' || value === 'false')) {
         // Create toggle switch container
         const toggleLabel = document.createElement('label');
         toggleLabel.className = 'toggle-switch';
@@ -3425,22 +3454,69 @@ function renderPropertiesEditor(properties) {
         toggleLabel.appendChild(input);
         toggleLabel.appendChild(slider);
         valueContainer.appendChild(toggleLabel);
-      } else if (inputType === 'number') {
+      } else if (Array.isArray(metadata.allowedValues) && metadata.allowedValues.length <= 10) {
+        // Use select dropdown for properties with limited choices
+        const select = document.createElement('select');
+        select.id = `prop-${key}`;
+        select.className = 'property-select';
+        select.dataset.key = key;
+        
+        metadata.allowedValues.forEach(option => {
+          const optionElement = document.createElement('option');
+          optionElement.value = option;
+          optionElement.textContent = option;
+          if (value === option) {
+            optionElement.selected = true;
+          }
+          select.appendChild(optionElement);
+        });
+        
+        valueContainer.appendChild(select);
+      } else if (metadata.type === 'integer' || (!isNaN(value) && value !== '')) {
         const input = document.createElement('input');
         input.type = 'number';
         input.id = `prop-${key}`;
         input.className = 'property-input';
         input.value = value;
         input.dataset.key = key;
+        
+        // Set min/max if available in metadata
+        if (metadata.allowedValues && typeof metadata.allowedValues === 'string') {
+          const range = metadata.allowedValues.match(/(\d+)-(\d+)/);
+          if (range) {
+            input.min = range[1];
+            input.max = range[2];
+          }
+        }
+        
         valueContainer.appendChild(input);
       } else {
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.id = `prop-${key}`;
-        input.className = 'property-input';
-        input.value = value;
-        input.dataset.key = key;
-        valueContainer.appendChild(input);
+        // String input - use textarea for longer fields
+        const isLongField = metadata.maxLength && metadata.maxLength > 50;
+        
+        if (isLongField) {
+          const textarea = document.createElement('textarea');
+          textarea.id = `prop-${key}`;
+          textarea.className = 'property-textarea';
+          textarea.value = value;
+          textarea.dataset.key = key;
+          textarea.rows = 2;
+          if (metadata.maxLength) {
+            textarea.maxLength = metadata.maxLength;
+          }
+          valueContainer.appendChild(textarea);
+        } else {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.id = `prop-${key}`;
+          input.className = 'property-input';
+          input.value = value;
+          input.dataset.key = key;
+          if (metadata.maxLength) {
+            input.maxLength = metadata.maxLength;
+          }
+          valueContainer.appendChild(input);
+        }
       }
       
       propertyDiv.appendChild(valueContainer);
@@ -3451,50 +3527,384 @@ function renderPropertiesEditor(properties) {
   });
 }
 
-function determineInputType(key, value) {
-  // Boolean properties
-  if (value === 'true' || value === 'false') {
-    return 'boolean';
-  }
-  
-  // Number properties
-  if (!isNaN(value) && value !== '') {
-    return 'number';
-  }
-  
-  return 'text';
-}
-
-function getPropertyDescription(key) {
-  const descriptions = {
-    'server-port': 'The port number the server listens on (default: 25565)',
-    'server-ip': 'The IP address the server binds to (leave blank for all)',
-    'max-players': 'Maximum number of players that can join',
-    'white-list': 'Enable whitelist mode (only whitelisted players can join)',
-    'online-mode': 'Verify player accounts with Mojang servers',
-    'motd': 'Message of the day shown in the server list',
-    'level-name': 'Name of the world folder',
-    'level-type': 'World generation type (default, flat, largeBiomes, amplified)',
-    'gamemode': 'Default game mode (survival, creative, adventure, spectator)',
-    'difficulty': 'World difficulty (peaceful, easy, normal, hard)',
-    'pvp': 'Enable player versus player combat',
-    'spawn-protection': 'Radius around spawn where ops can build',
-    'view-distance': 'Server-side view distance in chunks (3-32)',
-    'simulation-distance': 'Distance in chunks around players where mobs spawn and grow (3-32)',
-    'hardcore': 'Enable hardcore mode (permanent death)',
-    'allow-nether': 'Allow players to travel to the Nether',
-    'allow-flight': 'Allow players to fly (non-creative)',
-    'enforce-whitelist': 'Kick players not on whitelist immediately'
+function getPropertyMetadata(key) {
+  const metadata = {
+    'accepts-transfers': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Whether to accept incoming transfers via a transfer packet',
+      allowedValues: ['true', 'false']
+    },
+    'allow-flight': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Allow players to fly in Survival mode. Enabling may make griefing easier',
+      allowedValues: ['true', 'false']
+    },
+    'allow-nether': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Allow players to travel to the Nether dimension',
+      allowedValues: ['true', 'false']
+    },
+    'broadcast-console-to-ops': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Send console command outputs to all online operators',
+      allowedValues: ['true', 'false']
+    },
+    'broadcast-rcon-to-ops': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Send rcon console command outputs to all online operators',
+      allowedValues: ['true', 'false']
+    },
+    'difficulty': {
+      type: 'string',
+      default: 'easy',
+      description: 'Difficulty level of the server',
+      allowedValues: ['peaceful', 'easy', 'normal', 'hard']
+    },
+    'enable-command-block': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Enable command blocks',
+      allowedValues: ['true', 'false']
+    },
+    'enable-jmx-monitoring': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Expose MBean with server tick times in milliseconds',
+      allowedValues: ['true', 'false']
+    },
+    'enable-query': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Enable GameSpy4 protocol server listener for server information',
+      allowedValues: ['true', 'false']
+    },
+    'enable-rcon': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Enable remote access to the server console',
+      allowedValues: ['true', 'false']
+    },
+    'enable-status': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Makes the server appear as "online" on the server list',
+      allowedValues: ['true', 'false']
+    },
+    'enforce-secure-profile': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Only allow players with Mojang-signed public keys to join',
+      allowedValues: ['true', 'false']
+    },
+    'enforce-whitelist': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Kick non-whitelisted players when whitelist is reloaded',
+      allowedValues: ['true', 'false']
+    },
+    'entity-broadcast-range-percentage': {
+      type: 'integer',
+      default: '100',
+      description: 'Controls how close entities need to be before being sent to clients (as percentage)',
+      allowedValues: '10-1000'
+    },
+    'force-gamemode': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Force players to join in the default game mode',
+      allowedValues: ['true', 'false']
+    },
+    'function-permission-level': {
+      type: 'integer',
+      default: '2',
+      description: 'Default permission level for functions',
+      allowedValues: '1-4'
+    },
+    'gamemode': {
+      type: 'string',
+      default: 'survival',
+      description: 'Default game mode for new players',
+      allowedValues: ['survival', 'creative', 'adventure', 'spectator']
+    },
+    'generate-structures': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Generate structures (villages, dungeons, etc.) in new chunks',
+      allowedValues: ['true', 'false']
+    },
+    'generator-settings': {
+      type: 'string',
+      default: '{}',
+      description: 'Settings for world generation customization',
+      maxLength: 200
+    },
+    'hardcore': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Enable hardcore mode (permanent death)',
+      allowedValues: ['true', 'false']
+    },
+    'hide-online-players': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Hide player list in server status requests',
+      allowedValues: ['true', 'false']
+    },
+    'initial-disabled-packs': {
+      type: 'string',
+      default: '',
+      description: 'Comma-separated list of datapacks to disable on world creation',
+      maxLength: 200
+    },
+    'initial-enabled-packs': {
+      type: 'string',
+      default: 'vanilla',
+      description: 'Comma-separated list of datapacks to enable on world creation',
+      maxLength: 200
+    },
+    'level-name': {
+      type: 'string',
+      default: 'world',
+      description: 'Name of the world folder',
+      maxLength: 100
+    },
+    'level-seed': {
+      type: 'string',
+      default: '',
+      description: 'Seed for world generation (leave blank for random)',
+      maxLength: 100
+    },
+    'level-type': {
+      type: 'string',
+      default: 'minecraft:normal',
+      description: 'World preset for generation',
+      allowedValues: ['minecraft:normal', 'minecraft:flat', 'minecraft:large_biomes', 'minecraft:amplified', 'minecraft:single_biome_surface']
+    },
+    'log-ips': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Include client IP addresses in server logs',
+      allowedValues: ['true', 'false']
+    },
+    'max-chained-neighbor-updates': {
+      type: 'integer',
+      default: '1000000',
+      description: 'Limit consecutive neighbor updates before skipping additional ones',
+      allowedValues: '1-10000000'
+    },
+    'max-players': {
+      type: 'integer',
+      default: '20',
+      description: 'Maximum number of players that can join simultaneously',
+      allowedValues: '0-2147483647'
+    },
+    'max-tick-time': {
+      type: 'integer',
+      default: '60000',
+      description: 'Maximum milliseconds per tick before watchdog stops server (-1 to disable)',
+      allowedValues: '-1 or 0-9223372036854775807'
+    },
+    'max-world-size': {
+      type: 'integer',
+      default: '29999984',
+      description: 'Maximum radius of world border in blocks',
+      allowedValues: '1-29999984'
+    },
+    'motd': {
+      type: 'string',
+      default: 'A Minecraft Server',
+      description: 'Message shown in server list (59 character limit, supports formatting codes)',
+      maxLength: 59
+    },
+    'network-compression-threshold': {
+      type: 'integer',
+      default: '256',
+      description: 'Packet size threshold for compression in bytes (-1 to disable)',
+      allowedValues: '-1 or 0-2147483647'
+    },
+    'online-mode': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Verify players with Mojang authentication. IMPORTANT: Disable only for offline/LAN servers',
+      allowedValues: ['true', 'false']
+    },
+    'op-permission-level': {
+      type: 'integer',
+      default: '4',
+      description: 'Default permission level for ops',
+      allowedValues: '0-4'
+    },
+    'pause-when-empty-seconds': {
+      type: 'integer',
+      default: '60',
+      description: 'Seconds to wait after no players online before pausing server',
+      allowedValues: '0-2147483647'
+    },
+    'player-idle-timeout': {
+      type: 'integer',
+      default: '0',
+      description: 'Minutes before idle players are kicked (0 to disable)',
+      allowedValues: '0-2147483647'
+    },
+    'prevent-proxy-connections': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Kick players if ISP differs from Mojang authentication server',
+      allowedValues: ['true', 'false']
+    },
+    'pvp': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Enable player versus player combat',
+      allowedValues: ['true', 'false']
+    },
+    'query.port': {
+      type: 'integer',
+      default: '25565',
+      description: 'UDP port for GameSpy4 query listener',
+      allowedValues: '1-65535'
+    },
+    'rate-limit': {
+      type: 'integer',
+      default: '0',
+      description: 'Maximum packets per player before kick (0 to disable)',
+      allowedValues: '0-2147483647'
+    },
+    'rcon.password': {
+      type: 'string',
+      default: '',
+      description: 'Password for RCON (required if RCON is enabled)',
+      maxLength: 100
+    },
+    'rcon.port': {
+      type: 'integer',
+      default: '25575',
+      description: 'TCP port for RCON connections',
+      allowedValues: '1-65535'
+    },
+    'region-file-compression': {
+      type: 'string',
+      default: 'deflate',
+      description: 'Compression algorithm for region files',
+      allowedValues: ['deflate', 'lz4', 'none']
+    },
+    'require-resource-pack': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Disconnect players who decline the resource pack',
+      allowedValues: ['true', 'false']
+    },
+    'resource-pack': {
+      type: 'string',
+      default: '',
+      description: 'URL to optional resource pack (max 250 MiB)',
+      maxLength: 300
+    },
+    'resource-pack-prompt': {
+      type: 'string',
+      default: '',
+      description: 'Custom message for resource pack prompt (chat component syntax)',
+      maxLength: 200
+    },
+    'resource-pack-sha1': {
+      type: 'string',
+      default: '',
+      description: 'SHA-1 hash of resource pack for integrity verification',
+      maxLength: 40
+    },
+    'server-ip': {
+      type: 'string',
+      default: '',
+      description: 'IP address to bind to (leave blank for all interfaces)',
+      maxLength: 45
+    },
+    'server-port': {
+      type: 'integer',
+      default: '25565',
+      description: 'TCP port the server listens on. Must be forwarded if behind NAT',
+      allowedValues: '1-65535'
+    },
+    'server-name': {
+      type: 'string',
+      default: '',
+      description: 'Server name',
+      maxLength: 100
+    },
+    'simulation-distance': {
+      type: 'integer',
+      default: '10',
+      description: 'Maximum distance in chunks for mob spawning and entity updates',
+      allowedValues: '3-32'
+    },
+    'spawn-animals': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Allow animals to spawn',
+      allowedValues: ['true', 'false']
+    },
+    'spawn-monsters': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Allow hostile mobs to spawn',
+      allowedValues: ['true', 'false']
+    },
+    'spawn-npcs': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Allow villagers to spawn',
+      allowedValues: ['true', 'false']
+    },
+    'spawn-protection': {
+      type: 'integer',
+      default: '16',
+      description: 'Radius around spawn where only ops can build (0 to disable)',
+      allowedValues: '0-2147483647'
+    },
+    'sync-chunk-writes': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Enable synchronous chunk writes (prevents data loss after crashes)',
+      allowedValues: ['true', 'false']
+    },
+    'use-native-transport': {
+      type: 'boolean',
+      default: 'true',
+      description: 'Use optimized packet sending/receiving on Linux',
+      allowedValues: ['true', 'false']
+    },
+    'view-distance': {
+      type: 'integer',
+      default: '10',
+      description: 'Server-side view distance in chunks',
+      allowedValues: '3-32'
+    },
+    'white-list': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Enable whitelist (only whitelisted players can join)',
+      allowedValues: ['true', 'false']
+    }
   };
   
-  return descriptions[key] || '';
+  // Return metadata for known properties, or default to string for unknown
+  return metadata[key] || {
+    type: 'string',
+    default: '',
+    description: '',
+    maxLength: 100
+  };
 }
 
 async function saveProperties() {
   if (!currentServerId) return;
   
   const editor = document.getElementById('properties-editor');
-  const inputs = editor.querySelectorAll('input[data-key]');
+  const inputs = editor.querySelectorAll('input[data-key], textarea[data-key], select[data-key]');
   
   const updatedProperties = {};
   inputs.forEach(input => {
@@ -3512,11 +3922,11 @@ async function saveProperties() {
       body: JSON.stringify({ properties: updatedProperties })
     });
     
-    alert('Properties saved successfully. Restart the server for changes to take effect.');
+    showNotification('Properties saved successfully. Restart the server for changes to take effect.', 'success');
     loadProperties(); // Reload to show saved state
   } catch (error) {
     console.error('Failed to save properties:', error);
-    alert('Failed to save properties: ' + error.message);
+    showNotification('Failed to save properties: ' + error.message, 'error');
   }
 }
 

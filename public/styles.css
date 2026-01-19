@@ -746,9 +746,16 @@ body {
   color: #888;
 }
 
+.property-type-info {
+  font-size: 11px;
+  color: #667eea;
+  font-style: italic;
+  margin-top: 2px;
+}
+
 .property-value-container {
   flex-shrink: 0;
-  min-width: 200px;
+  min-width: 250px;
 }
 
 .property-input {
@@ -766,6 +773,48 @@ body {
 .property-input:focus {
   outline: none;
   border-color: #667eea;
+}
+
+.property-textarea {
+  width: 100%;
+  padding: 10px;
+  background: #0b1929;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: 'Courier New', monospace;
+  transition: border-color 0.2s;
+  resize: vertical;
+  min-height: 50px;
+}
+
+.property-textarea:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.property-select {
+  width: 100%;
+  padding: 10px;
+  background: #0b1929;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.2s;
+  cursor: pointer;
+}
+
+.property-select:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.property-select option {
+  background: #0b1929;
+  color: #e0e0e0;
 }
 
 /* Toggle Switch Styles (Check/X style) */

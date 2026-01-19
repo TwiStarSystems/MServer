@@ -1563,6 +1563,10 @@ class ServerManager:
                 
             instance = self.servers.get(server_id)
             is_running = instance is not None and instance.is_running()
+            
+            # Get server port if available
+            port = self.get_server_port(server_id)
+            
             servers.append({
                 'id': server_id,
                 'name': server_config.get('name', 'Unnamed Server'),
@@ -1575,7 +1579,8 @@ class ServerManager:
                 'owner': server_config.get('owner'),
                 'created': server_config.get('created'),
                 'approved': is_approved,
-                'running': is_running
+                'running': is_running,
+                'port': port
             })
         return servers
     
@@ -2046,6 +2051,35 @@ class ServerManager:
         
         instance.send_command(command)
         return True, "Command sent"
+    
+    def get_server_port(self, server_id):
+        """Get the port number from server.properties"""
+        try:
+            server_path = self.get_server_path(server_id)
+            properties_path = server_path / 'server.properties'
+            
+            if properties_path.exists():
+                with open(properties_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            if key.strip() == 'server-port':
+                                return value.strip()
+            return None
+        except Exception:
+            return None
+    
+    def get_all_server_ports(self, exclude_server_id=None):
+        """Get all server ports currently in use (excluding a specific server if specified)"""
+        ports = {}
+        for server_id in self.config.get('servers', {}).keys():
+            if exclude_server_id and server_id == exclude_server_id:
+                continue
+            port = self.get_server_port(server_id)
+            if port:
+                ports[server_id] = port
+        return ports
     
     def get_server_path(self, server_id):
         """Get the path for a specific server"""
@@ -3702,6 +3736,20 @@ def save_properties(server_id):
         return jsonify({'error': 'Missing properties'}), 400
     
     new_properties = data['properties']
+    
+    # Check for duplicate port if server-port is being changed
+    if 'server-port' in new_properties:
+        new_port = new_properties['server-port']
+        existing_ports = server_manager.get_all_server_ports(exclude_server_id=server_id)
+        
+        # Check if this port is already in use by another server
+        for other_server_id, port in existing_ports.items():
+            if port == new_port:
+                other_server_config = server_manager.get_server_config(other_server_id)
+                other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
+                return jsonify({
+                    'error': f'Port {new_port} is already in use by server: {other_server_name}'
+                }), 400
     
     try:
         # Read existing file to preserve comments and order
