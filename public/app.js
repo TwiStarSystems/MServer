@@ -3508,5 +3508,19 @@ async function saveProperties() {
 
 function refreshProperties() {
   loadProperties();
-
 }
+
+// Add event listeners for properties buttons
+document.addEventListener('DOMContentLoaded', () => {
+  const savePropertiesBtn = document.getElementById('save-properties-btn');
+  const refreshPropertiesBtn = document.getElementById('refresh-properties-btn');
+  
+  if (savePropertiesBtn) {
+    savePropertiesBtn.addEventListener('click', saveProperties);
+  }
+  
+  if (refreshPropertiesBtn) {
+    refreshPropertiesBtn.addEventListener('click', refreshProperties);
+  }
+});
+
