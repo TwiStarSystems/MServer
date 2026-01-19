@@ -94,6 +94,7 @@
           <button class="tab-button active" data-tab="terminal">Terminal</button>
           <button class="tab-button" data-tab="files">Files</button>
           <button class="tab-button" data-tab="mods" id="mods-tab-btn" style="display: none;">Mods</button>
+          <button class="tab-button" data-tab="properties" id="properties-tab-btn" style="display: none;">Properties</button>
           <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
         </nav>
@@ -187,6 +188,28 @@
                   <tr><td colspan="4" class="empty-message">No mods installed</td></tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Properties Tab -->
+        <div id="properties-tab" class="tab-content">
+          <div class="properties-container">
+            <div class="properties-header">
+              <h3>⚙️ Server Properties</h3>
+              <div class="properties-actions">
+                <button id="save-properties-btn" class="btn btn-success">Save Changes</button>
+                <button id="refresh-properties-btn" class="btn">Refresh</button>
+              </div>
+            </div>
+            <p class="properties-info">Edit your server.properties file. Changes require a server restart to take effect.</p>
+            
+            <div id="properties-loading" class="properties-loading" style="display: none;">
+              <p>Loading properties...</p>
+            </div>
+            
+            <div id="properties-editor" class="properties-editor">
+              <p class="empty-message">No properties file found. Start the server at least once to generate it.</p>
             </div>
           </div>
         </div>

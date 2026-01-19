@@ -3651,6 +3651,95 @@ def delete_mod(server_id, mod_type, filename):
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== Properties API ====================
+
+@app.route('/api/servers/<server_id>/properties/exists', methods=['GET'])
+@server_access_required
+def check_properties_exists(server_id):
+    """Check if server.properties file exists"""
+    server_path = server_manager.get_server_path(server_id)
+    properties_path = server_path / 'server.properties'
+    
+    return jsonify({'exists': properties_path.exists()})
+
+@app.route('/api/servers/<server_id>/properties', methods=['GET'])
+@server_access_required
+def get_properties(server_id):
+    """Get server properties"""
+    server_path = server_manager.get_server_path(server_id)
+    properties_path = server_path / 'server.properties'
+    
+    if not properties_path.exists():
+        return jsonify({'error': 'server.properties not found. Start the server at least once to generate it.'}), 404
+    
+    try:
+        properties = {}
+        with open(properties_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # Skip comments and empty lines
+                if line and not line.startswith('#'):
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        properties[key.strip()] = value.strip()
+        
+        return jsonify({'properties': properties})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/properties', methods=['POST'])
+@server_access_required
+def save_properties(server_id):
+    """Save server properties"""
+    server_path = server_manager.get_server_path(server_id)
+    properties_path = server_path / 'server.properties'
+    
+    if not properties_path.exists():
+        return jsonify({'error': 'server.properties not found'}), 404
+    
+    data = request.json
+    if not data or 'properties' not in data:
+        return jsonify({'error': 'Missing properties'}), 400
+    
+    new_properties = data['properties']
+    
+    try:
+        # Read existing file to preserve comments and order
+        lines = []
+        with open(properties_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                stripped = line.strip()
+                # Preserve comments and empty lines
+                if not stripped or stripped.startswith('#'):
+                    lines.append(line)
+                elif '=' in stripped:
+                    key, _ = stripped.split('=', 1)
+                    key = key.strip()
+                    # Update with new value if exists, otherwise keep original
+                    if key in new_properties:
+                        lines.append(f'{key}={new_properties[key]}\n')
+                        # Mark as processed
+                        new_properties.pop(key)
+                    else:
+                        lines.append(line)
+                else:
+                    lines.append(line)
+        
+        # Append any new properties that weren't in the original file
+        if new_properties:
+            lines.append('\n# Added by MServerController\n')
+            for key, value in new_properties.items():
+                lines.append(f'{key}={value}\n')
+        
+        # Write back to file
+        with open(properties_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== Backup API ====================
 
 @app.route('/api/servers/<server_id>/backups', methods=['GET'])

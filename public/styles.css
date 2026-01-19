@@ -640,6 +640,119 @@ body {
   margin-top: 5px;
 }
 
+/* ==================== Properties Tab ==================== */
+
+.properties-container {
+  padding: 15px 0;
+}
+
+.properties-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.properties-header h3 {
+  font-size: 1.2rem;
+  color: #fff;
+}
+
+.properties-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.properties-info {
+  color: #f5a623;
+  margin-bottom: 20px;
+  font-size: 14px;
+  padding: 12px 15px;
+  background: rgba(245, 166, 35, 0.1);
+  border-radius: 6px;
+  border-left: 3px solid #f5a623;
+}
+
+.properties-loading {
+  text-align: center;
+  padding: 40px;
+  color: #888;
+}
+
+.properties-editor {
+  background: #16213e;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.properties-editor .empty-message {
+  text-align: center;
+  color: #666;
+  padding: 40px;
+  font-style: italic;
+}
+
+.property-group {
+  margin-bottom: 15px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #0f3460;
+}
+
+.property-group:last-child {
+  border-bottom: none;
+}
+
+.property-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.property-name {
+  font-weight: 600;
+  color: #667eea;
+  font-family: monospace;
+  font-size: 14px;
+}
+
+.property-type {
+  font-size: 12px;
+  color: #888;
+  background: #1a1a2e;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.property-input {
+  width: 100%;
+  padding: 10px;
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.property-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.property-input[type="checkbox"] {
+  width: auto;
+  height: 18px;
+  cursor: pointer;
+}
+
+.property-description {
+  font-size: 12px;
+  color: #888;
+  margin-top: 5px;
+}
+
 /* ==================== Backups ==================== */
 
 .backup-controls {

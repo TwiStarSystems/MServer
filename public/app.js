@@ -1,5 +1,18 @@
 // MServerController - Multi-Server Frontend Application
 
+// Global fetch wrapper to handle authentication errors
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+  const response = await originalFetch.apply(this, args);
+  
+  // Redirect to login if authentication fails (except for auth endpoints)
+  if (response.status === 401 && !args[0].includes('/api/auth/')) {
+    window.location.href = '/login.html';
+  }
+  
+  return response;
+};
+
 // Global state
 let socket = null;
 let currentServerId = null;
@@ -311,6 +324,22 @@ async function loadServerDetails() {
       if (document.querySelector('.tab-button.active[data-tab="mods"]')) {
         switchTab('terminal');
       }
+    }
+    
+    // Check if server.properties exists and show/hide Properties tab
+    const propertiesTabBtn = document.getElementById('properties-tab-btn');
+    try {
+      const propsCheck = await apiRequest(`/api/servers/${currentServerId}/properties/exists`);
+      if (propsCheck.exists) {
+        propertiesTabBtn.style.display = '';
+      } else {
+        propertiesTabBtn.style.display = 'none';
+        if (document.querySelector('.tab-button.active[data-tab="properties"]')) {
+          switchTab('terminal');
+        }
+      }
+    } catch (err) {
+      propertiesTabBtn.style.display = 'none';
     }
   } catch (error) {
     console.error('Failed to load server details:', error);
@@ -2291,6 +2320,8 @@ function switchTab(tabName) {
     loadAllPlayerData();
   } else if (tabName === 'mods') {
     loadMods();
+  } else if (tabName === 'properties') {
+    loadProperties();
   }
 }
 
@@ -3273,4 +3304,209 @@ async function changePassword(event) {
   } catch (err) {
     console.error('Failed to change password:', err);
   }
+}
+
+// ==================== Properties Management ====================
+
+let currentProperties = {};
+
+async function loadProperties() {
+  if (!currentServerId) return;
+  
+  const editor = document.getElementById('properties-editor');
+  const loading = document.getElementById('properties-loading');
+  const empty = document.getElementById('properties-empty');
+  
+  loading.style.display = 'block';
+  editor.innerHTML = '';
+  empty.style.display = 'none';
+  
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/properties`);
+    
+    if (data.properties && Object.keys(data.properties).length > 0) {
+      currentProperties = data.properties;
+      renderPropertiesEditor(data.properties);
+      loading.style.display = 'none';
+      editor.style.display = 'block';
+    } else {
+      loading.style.display = 'none';
+      empty.style.display = 'flex';
+    }
+  } catch (error) {
+    console.error('Failed to load properties:', error);
+    loading.style.display = 'none';
+    empty.style.display = 'flex';
+  }
+}
+
+function renderPropertiesEditor(properties) {
+  const editor = document.getElementById('properties-editor');
+  editor.innerHTML = '';
+  
+  // Group properties by category for better organization
+  const groups = {
+    'Server Settings': ['server-name', 'server-port', 'server-ip', 'max-players', 'white-list', 'enforce-whitelist', 'online-mode', 'motd'],
+    'World Settings': ['level-name', 'level-type', 'level-seed', 'generator-settings', 'generate-structures', 'allow-nether', 'allow-flight', 'max-world-size', 'view-distance', 'simulation-distance'],
+    'Gameplay': ['gamemode', 'difficulty', 'hardcore', 'pvp', 'spawn-protection', 'spawn-npcs', 'spawn-animals', 'spawn-monsters', 'max-tick-time'],
+    'Performance': ['max-threads', 'rate-limit', 'network-compression-threshold', 'enable-jmx-monitoring', 'sync-chunk-writes'],
+    'Advanced': []
+  };
+  
+  // Create a set of all grouped properties
+  const groupedProps = new Set();
+  Object.values(groups).forEach(group => group.forEach(prop => groupedProps.add(prop)));
+  
+  // Add ungrouped properties to Advanced
+  Object.keys(properties).forEach(key => {
+    if (!groupedProps.has(key)) {
+      groups['Advanced'].push(key);
+    }
+  });
+  
+  // Render each group
+  Object.entries(groups).forEach(([groupName, propKeys]) => {
+    const groupProps = propKeys.filter(key => properties.hasOwnProperty(key));
+    if (groupProps.length === 0 && groupName !== 'Advanced') return;
+    
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'property-group';
+    
+    const groupTitle = document.createElement('h3');
+    groupTitle.textContent = groupName;
+    groupDiv.appendChild(groupTitle);
+    
+    groupProps.forEach(key => {
+      const value = properties[key];
+      const propertyDiv = document.createElement('div');
+      propertyDiv.className = 'property-item';
+      
+      const label = document.createElement('label');
+      label.className = 'property-label';
+      label.htmlFor = `prop-${key}`;
+      
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'property-name';
+      nameSpan.textContent = key;
+      label.appendChild(nameSpan);
+      
+      // Add description if available
+      const description = getPropertyDescription(key);
+      if (description) {
+        const descSpan = document.createElement('span');
+        descSpan.className = 'property-description';
+        descSpan.textContent = description;
+        label.appendChild(descSpan);
+      }
+      
+      propertyDiv.appendChild(label);
+      
+      // Determine input type based on value
+      const inputType = determineInputType(key, value);
+      
+      if (inputType === 'boolean') {
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.id = `prop-${key}`;
+        input.className = 'property-checkbox';
+        input.checked = value === 'true';
+        input.dataset.key = key;
+        propertyDiv.appendChild(input);
+      } else if (inputType === 'number') {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.id = `prop-${key}`;
+        input.className = 'property-input';
+        input.value = value;
+        input.dataset.key = key;
+        propertyDiv.appendChild(input);
+      } else {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = `prop-${key}`;
+        input.className = 'property-input';
+        input.value = value;
+        input.dataset.key = key;
+        propertyDiv.appendChild(input);
+      }
+      
+      groupDiv.appendChild(propertyDiv);
+    });
+    
+    editor.appendChild(groupDiv);
+  });
+}
+
+function determineInputType(key, value) {
+  // Boolean properties
+  if (value === 'true' || value === 'false') {
+    return 'boolean';
+  }
+  
+  // Number properties
+  if (!isNaN(value) && value !== '') {
+    return 'number';
+  }
+  
+  return 'text';
+}
+
+function getPropertyDescription(key) {
+  const descriptions = {
+    'server-port': 'The port number the server listens on (default: 25565)',
+    'server-ip': 'The IP address the server binds to (leave blank for all)',
+    'max-players': 'Maximum number of players that can join',
+    'white-list': 'Enable whitelist mode (only whitelisted players can join)',
+    'online-mode': 'Verify player accounts with Mojang servers',
+    'motd': 'Message of the day shown in the server list',
+    'level-name': 'Name of the world folder',
+    'level-type': 'World generation type (default, flat, largeBiomes, amplified)',
+    'gamemode': 'Default game mode (survival, creative, adventure, spectator)',
+    'difficulty': 'World difficulty (peaceful, easy, normal, hard)',
+    'pvp': 'Enable player versus player combat',
+    'spawn-protection': 'Radius around spawn where ops can build',
+    'view-distance': 'Server-side view distance in chunks (3-32)',
+    'simulation-distance': 'Distance in chunks around players where mobs spawn and grow (3-32)',
+    'hardcore': 'Enable hardcore mode (permanent death)',
+    'allow-nether': 'Allow players to travel to the Nether',
+    'allow-flight': 'Allow players to fly (non-creative)',
+    'enforce-whitelist': 'Kick players not on whitelist immediately'
+  };
+  
+  return descriptions[key] || '';
+}
+
+async function saveProperties() {
+  if (!currentServerId) return;
+  
+  const editor = document.getElementById('properties-editor');
+  const inputs = editor.querySelectorAll('input[data-key]');
+  
+  const updatedProperties = {};
+  inputs.forEach(input => {
+    const key = input.dataset.key;
+    if (input.type === 'checkbox') {
+      updatedProperties[key] = input.checked ? 'true' : 'false';
+    } else {
+      updatedProperties[key] = input.value;
+    }
+  });
+  
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/properties`, {
+      method: 'POST',
+      body: JSON.stringify({ properties: updatedProperties })
+    });
+    
+    alert('Properties saved successfully. Restart the server for changes to take effect.');
+    loadProperties(); // Reload to show saved state
+  } catch (error) {
+    console.error('Failed to save properties:', error);
+    alert('Failed to save properties: ' + error.message);
+  }
+}
+
+function refreshProperties() {
+  loadProperties();
+
 }

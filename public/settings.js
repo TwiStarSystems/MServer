@@ -4,6 +4,19 @@ let socket = null;
 let statsChart = null;
 let currentUser = null;
 
+// Global fetch wrapper to handle authentication errors
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+  const response = await originalFetch.apply(this, args);
+  
+  // Redirect to login if authentication fails
+  if (response.status === 401) {
+    window.location.href = '/login.html';
+  }
+  
+  return response;
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Set up tab switching FIRST before any async operations
   document.querySelectorAll('.settings-tab-btn').forEach(btn => {
