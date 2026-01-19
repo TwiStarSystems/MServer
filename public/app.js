@@ -279,10 +279,10 @@ function renderServerList() {
       <div class="server-item ${server.id === currentServerId ? 'active' : ''}" 
            data-server-id="${server.id}" 
            onclick="selectServer('${server.id}')">
-        <div class="server-item-status ${statusClasses[status]}">●</div>
+        <div class="server-item-status ${statusClasses[status] || 'status-stopped'}">●</div>
         <div class="server-item-info">
           <div class="server-item-name">${escapeHtml(server.name)}</div>
-          <div class="server-item-state">${statusTexts[status]}</div>
+          <div class="server-item-state">${statusTexts[status] || 'Unknown'}</div>
         </div>
       </div>
     `;
@@ -377,6 +377,9 @@ function updateServerStatus(status, isRunning) {
   const killBtn = document.getElementById('kill-btn');
   const terminalInput = document.getElementById('terminal-input');
   const sendBtn = document.getElementById('send-btn');
+  
+  // Fallback to 'stopped' if status is undefined
+  status = status || 'stopped';
   
   // Update status indicator and text
   const statusClasses = {
