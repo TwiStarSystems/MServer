@@ -2475,12 +2475,23 @@ class ServerInstance:
         try:
             buffer = b''
             while self.process.poll() is None:
-                # Read available data (non-blocking style with small chunks)
-                chunk = self.process.stdout.read(1)
+                # Read available data in larger chunks for better performance
+                chunk = self.process.stdout.read(4096)
                 if chunk:
                     buffer += chunk
-                    # Check for newline to send complete lines
-                    if chunk == b'\n':
+                    # Process all complete lines in the buffer
+                    while b'\n' in buffer:
+                        line_bytes, buffer = buffer.split(b'\n', 1)
+                        line_bytes += b'\n'
+                        try:
+                            line = line_bytes.decode('utf-8', errors='replace')
+                        except:
+                            line = line_bytes.decode('latin-1', errors='replace')
+                        self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
+                        self._add_to_buffer(line)
+                    
+                    # If we have partial line data (no newline yet), send it immediately
+                    if buffer and len(buffer) > 0:
                         try:
                             line = buffer.decode('utf-8', errors='replace')
                         except:
@@ -3163,10 +3174,12 @@ def get_server(server_id):
     
     instance = server_manager.servers.get(server_id)
     is_running = instance is not None and instance.is_running()
+    status = instance.get_status().value if instance else ServerStatus.STOPPED.value
     
     return jsonify({
         'id': server_id,
         'running': is_running,
+        'status': status,
         **config
     })
 
