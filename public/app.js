@@ -3404,14 +3404,27 @@ function renderPropertiesEditor(properties) {
       // Determine input type based on value
       const inputType = determineInputType(key, value);
       
+      // Create container for the value/input
+      const valueContainer = document.createElement('div');
+      valueContainer.className = 'property-value-container';
+      
       if (inputType === 'boolean') {
+        // Create toggle switch container
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'toggle-switch';
+        
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.id = `prop-${key}`;
-        input.className = 'property-checkbox';
         input.checked = value === 'true';
         input.dataset.key = key;
-        propertyDiv.appendChild(input);
+        
+        const slider = document.createElement('span');
+        slider.className = 'toggle-slider';
+        
+        toggleLabel.appendChild(input);
+        toggleLabel.appendChild(slider);
+        valueContainer.appendChild(toggleLabel);
       } else if (inputType === 'number') {
         const input = document.createElement('input');
         input.type = 'number';
@@ -3419,7 +3432,7 @@ function renderPropertiesEditor(properties) {
         input.className = 'property-input';
         input.value = value;
         input.dataset.key = key;
-        propertyDiv.appendChild(input);
+        valueContainer.appendChild(input);
       } else {
         const input = document.createElement('input');
         input.type = 'text';
@@ -3427,9 +3440,10 @@ function renderPropertiesEditor(properties) {
         input.className = 'property-input';
         input.value = value;
         input.dataset.key = key;
-        propertyDiv.appendChild(input);
+        valueContainer.appendChild(input);
       }
       
+      propertyDiv.appendChild(valueContainer);
       groupDiv.appendChild(propertyDiv);
     });
     
