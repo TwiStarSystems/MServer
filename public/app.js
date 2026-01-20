@@ -145,26 +145,32 @@ async function logout() {
 // ==================== Profile Settings ====================
 
 function openProfileSettings() {
-  // Populate profile display section (read-only)
-  document.getElementById('profile-display-username').textContent = currentUser.username;
-  const roleDisplay = document.getElementById('profile-display-role');
-  roleDisplay.textContent = currentUser.role.toUpperCase();
-  roleDisplay.className = 'profile-info-value profile-role-badge ' + currentUser.role;
-  
-  // Populate editable fields
-  document.getElementById('profile-username').value = currentUser.username;
-  document.getElementById('profile-name').value = currentUser.name || '';
-  
-  // Clear password fields
-  document.getElementById('profile-old-password').value = '';
-  document.getElementById('profile-new-password').value = '';
-  document.getElementById('profile-confirm-password').value = '';
-  
-  // Update MFA status
-  updateMFAStatus();
-  
-  // Show modal
-  document.getElementById('profile-modal').style.display = 'flex';
+  try {
+    // Populate profile display section (read-only)
+    document.getElementById('profile-display-username').textContent = currentUser.username;
+    const roleDisplay = document.getElementById('profile-display-role');
+    roleDisplay.textContent = currentUser.role.toUpperCase();
+    roleDisplay.className = 'profile-info-value profile-role-badge ' + currentUser.role;
+    
+    // Populate editable fields
+    document.getElementById('profile-username').value = currentUser.username;
+    document.getElementById('profile-name').value = currentUser.name || '';
+    
+    // Clear password fields
+    document.getElementById('profile-old-password').value = '';
+    document.getElementById('profile-new-password').value = '';
+    document.getElementById('profile-confirm-password').value = '';
+    
+    // Update MFA status
+    updateMFAStatus();
+    
+    // Show modal
+    document.getElementById('profile-modal').style.display = 'flex';
+  } catch (err) {
+    console.error('Error opening profile settings:', err);
+    // Still show the modal even if there's an error
+    document.getElementById('profile-modal').style.display = 'flex';
+  }
 }
 
 function closeProfileModal() {
@@ -279,13 +285,25 @@ async function changePassword() {
 let currentMFASecret = null;
 let currentRecoveryCode = null;
 
+console.log('MFA Functions loaded - v2.0'); // Debug marker
+
 function updateMFAStatus() {
-  const mfaEnabled = currentUser.mfaEnabled || false;
+  if (!currentUser) {
+    console.warn('currentUser not defined yet');
+    return;
+  }
   
-  document.getElementById('mfa-disabled-view').style.display = mfaEnabled ? 'none' : 'block';
-  document.getElementById('mfa-enabled-view').style.display = mfaEnabled ? 'block' : 'none';
-  document.getElementById('mfa-setup-section').style.display = 'none';
-  document.getElementById('mfa-recovery-section').style.display = 'none';
+  const mfaEnabled = currentUser.mfaEnabled === true;
+  
+  const mfaDisabledView = document.getElementById('mfa-disabled-view');
+  const mfaEnabledView = document.getElementById('mfa-enabled-view');
+  const mfaSetupSection = document.getElementById('mfa-setup-section');
+  const mfaRecoverySection = document.getElementById('mfa-recovery-section');
+  
+  if (mfaDisabledView) mfaDisabledView.style.display = mfaEnabled ? 'none' : 'block';
+  if (mfaEnabledView) mfaEnabledView.style.display = mfaEnabled ? 'block' : 'none';
+  if (mfaSetupSection) mfaSetupSection.style.display = 'none';
+  if (mfaRecoverySection) mfaRecoverySection.style.display = 'none';
 }
 
 async function setupMFA() {
