@@ -33,6 +33,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -40,6 +41,10 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# Configure ProxyFix for reverse proxy (e.g., Nginx) headers
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
 
 # Rate limiting
@@ -82,7 +87,7 @@ class SettingsManager:
             'siteTitle': 'MServerController',
             'siteIcon': '',
             'footerAddition': '',
-            'resourcePackBaseUrl': ''
+            'baseUrl': ''
         },
         'app': {
             'enableRegistration': True,
@@ -131,7 +136,7 @@ class SettingsManager:
         if 'branding' not in self.settings:
             self.settings['branding'] = {}
         
-        for key in ['siteTitle', 'siteIcon', 'footerAddition', 'resourcePackBaseUrl']:
+        for key in ['siteTitle', 'siteIcon', 'footerAddition', 'baseUrl']:
             if key in branding_data:
                 self.settings['branding'][key] = branding_data[key]
         
@@ -4281,8 +4286,8 @@ def get_resourcepack_info(server_id):
                 sha1_hash.update(chunk)
         
         # Get base URL from settings
-        base_url = settings_manager.get_branding().get('resourcePackBaseUrl', '')
-        pack_url = f"{base_url}/{server_id}.zip" if base_url else ''
+        base_url = settings_manager.get_branding().get('baseUrl', '')
+        pack_url = f"{base_url}/resourcepacks/{server_id}.zip" if base_url else ''
         
         return jsonify({
             'exists': True,
@@ -4334,11 +4339,11 @@ def upload_resourcepack(server_id):
         sha1_hex = sha1_hash.hexdigest()
         
         # Get base URL from settings
-        base_url = settings_manager.get_branding().get('resourcePackBaseUrl', '')
+        base_url = settings_manager.get_branding().get('baseUrl', '')
         if not base_url:
-            return jsonify({'error': 'Resource Pack Base URL is not configured. Please set it in Settings > Branding.'}), 400
+            return jsonify({'error': 'Base URL is not configured. Please set it in Settings > Branding.'}), 400
         
-        pack_url = f"{base_url}/{server_id}.zip"
+        pack_url = f"{base_url}/resourcepacks/{server_id}.zip"
         
         # Update server.properties if it exists
         properties_path = server_manager.get_server_path(server_id) / 'server.properties'

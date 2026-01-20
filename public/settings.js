@@ -315,7 +315,7 @@ async function loadBranding() {
       document.getElementById('branding-site-title').value = branding.siteTitle || '';
       document.getElementById('site-icon').value = branding.siteIcon || '';
       document.getElementById('footer-addition').value = branding.footerAddition || '';
-      document.getElementById('resource-pack-base-url').value = branding.resourcePackBaseUrl || '';
+      document.getElementById('base-url').value = branding.baseUrl || '';
       
       updateBrandingPreview();
     }
@@ -353,7 +353,7 @@ async function saveBranding(e) {
     siteTitle: document.getElementById('branding-site-title').value,
     siteIcon: document.getElementById('site-icon').value,
     footerAddition: document.getElementById('footer-addition').value,
-    resourcePackBaseUrl: document.getElementById('resource-pack-base-url').value
+    baseUrl: document.getElementById('base-url').value
   };
   
   try {
