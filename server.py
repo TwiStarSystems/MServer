@@ -20,6 +20,8 @@ import hashlib
 import secrets
 import socket
 import select
+import pyotp
+import qrcode
 from enum import Enum
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -93,6 +95,10 @@ class SettingsManager:
             'enableRegistration': True,
             'requireApproval': True,
             'requireServerApproval': False
+        },
+        'mfa': {
+            'requireMfaForAdmins': False,
+            'requireMfaForAllUsers': False
         }
     }
     
@@ -936,6 +942,10 @@ class UserManager:
                 'username': 'admin',
                 'password': generate_password_hash('admin'),
                 'role': 'admin',
+                'name': '',
+                'mfaEnabled': False,
+                'mfaSecret': None,
+                'mfaRecoveryCode': None,
                 'approved': True,
                 'created': datetime.now().isoformat(),
                 'lastLogin': None
@@ -984,6 +994,10 @@ class UserManager:
                 'username': username,
                 'password': generate_password_hash(password),
                 'role': 'user',
+                'name': '',
+                'mfaEnabled': False,
+                'mfaSecret': None,
+                'mfaRecoveryCode': None,
                 'approved': not require_approval,  # Auto-approve if not required
                 'created': datetime.now().isoformat(),
                 'lastLogin': None
@@ -1021,6 +1035,10 @@ class UserManager:
                 'username': username,
                 'password': generate_password_hash(password),
                 'role': role,
+                'name': '',
+                'mfaEnabled': False,
+                'mfaSecret': None,
+                'mfaRecoveryCode': None,
                 'approved': True,  # Admin-created users are auto-approved
                 'created': datetime.now().isoformat(),
                 'lastLogin': None
@@ -1046,6 +1064,7 @@ class UserManager:
             users.append({
                 'id': user_id,
                 'username': user['username'],
+                'name': user.get('name', ''),
                 'role': user['role'],
                 'approved': user.get('approved', False),
                 'created': user.get('created'),
@@ -1109,6 +1128,109 @@ class UserManager:
             self.users['users'][user_id]['password'] = generate_password_hash(new_password)
             self._save_users()
             return True
+    
+    def update_username(self, user_id, new_username):
+        """Update user's username"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            # Validate username
+            if len(new_username) < 3 or len(new_username) > 32:
+                return False, "Username must be 3-32 characters"
+            if not new_username.replace('_', '').replace('-', '').isalnum():
+                return False, "Username can only contain letters, numbers, underscores, and hyphens"
+            
+            # Check if username already exists (case-insensitive)
+            for uid, u in self.users.get('users', {}).items():
+                if uid != user_id and u['username'].lower() == new_username.lower():
+                    return False, "Username already exists"
+            
+            self.users['users'][user_id]['username'] = new_username
+            self._save_users()
+            return True, "Username updated successfully"
+    
+    def update_name(self, user_id, name):
+        """Update user's display name"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            # Validate name (optional, can be empty)
+            if len(name) > 100:
+                return False, "Name must be 100 characters or less"
+            
+            self.users['users'][user_id]['name'] = name
+            self._save_users()
+            return True, "Name updated successfully"
+    
+    def generate_mfa_secret(self, user_id):
+        """Generate a new TOTP secret for user"""
+        user = self.users.get('users', {}).get(user_id)
+        if not user:
+            return None, "User not found"
+        
+        # Generate random secret
+        secret = pyotp.random_base32()
+        return secret, "Secret generated successfully"
+    
+    def generate_recovery_code(self):
+        """Generate a recovery code in format XXXXXXXX-XXXXXXXX-XXXXXXXX"""
+        parts = []
+        for _ in range(3):
+            # Generate 8 hex characters
+            part = ''.join(secrets.choice('ABCDEF0123456789') for _ in range(8))
+            parts.append(part)
+        return '-'.join(parts)
+    
+    def verify_totp(self, secret, code):
+        """Verify a TOTP code"""
+        totp = pyotp.TOTP(secret)
+        return totp.verify(code, valid_window=1)  # Allow 1 step before/after for clock drift
+    
+    def enable_mfa(self, user_id, secret, recovery_code):
+        """Enable MFA for user"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            self.users['users'][user_id]['mfaEnabled'] = True
+            self.users['users'][user_id]['mfaSecret'] = secret
+            self.users['users'][user_id]['mfaRecoveryCode'] = recovery_code
+            self._save_users()
+            return True, "MFA enabled successfully"
+    
+    def disable_mfa(self, user_id):
+        """Disable MFA for user"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            self.users['users'][user_id]['mfaEnabled'] = False
+            self.users['users'][user_id]['mfaSecret'] = None
+            self.users['users'][user_id]['mfaRecoveryCode'] = None
+            self._save_users()
+            return True, "MFA disabled successfully"
+    
+    def verify_recovery_code(self, user_id, recovery_code):
+        """Verify and use recovery code (one-time use)"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False
+            
+            if user.get('mfaRecoveryCode') == recovery_code:
+                # Disable MFA after recovery code is used
+                self.users['users'][user_id]['mfaEnabled'] = False
+                self.users['users'][user_id]['mfaSecret'] = None
+                self.users['users'][user_id]['mfaRecoveryCode'] = None
+                self._save_users()
+                return True
+            return False
     
     def get_role_level(self, role):
         """Get numeric role level"""
@@ -2749,6 +2871,30 @@ def api_login():
     if user_id is None:
         return jsonify({'error': result}), 401
     
+    # Check if MFA is enabled for this user
+    if result.get('mfaEnabled', False):
+        # Set temporary session for MFA verification
+        session['temp_user_id'] = user_id
+        session['mfa_required'] = True
+        
+        return jsonify({
+            'success': True,
+            'mfaRequired': True,
+            'message': 'MFA verification required'
+        })
+    
+    # Check MFA policies
+    mfa_settings = settings_manager.get_settings().get('mfa', {})
+    require_all = mfa_settings.get('requireMfaForAllUsers', False)
+    require_admin = mfa_settings.get('requireMfaForAdmins', False)
+    
+    if require_all or (require_admin and result['role'] == 'admin'):
+        if not result.get('mfaEnabled', False):
+            return jsonify({
+                'error': 'MFA is required for your account. Please contact an administrator.',
+                'code': 'MFA_REQUIRED'
+            }), 403
+    
     # Set session
     session.permanent = True
     session['user_id'] = user_id
@@ -2803,7 +2949,9 @@ def api_current_user():
     return jsonify({
         'id': user_id,
         'username': user['username'],
-        'role': user['role']
+        'name': user.get('name', ''),
+        'role': user['role'],
+        'mfaEnabled': user.get('mfaEnabled', False)
     })
 
 @app.route('/api/auth/password', methods=['POST'])
@@ -2822,6 +2970,210 @@ def api_change_password():
         return jsonify({'error': message}), 400
     
     return jsonify({'success': True, 'message': message})
+
+@app.route('/api/auth/profile/username', methods=['PUT'])
+@login_required
+def api_update_username():
+    """Update current user's username"""
+    user_id = session.get('user_id')
+    data = request.get_json()
+    
+    new_username = data.get('username', '').strip()
+    
+    if not new_username:
+        return jsonify({'error': 'Username is required'}), 400
+    
+    success, message = user_manager.update_username(user_id, new_username)
+    
+    if not success:
+        return jsonify({'error': message}), 400
+    
+    # Update session with new username
+    session['username'] = new_username
+    
+    return jsonify({'success': True, 'message': message})
+
+@app.route('/api/auth/profile/name', methods=['PUT'])
+@login_required
+def api_update_name():
+    """Update current user's display name"""
+    user_id = session.get('user_id')
+    data = request.get_json()
+    
+    name = data.get('name', '').strip()
+    
+    success, message = user_manager.update_name(user_id, name)
+    
+    if not success:
+        return jsonify({'error': message}), 400
+    
+    return jsonify({'success': True, 'message': message})
+
+# ==================== MFA API ====================
+
+@app.route('/api/auth/mfa/setup', methods=['POST'])
+@login_required
+def api_mfa_setup():
+    """Generate MFA secret and QR code for setup"""
+    user_id = session.get('user_id')
+    user = user_manager.get_user(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    # Generate secret
+    secret, _ = user_manager.generate_mfa_secret(user_id)
+    
+    # Generate QR code
+    username = user['username']
+    app_name = settings_manager.get_branding().get('siteTitle', 'MServerController')
+    
+    totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=username,
+        issuer_name=app_name
+    )
+    
+    # Generate QR code as base64 image
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(totp_uri)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Convert to base64
+    img_buffer = io.BytesIO()
+    img.save(img_buffer, format='PNG')
+    img_buffer.seek(0)
+    img_base64 = 'data:image/png;base64,' + hashlib.sha256(img_buffer.getvalue()).hexdigest()[:20]  # Placeholder
+    
+    # Actually encode as base64
+    import base64
+    img_buffer.seek(0)
+    img_base64 = 'data:image/png;base64,' + base64.b64encode(img_buffer.getvalue()).decode()
+    
+    return jsonify({
+        'success': True,
+        'secret': secret,
+        'qrCode': img_base64,
+        'manualEntry': secret
+    })
+
+@app.route('/api/auth/mfa/verify', methods=['POST'])
+@login_required
+def api_mfa_verify():
+    """Verify TOTP code and enable MFA"""
+    user_id = session.get('user_id')
+    data = request.get_json()
+    
+    secret = data.get('secret', '')
+    code = data.get('code', '')
+    
+    if not secret or not code:
+        return jsonify({'error': 'Secret and code are required'}), 400
+    
+    # Verify the code
+    if not user_manager.verify_totp(secret, code):
+        return jsonify({'error': 'Invalid verification code'}), 400
+    
+    # Generate recovery code
+    recovery_code = user_manager.generate_recovery_code()
+    
+    # Enable MFA
+    success, message = user_manager.enable_mfa(user_id, secret, recovery_code)
+    
+    if not success:
+        return jsonify({'error': message}), 400
+    
+    return jsonify({
+        'success': True,
+        'message': 'MFA enabled successfully',
+        'recoveryCode': recovery_code
+    })
+
+@app.route('/api/auth/mfa/disable', methods=['POST'])
+@login_required
+def api_mfa_disable():
+    """Disable MFA for current user"""
+    user_id = session.get('user_id')
+    data = request.get_json()
+    
+    password = data.get('password', '')
+    
+    if not password:
+        return jsonify({'error': 'Password required to disable MFA'}), 400
+    
+    # Verify password
+    user = user_manager.get_user(user_id)
+    if not check_password_hash(user['password'], password):
+        return jsonify({'error': 'Invalid password'}), 401
+    
+    success, message = user_manager.disable_mfa(user_id)
+    
+    if not success:
+        return jsonify({'error': message}), 400
+    
+    return jsonify({'success': True, 'message': message})
+
+@app.route('/api/auth/mfa/verify-login', methods=['POST'])
+@limiter.limit("10 per minute")
+def api_mfa_verify_login():
+    """Verify MFA code during login"""
+    temp_user_id = session.get('temp_user_id')
+    
+    if not temp_user_id:
+        return jsonify({'error': 'No pending MFA verification'}), 400
+    
+    data = request.get_json()
+    code = data.get('code', '')
+    use_recovery = data.get('useRecovery', False)
+    
+    if not code:
+        return jsonify({'error': 'Code is required'}), 400
+    
+    user = user_manager.get_user(temp_user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    
+    verified = False
+    
+    if use_recovery:
+        # Verify recovery code
+        verified = user_manager.verify_recovery_code(temp_user_id, code)
+        if verified:
+            # Recovery code disables MFA
+            message = 'MFA has been disabled using recovery code'
+        else:
+            return jsonify({'error': 'Invalid recovery code'}), 401
+    else:
+        # Verify TOTP code
+        if not user.get('mfaSecret'):
+            return jsonify({'error': 'MFA not enabled for this user'}), 400
+        
+        verified = user_manager.verify_totp(user.get('mfaSecret'), code)
+        if not verified:
+            return jsonify({'error': 'Invalid verification code'}), 401
+        message = 'Login successful'
+    
+    if verified:
+        # Complete login
+        session.permanent = True
+        session['user_id'] = temp_user_id
+        session['username'] = user['username']
+        session['role'] = user['role']
+        session.pop('temp_user_id', None)
+        session.pop('mfa_required', None)
+        
+        return jsonify({
+            'success': True,
+            'message': message,
+            'user': {
+                'id': temp_user_id,
+                'username': user['username'],
+                'role': user['role']
+            }
+        })
+    
+    return jsonify({'error': 'Verification failed'}), 401
 
 
 # ==================== Admin API ====================
@@ -4763,6 +5115,27 @@ def update_app_settings():
     data = request.get_json()
     app_settings = settings_manager.update_app_settings(data)
     return jsonify({'success': True, 'settings': app_settings})
+
+@app.route('/api/settings/mfa', methods=['GET'])
+@admin_required
+def get_mfa_settings():
+    """Get MFA settings (admin only)"""
+    settings = settings_manager.get_settings().get('mfa', {})
+    return jsonify(settings)
+
+@app.route('/api/settings/mfa', methods=['PUT'])
+@admin_required
+def update_mfa_settings():
+    """Update MFA settings (admin only)"""
+    data = request.get_json()
+    
+    mfa_settings = {
+        'requireMfaForAdmins': data.get('requireMfaForAdmins', False),
+        'requireMfaForAllUsers': data.get('requireMfaForAllUsers', False)
+    }
+    
+    settings_manager.update_settings({'mfa': mfa_settings})
+    return jsonify({'success': True, 'settings': mfa_settings})
 
 
 # ==================== System Stats API ====================

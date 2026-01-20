@@ -19,6 +19,10 @@ Werkzeug>=3.0.0
 # HTTP requests for JAR downloads
 requests>=2.31.0
 
+# MFA/TOTP support
+pyotp>=2.9.0
+qrcode[pil]>=7.4.2
+
 # Task scheduling for automated backups
 APScheduler>=3.10.0
 

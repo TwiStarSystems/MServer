@@ -205,6 +205,30 @@
               </label>
             </div>
           </div>
+          
+          <div class="settings-card">
+            <h3>🔐 Two-Factor Authentication (MFA)</h3>
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Require MFA for Admin Users</label>
+                <small>Administrator accounts must have two-factor authentication enabled to login</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="require-mfa-admins" onchange="saveAppSettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Require MFA for All Users</label>
+                <small>All user accounts must have two-factor authentication enabled to login</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="require-mfa-all" onchange="saveAppSettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
         </section>
         
         <!-- Tools Section -->

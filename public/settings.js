@@ -1092,6 +1092,14 @@ async function loadAppSettings() {
       document.getElementById('require-approval').checked = settings.requireApproval ?? true;
       document.getElementById('require-server-approval').checked = settings.requireServerApproval ?? false;
     }
+    
+    // Load MFA settings
+    const mfaResponse = await fetch('/api/settings/mfa');
+    if (mfaResponse.ok) {
+      const mfaSettings = await mfaResponse.json();
+      document.getElementById('require-mfa-admins').checked = mfaSettings.requireMfaForAdmins ?? false;
+      document.getElementById('require-mfa-all').checked = mfaSettings.requireMfaForAllUsers ?? false;
+    }
   } catch (err) {
     console.error('Failed to load app settings:', err);
   }
@@ -1104,6 +1112,11 @@ async function saveAppSettings() {
     requireServerApproval: document.getElementById('require-server-approval').checked
   };
   
+  const mfaSettings = {
+    requireMfaForAdmins: document.getElementById('require-mfa-admins').checked,
+    requireMfaForAllUsers: document.getElementById('require-mfa-all').checked
+  };
+  
   try {
     const response = await fetch('/api/settings/app', {
       method: 'PUT',
@@ -1112,7 +1125,18 @@ async function saveAppSettings() {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to save settings');
+      throw new Error('Failed to save app settings');
+    }
+    
+    // Save MFA settings
+    const mfaResponse = await fetch('/api/settings/mfa', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mfaSettings)
+    });
+    
+    if (!mfaResponse.ok) {
+      throw new Error('Failed to save MFA settings');
     }
   } catch (err) {
     console.error('Failed to save app settings:', err);

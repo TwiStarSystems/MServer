@@ -76,7 +76,7 @@ function updateUserUI() {
         <span class="user-role ${currentUser.role}">${currentUser.role}</span>
       </div>
       <div class="user-actions">
-        <button class="btn-icon" onclick="openProfileSettings()" title="Profile">👤</button>
+        <button class="btn-icon" onclick="openProfileSettings()" title="Profile Settings">⚙️</button>
         <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
       </div>
     `;
@@ -140,6 +140,286 @@ async function logout() {
     // Ignore errors
   }
   window.location.href = '/login.html';
+}
+
+// ==================== Profile Settings ====================
+
+function openProfileSettings() {
+  // Populate current user data
+  document.getElementById('profile-username').value = currentUser.username;
+  document.getElementById('profile-name').value = currentUser.name || '';
+  
+  // Clear password fields
+  document.getElementById('profile-old-password').value = '';
+  document.getElementById('profile-new-password').value = '';
+  document.getElementById('profile-confirm-password').value = '';
+  
+  // Update MFA status
+  updateMFAStatus();
+  
+  // Show modal
+  document.getElementById('profile-modal').style.display = 'flex';
+}
+
+function closeProfileModal() {
+  document.getElementById('profile-modal').style.display = 'none';
+}
+
+async function saveProfileSettings() {
+  const username = document.getElementById('profile-username').value.trim();
+  const name = document.getElementById('profile-name').value.trim();
+  
+  if (!username) {
+    showNotification('Username is required', 'error');
+    return;
+  }
+  
+  try {
+    // Update username if changed
+    if (username !== currentUser.username) {
+      const usernameResponse = await fetch('/api/auth/profile/username', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+      });
+      
+      const usernameData = await usernameResponse.json();
+      
+      if (!usernameResponse.ok) {
+        showNotification(usernameData.error || 'Failed to update username', 'error');
+        return;
+      }
+      
+      currentUser.username = username;
+    }
+    
+    // Update name if changed
+    if (name !== (currentUser.name || '')) {
+      const nameResponse = await fetch('/api/auth/profile/name', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      
+      const nameData = await nameResponse.json();
+      
+      if (!nameResponse.ok) {
+        showNotification(nameData.error || 'Failed to update name', 'error');
+        return;
+      }
+      
+      currentUser.name = name;
+    }
+    
+    showNotification('Profile updated successfully', 'success');
+    updateUserUI();
+    closeProfileModal();
+  } catch (err) {
+    showNotification('Failed to update profile: ' + err.message, 'error');
+  }
+}
+
+async function changePassword() {
+  const oldPassword = document.getElementById('profile-old-password').value;
+  const newPassword = document.getElementById('profile-new-password').value;
+  const confirmPassword = document.getElementById('profile-confirm-password').value;
+  
+  // Validation
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    showNotification('All password fields are required', 'error');
+    return;
+  }
+  
+  if (newPassword !== confirmPassword) {
+    showNotification('New passwords do not match', 'error');
+    return;
+  }
+  
+  if (newPassword.length < 6) {
+    showNotification('New password must be at least 6 characters', 'error');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        oldPassword,
+        newPassword
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to change password', 'error');
+      return;
+    }
+    
+    showNotification('Password changed successfully', 'success');
+    
+    // Clear password fields
+    document.getElementById('profile-old-password').value = '';
+    document.getElementById('profile-new-password').value = '';
+    document.getElementById('profile-confirm-password').value = '';
+  } catch (err) {
+    showNotification('Failed to change password: ' + err.message, 'error');
+  }
+}
+
+// ==================== MFA Functions ====================
+
+let currentMFASecret = null;
+let currentRecoveryCode = null;
+
+function updateMFAStatus() {
+  const mfaEnabled = currentUser.mfaEnabled || false;
+  
+  document.getElementById('mfa-disabled-view').style.display = mfaEnabled ? 'none' : 'block';
+  document.getElementById('mfa-enabled-view').style.display = mfaEnabled ? 'block' : 'none';
+  document.getElementById('mfa-setup-section').style.display = 'none';
+  document.getElementById('mfa-recovery-section').style.display = 'none';
+}
+
+async function setupMFA() {
+  try {
+    const response = await fetch('/api/auth/mfa/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to setup MFA', 'error');
+      return;
+    }
+    
+    currentMFASecret = data.secret;
+    
+    // Display QR code
+    document.getElementById('mfa-qr-code').src = data.qrCode;
+    document.getElementById('mfa-secret-text').value = data.manualEntry;
+    
+    // Show setup section
+    document.getElementById('mfa-status-section').style.display = 'none';
+    document.getElementById('mfa-setup-section').style.display = 'block';
+    document.getElementById('mfa-verify-code').value = '';
+  } catch (err) {
+    showNotification('Failed to setup MFA: ' + err.message, 'error');
+  }
+}
+
+function copyMFASecret() {
+  const secretInput = document.getElementById('mfa-secret-text');
+  secretInput.select();
+  document.execCommand('copy');
+  showNotification('Secret copied to clipboard', 'success');
+}
+
+async function verifyMFACode() {
+  const code = document.getElementById('mfa-verify-code').value.trim();
+  
+  if (!code || code.length !== 6) {
+    showNotification('Please enter a 6-digit code', 'error');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/mfa/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: currentMFASecret,
+        code: code
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Invalid verification code', 'error');
+      return;
+    }
+    
+    currentRecoveryCode = data.recoveryCode;
+    
+    // Show recovery code
+    document.getElementById('mfa-recovery-code').textContent = currentRecoveryCode;
+    document.getElementById('mfa-setup-section').style.display = 'none';
+    document.getElementById('mfa-recovery-section').style.display = 'block';
+    
+    // Enable complete button when checkbox is checked
+    document.getElementById('mfa-recovery-confirm').addEventListener('change', (e) => {
+      document.getElementById('mfa-complete-btn').disabled = !e.target.checked;
+    });
+  } catch (err) {
+    showNotification('Failed to verify code: ' + err.message, 'error');
+  }
+}
+
+function copyRecoveryCode() {
+  const code = document.getElementById('mfa-recovery-code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    showNotification('Recovery code copied to clipboard', 'success');
+  }).catch(() => {
+    // Fallback for older browsers
+    const textarea = document.createElement('textarea');
+    textarea.value = code;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    showNotification('Recovery code copied to clipboard', 'success');
+  });
+}
+
+function completeMFASetup() {
+  showNotification('MFA has been enabled successfully!', 'success');
+  currentUser.mfaEnabled = true;
+  
+  // Reset view
+  document.getElementById('mfa-recovery-section').style.display = 'none';
+  document.getElementById('mfa-status-section').style.display = 'block';
+  document.getElementById('mfa-recovery-confirm').checked = false;
+  updateMFAStatus();
+  
+  currentMFASecret = null;
+  currentRecoveryCode = null;
+}
+
+function cancelMFASetup() {
+  document.getElementById('mfa-setup-section').style.display = 'none';
+  document.getElementById('mfa-status-section').style.display = 'block';
+  currentMFASecret = null;
+}
+
+async function disableMFA() {
+  const password = prompt('Enter your password to disable MFA:');
+  
+  if (!password) return;
+  
+  try {
+    const response = await fetch('/api/auth/mfa/disable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to disable MFA', 'error');
+      return;
+    }
+    
+    showNotification('MFA has been disabled', 'success');
+    currentUser.mfaEnabled = false;
+    updateMFAStatus();
+  } catch (err) {
+    showNotification('Failed to disable MFA: ' + err.message, 'error');
+  }
 }
 
 
