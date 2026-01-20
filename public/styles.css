@@ -1125,7 +1125,33 @@ body {
 }
 
 .modal-content.modal-medium {
-  max-width: 600px;
+  max-width: 650px;
+  max-height: 85vh;
+}
+
+.modal-body {
+  padding: 25px;
+  max-height: calc(85vh - 140px);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.modal-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+  background: #0d0d1a;
+  border-radius: 4px;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+  background: #667eea;
+  border-radius: 4px;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: #764ba2;
 }
 
 .modal-header {
@@ -1163,8 +1189,22 @@ body {
   padding: 20px 25px;
   border-top: 1px solid #0f3460;
   display: flex;
-  gap: 10px;
+  gap: 12px;
   justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.modal-footer .btn {
+  min-width: 120px;
+}
+
+.modal-footer .btn:last-child {
+  background: #333;
+  color: #e0e0e0;
+}
+
+.modal-footer .btn:last-child:hover {
+  background: #444;
 }
 
 /* ==================== Server Creation Type Selection ==================== */
@@ -4406,11 +4446,48 @@ select.form-control:disabled {
 .resourcepack-actions .btn {
   flex: 1;
 }
+
 /* ==================== Profile Settings Modal ==================== */
 
-.modal-medium {
-  max-width: 600px;
-  width: 100%;
+.profile-info-display {
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 8px;
+}
+
+.profile-info-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.profile-info-row:last-child {
+  margin-bottom: 0;
+}
+
+.profile-info-label {
+  color: #888;
+  font-size: 0.9rem;
+  min-width: 80px;
+  font-weight: 500;
+}
+
+.profile-info-value {
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.profile-role-badge {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .optional-label {
@@ -4436,7 +4513,13 @@ select.form-control:disabled {
   color: #fff;
   font-size: 1.1rem;
   margin-bottom: 16px;
+  margin-top: 8px;
   font-weight: 600;
+}
+
+.modal-body .form-group {
+  padding: 0;
+  margin-bottom: 18px;
 }
 
 .btn-primary {
@@ -4477,6 +4560,14 @@ select.form-control:disabled {
 .modal-small {
   max-width: 450px;
   width: 100%;
+}
+
+#mfa-status-section {
+  padding: 16px;
+  background: rgba(102, 126, 234, 0.05);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: 8px;
+  margin-bottom: 16px;
 }
 
 .mfa-info {

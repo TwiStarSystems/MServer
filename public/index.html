@@ -1082,6 +1082,21 @@
           <button class="btn-icon modal-close" onclick="closeProfileModal()">&times;</button>
         </div>
         <div class="modal-body">
+          <!-- Current Profile Info Display -->
+          <div class="profile-info-display">
+            <div class="profile-info-row">
+              <span class="profile-info-label">Username:</span>
+              <span class="profile-info-value" id="profile-display-username">admin</span>
+            </div>
+            <div class="profile-info-row">
+              <span class="profile-info-label">Role:</span>
+              <span class="profile-info-value profile-role-badge" id="profile-display-role">USER</span>
+            </div>
+          </div>
+          
+          <hr class="divider">
+          
+          <h3>📝 Edit Profile</h3>
           <div class="form-group">
             <label for="profile-username">Username (Login)</label>
             <input type="text" id="profile-username" class="form-control" placeholder="username">
@@ -1096,7 +1111,7 @@
           
           <hr class="divider">
           
-          <h3>Change Password</h3>
+          <h3>🔑 Change Password</h3>
           <div class="form-group">
             <label for="profile-old-password">Current Password</label>
             <input type="password" id="profile-old-password" class="form-control" placeholder="••••••••">

@@ -145,7 +145,13 @@ async function logout() {
 // ==================== Profile Settings ====================
 
 function openProfileSettings() {
-  // Populate current user data
+  // Populate profile display section (read-only)
+  document.getElementById('profile-display-username').textContent = currentUser.username;
+  const roleDisplay = document.getElementById('profile-display-role');
+  roleDisplay.textContent = currentUser.role.toUpperCase();
+  roleDisplay.className = 'profile-info-value profile-role-badge ' + currentUser.role;
+  
+  // Populate editable fields
   document.getElementById('profile-username').value = currentUser.username;
   document.getElementById('profile-name').value = currentUser.name || '';
   
