@@ -3858,76 +3858,8 @@ async function deleteUser(userId, username) {
   }
 }
 
-// ==================== Profile Settings ====================
-
-function openProfileSettings() {
-  const modal = document.createElement('div');
-  modal.id = 'profile-modal';
-  modal.className = 'modal';
-  modal.innerHTML = `
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Profile Settings</h2>
-        <button class="close-btn" onclick="closeProfileSettings()">&times;</button>
-      </div>
-      <div class="profile-info">
-        <p><strong>Username:</strong> ${escapeHtml(currentUser.username)}</p>
-        <p><strong>Role:</strong> <span class="role-badge ${currentUser.role}">${currentUser.role}</span></p>
-      </div>
-      <form id="password-form" onsubmit="changePassword(event)">
-        <h3>Change Password</h3>
-        <div class="form-group">
-          <label for="current-password">Current Password</label>
-          <input type="password" id="current-password" required>
-        </div>
-        <div class="form-group">
-          <label for="new-password">New Password</label>
-          <input type="password" id="new-password" required minlength="8">
-        </div>
-        <div class="form-group">
-          <label for="confirm-password">Confirm New Password</label>
-          <input type="password" id="confirm-password" required>
-        </div>
-        <button type="submit" class="btn btn-primary">Update Password</button>
-      </form>
-    </div>
-  `;
-  modal.style.display = 'flex';
-  document.body.appendChild(modal);
-  
-  modal.onclick = (e) => {
-    if (e.target.id === 'profile-modal') closeProfileSettings();
-  };
-}
-
-function closeProfileSettings() {
-  const modal = document.getElementById('profile-modal');
-  if (modal) modal.remove();
-}
-
-async function changePassword(event) {
-  event.preventDefault();
-  
-  const currentPassword = document.getElementById('current-password').value;
-  const newPassword = document.getElementById('new-password').value;
-  const confirmPassword = document.getElementById('confirm-password').value;
-  
-  if (newPassword !== confirmPassword) {
-    alert('New passwords do not match');
-    return;
-  }
-  
-  try {
-    await apiRequest('/api/auth/password', {
-      method: 'PUT',
-      body: JSON.stringify({ currentPassword, newPassword })
-    });
-    alert('Password updated successfully');
-    closeProfileSettings();
-  } catch (err) {
-    console.error('Failed to change password:', err);
-  }
-}
+// NOTE: Profile Settings functions are defined at the top of this file (lines 147-350)
+// They use the HTML modal in index.html which includes MFA support
 
 // ==================== Properties Management ====================
 
