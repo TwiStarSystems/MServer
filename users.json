@@ -10,7 +10,11 @@
       "mfaRecoveryCode": null,
       "approved": true,
       "created": "2026-01-15T16:37:53.106501",
-      "lastLogin": null
+      "lastLogin": null,
+      "failedLoginAttempts": 0,
+      "accountDisabled": false,
+      "disabledAt": null,
+      "isAntiLockout": false
     }
   }
 }

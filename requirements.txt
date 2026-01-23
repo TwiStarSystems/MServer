@@ -16,16 +16,19 @@ Flask-Limiter>=3.5.0
 # File upload security
 Werkzeug>=3.0.0
 
-# HTTP requests for JAR downloads
+# HTTP requests for JAR downloads and client communication
 requests>=2.31.0
 
 # MFA/TOTP support
 pyotp>=2.9.0
 qrcode[pil]>=7.4.2
 
-# Task scheduling for automated backups
+# Task scheduling for automated backups and tasks
 APScheduler>=3.10.0
 
 # WSGI server for production
 gunicorn>=21.2.0
 eventlet>=0.33.3
+
+# System monitoring (CPU, RAM, disk - used by central and client modes)
+psutil>=5.9.0

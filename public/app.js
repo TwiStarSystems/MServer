@@ -3689,29 +3689,59 @@ async function loadAdminUsers() {
             <tr>
               <th>Username</th>
               <th>Role</th>
+              <th>Status</th>
               <th>Created</th>
               <th>Last Login</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            ${approvedUsers.map(u => `
-              <tr>
-                <td>${escapeHtml(u.username)}</td>
+            ${approvedUsers.map(u => {
+              const isDisabled = u.accountDisabled || false;
+              const isAntiLockout = u.isAntiLockout || false;
+              const failedAttempts = u.failedLoginAttempts || 0;
+              
+              let statusBadge = '<span class="status-active">Active</span>';
+              if (isDisabled) {
+                statusBadge = `<span class="status-disabled" title="Failed attempts: ${failedAttempts}">Disabled</span>`;
+              } else if (isAntiLockout) {
+                statusBadge = '<span class="status-anti-lockout">Anti-Lockout</span>';
+              } else if (failedAttempts > 0) {
+                statusBadge = `<span class="status-warning" title="Failed attempts: ${failedAttempts}/5">Warning (${failedAttempts}/5)</span>`;
+              }
+              
+              return `
+              <tr class="${isDisabled ? 'disabled-row' : ''}">
+                <td>
+                  ${escapeHtml(u.username)}
+                  ${isAntiLockout ? ' <span class="anti-lockout-tag">🔐</span>' : ''}
+                </td>
                 <td><span class="role-badge ${u.role}">${u.role}</span></td>
+                <td>${statusBadge}</td>
                 <td>${new Date(u.created).toLocaleDateString()}</td>
                 <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
                 <td class="admin-actions">
-                  <select onchange="changeUserRole('${u.id}', this.value)">
-                    <option value="public" ${u.role === 'public' ? 'selected' : ''}>Public</option>
-                    <option value="user" ${u.role === 'user' ? 'selected' : ''}>User</option>
-                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                  ${!isDisabled ? `
+                    <select onchange="changeUserRole('${u.id}', this.value)" ${isAntiLockout ? 'disabled title="Cannot change role of anti-lockout account"' : ''}>
+                      <option value="public" ${u.role === 'public' ? 'selected' : ''}>Public</option>
+                      <option value="user" ${u.role === 'user' ? 'selected' : ''}>User</option>
+                      <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                    </select>
+                  ` : '<span class="disabled-text">—</span>'}
+                  <select class="user-action-dropdown" onchange="handleUserAction('${u.id}', '${escapeHtml(u.username)}', this, ${isDisabled}); this.value='';">
+                    <option value="">Actions...</option>
+                    ${isDisabled ? `
+                      <option value="enable">Enable Account</option>
+                    ` : `
+                      <option value="reset-password">Reset Password</option>
+                      <option value="clear-mfa">Clear MFA</option>
+                    `}
+                    <option value="delete">Delete User</option>
                   </select>
-                  <button class="btn-small" onclick="resetUserPassword('${u.id}')">Reset PW</button>
-                  <button class="btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Delete</button>
                 </td>
               </tr>
-            `).join('')}
+              `;
+            }).join('')}
           </tbody>
         </table>
       `;
@@ -3855,6 +3885,51 @@ async function deleteUser(userId, username) {
     loadAdminUsers();
   } catch (err) {
     console.error('Failed to delete user:', err);
+  }
+}
+
+async function clearUserMFA(userId, username) {
+  if (!confirm(`Are you sure you want to clear MFA for user "${username}"?\n\nThis will disable their two-factor authentication.`)) return;
+  
+  try {
+    await apiRequest(`/api/admin/users/${userId}/mfa`, { method: 'DELETE' });
+    showNotification(`MFA cleared for ${username}`, 'success');
+    loadAdminUsers();
+  } catch (err) {
+    console.error('Failed to clear MFA:', err);
+    showNotification('Failed to clear MFA: ' + err.message, 'error');
+  }
+}
+
+async function enableUserAccount(userId, username) {
+  if (!confirm(`Are you sure you want to enable the account for "${username}"?\n\nThis will reset failed login attempts and allow them to log in again.`)) return;
+  
+  try {
+    await apiRequest(`/api/admin/users/${userId}/enable`, { method: 'POST' });
+    showNotification(`Account enabled for ${username}`, 'success');
+    loadAdminUsers();
+  } catch (err) {
+    console.error('Failed to enable account:', err);
+    showNotification('Failed to enable account: ' + err.message, 'error');
+  }
+}
+
+function handleUserAction(userId, username, selectElement, isDisabled) {
+  const action = selectElement.value;
+  
+  switch(action) {
+    case 'reset-password':
+      resetUserPassword(userId);
+      break;
+    case 'clear-mfa':
+      clearUserMFA(userId, username);
+      break;
+    case 'enable':
+      enableUserAccount(userId, username);
+      break;
+    case 'delete':
+      deleteUser(userId, username);
+      break;
   }
 }
 

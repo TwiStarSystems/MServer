@@ -22,6 +22,8 @@ import socket
 import select
 import pyotp
 import qrcode
+import argparse
+import sys
 from enum import Enum
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -71,6 +73,8 @@ SETTINGS_PATH = BASE_DIR / 'settings.json'
 SCHEDULES_PATH = BASE_DIR / 'schedules.json'
 TASKS_PATH = BASE_DIR / 'tasks.json'
 STATS_PATH = BASE_DIR / 'stats.json'
+CLIENTS_PATH = BASE_DIR / 'clients.json'
+COMMANDS_PATH = BASE_DIR / 'commands.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
@@ -919,6 +923,7 @@ class UserManager:
     def __init__(self):
         self.users = self._load_users()
         self.lock = threading.Lock()
+        self._migrate_users()
         self._ensure_admin_exists()
     
     def _load_users(self):
@@ -932,6 +937,27 @@ class UserManager:
         """Save users to file"""
         with open(USERS_PATH, 'w') as f:
             json.dump(self.users, f, indent=2)
+    
+    def _migrate_users(self):
+        """Migrate existing users to new schema with brute force protection fields"""
+        migrated = False
+        for user_id, user in self.users.get('users', {}).items():
+            if 'failedLoginAttempts' not in user:
+                user['failedLoginAttempts'] = 0
+                migrated = True
+            if 'accountDisabled' not in user:
+                user['accountDisabled'] = False
+                migrated = True
+            if 'disabledAt' not in user:
+                user['disabledAt'] = None
+                migrated = True
+            if 'isAntiLockout' not in user:
+                user['isAntiLockout'] = False
+                migrated = True
+        
+        if migrated:
+            self._save_users()
+            print("User database migrated to include brute force protection fields")
     
     def _ensure_admin_exists(self):
         """Create default admin if no users exist"""
@@ -949,7 +975,11 @@ class UserManager:
                 'mfaRecoveryCode': None,
                 'approved': True,
                 'created': datetime.now().isoformat(),
-                'lastLogin': None
+                'lastLogin': None,
+                'failedLoginAttempts': 0,
+                'accountDisabled': False,
+                'disabledAt': None,
+                'isAntiLockout': False
             }
             self._save_users()
             print("Default admin created - Username: admin, Password: admin")
@@ -957,17 +987,42 @@ class UserManager:
     
     def authenticate(self, username, password):
         """Authenticate a user and return user data if successful"""
-        for user_id, user in self.users.get('users', {}).items():
-            if user['username'].lower() == username.lower():
-                if check_password_hash(user['password'], password):
-                    if not user.get('approved', False) and user['role'] != 'admin':
-                        return None, "Account pending approval"
-                    # Update last login
-                    user['lastLogin'] = datetime.now().isoformat()
-                    self._save_users()
-                    return user_id, user
-                return None, "Invalid password"
-        return None, "User not found"
+        with self.lock:
+            for user_id, user in self.users.get('users', {}).items():
+                if user['username'].lower() == username.lower():
+                    # Check if account is disabled
+                    if user.get('accountDisabled', False):
+                        return None, "Account has been disabled due to multiple failed login attempts. Please contact an administrator."
+                    
+                    if check_password_hash(user['password'], password):
+                        if not user.get('approved', False) and user['role'] != 'admin':
+                            return None, "Account pending approval"
+                        
+                        # Reset failed login attempts on successful login
+                        user['failedLoginAttempts'] = 0
+                        user['lastLogin'] = datetime.now().isoformat()
+                        self._save_users()
+                        return user_id, user
+                    else:
+                        # Increment failed login attempts
+                        user['failedLoginAttempts'] = user.get('failedLoginAttempts', 0) + 1
+                        
+                        # Disable account after 5 failed attempts
+                        if user['failedLoginAttempts'] >= 5:
+                            user['accountDisabled'] = True
+                            user['disabledAt'] = datetime.now().isoformat()
+                            self._save_users()
+                            
+                            # Check if we need to create anti-lockout account
+                            self._check_and_create_anti_lockout()
+                            
+                            return None, "Account has been disabled due to multiple failed login attempts."
+                        
+                        self._save_users()
+                        remaining = 5 - user['failedLoginAttempts']
+                        return None, f"Invalid password. {remaining} attempts remaining before account is disabled."
+            
+            return None, "User not found"
     
     def register(self, username, password):
         """Register a new user (pending approval)"""
@@ -1001,13 +1056,120 @@ class UserManager:
                 'mfaRecoveryCode': None,
                 'approved': not require_approval,  # Auto-approve if not required
                 'created': datetime.now().isoformat(),
-                'lastLogin': None
+                'lastLogin': None,
+                'failedLoginAttempts': 0,
+                'accountDisabled': False,
+                'disabledAt': None,
+                'isAntiLockout': False
             }
             self._save_users()
             
             if require_approval:
                 return user_id, "Registration successful. Please wait for admin approval."
             return user_id, "Registration successful. You can now log in."
+    
+    def _has_active_admin(self):
+        """Check if there are any active (non-disabled) admin accounts"""
+        for user in self.users.get('users', {}).values():
+            if (user['role'] == 'admin' and 
+                not user.get('accountDisabled', False) and 
+                user.get('approved', False)):
+                return True
+        return False
+    
+    def _check_and_create_anti_lockout(self):
+        """Create anti-lockout account if no active admins exist"""
+        if not self._has_active_admin():
+            # Remove any existing anti-lockout accounts first
+            self._remove_anti_lockout_accounts()
+            
+            # Generate random credentials
+            import secrets
+            import string
+            
+            username = 'emergency_admin_' + ''.join(secrets.choice(string.digits) for _ in range(4))
+            password = ''.join(secrets.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(16))
+            
+            user_id = str(uuid.uuid4())[:8]
+            self.users['users'][user_id] = {
+                'username': username,
+                'password': generate_password_hash(password),
+                'role': 'admin',
+                'name': 'Emergency Anti-Lockout Account',
+                'mfaEnabled': False,
+                'mfaSecret': None,
+                'mfaRecoveryCode': None,
+                'approved': True,
+                'created': datetime.now().isoformat(),
+                'lastLogin': None,
+                'failedLoginAttempts': 0,
+                'accountDisabled': False,
+                'disabledAt': None,
+                'isAntiLockout': True
+            }
+            self._save_users()
+            
+            # Log to console and file
+            log_message = f"""
+{'='*80}
+⚠️  ANTI-LOCKOUT ACCOUNT CREATED ⚠️
+{'='*80}
+All admin accounts have been disabled due to failed login attempts.
+An emergency admin account has been created:
+
+  USERNAME: {username}
+  PASSWORD: {password}
+
+⚠️  IMPORTANT:
+  1. Use these credentials to log in immediately
+  2. Re-enable or create a permanent admin account
+  3. This account will be automatically removed when a regular admin is active
+  4. Store these credentials securely - they will not be shown again
+{'='*80}
+"""
+            print(log_message)
+            
+            # Also write to a log file
+            try:
+                with open('anti_lockout_credentials.log', 'a') as f:
+                    f.write(f"\n{datetime.now().isoformat()} - {log_message}\n")
+            except Exception as e:
+                print(f"Failed to write to log file: {e}")
+            
+            return username, password
+        return None, None
+    
+    def _remove_anti_lockout_accounts(self):
+        """Remove all anti-lockout accounts"""
+        to_remove = []
+        for user_id, user in self.users.get('users', {}).items():
+            if user.get('isAntiLockout', False):
+                to_remove.append(user_id)
+        
+        for user_id in to_remove:
+            del self.users['users'][user_id]
+        
+        if to_remove:
+            self._save_users()
+            print(f"Removed {len(to_remove)} anti-lockout account(s)")
+    
+    def enable_account(self, user_id):
+        """Enable a disabled user account and reset failed attempts"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            user['accountDisabled'] = False
+            user['failedLoginAttempts'] = 0
+            user['disabledAt'] = None
+            self._save_users()
+            
+            # Check if we can remove anti-lockout accounts
+            if self._has_active_admin():
+                self._remove_anti_lockout_accounts()
+            
+            return True, "Account enabled successfully"
     
     def create_user(self, username, password, role='user'):
         """Create a user directly (admin function, auto-approved)"""
@@ -1079,8 +1241,118 @@ class UserManager:
             if user_id in self.users.get('users', {}):
                 self.users['users'][user_id]['approved'] = True
                 self._save_users()
+                
+                # If this is an admin being approved, check if we can remove anti-lockout accounts
+                user = self.users['users'][user_id]
+                if user['role'] == 'admin' and self._has_active_admin():
+                    self._remove_anti_lockout_accounts()
+                
                 return True
         return False
+    
+    def _has_active_admin(self):
+        """Check if there are any active (non-disabled) admin accounts"""
+        for user in self.users.get('users', {}).values():
+            if (user['role'] == 'admin' and 
+                not user.get('accountDisabled', False) and 
+                user.get('approved', False) and
+                not user.get('isAntiLockout', False)):
+                return True
+        return False
+    
+    def _check_and_create_anti_lockout(self):
+        """Create anti-lockout account if no active admins exist"""
+        if not self._has_active_admin():
+            # Remove any existing anti-lockout accounts first
+            self._remove_anti_lockout_accounts()
+            
+            # Generate random credentials
+            import secrets
+            import string
+            
+            username = 'emergency_admin_' + ''.join(secrets.choice(string.digits) for _ in range(4))
+            password = ''.join(secrets.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(16))
+            
+            user_id = str(uuid.uuid4())[:8]
+            self.users['users'][user_id] = {
+                'username': username,
+                'password': generate_password_hash(password),
+                'role': 'admin',
+                'name': 'Emergency Anti-Lockout Account',
+                'mfaEnabled': False,
+                'mfaSecret': None,
+                'mfaRecoveryCode': None,
+                'approved': True,
+                'created': datetime.now().isoformat(),
+                'lastLogin': None,
+                'failedLoginAttempts': 0,
+                'accountDisabled': False,
+                'disabledAt': None,
+                'isAntiLockout': True
+            }
+            self._save_users()
+            
+            # Log to console and file
+            log_message = f"""
+{'='*80}
+⚠️  ANTI-LOCKOUT ACCOUNT CREATED ⚠️
+{'='*80}
+All admin accounts have been disabled due to failed login attempts.
+An emergency admin account has been created:
+
+  USERNAME: {username}
+  PASSWORD: {password}
+
+⚠️  IMPORTANT:
+  1. Use these credentials to log in immediately
+  2. Re-enable or create a permanent admin account
+  3. This account will be automatically removed when a regular admin is active
+  4. Store these credentials securely - they will not be shown again
+{'='*80}
+"""
+            print(log_message)
+            
+            # Also write to a log file
+            try:
+                with open('anti_lockout_credentials.log', 'a') as f:
+                    f.write(f"\n{datetime.now().isoformat()} - {log_message}\n")
+            except Exception as e:
+                print(f"Failed to write to log file: {e}")
+            
+            return username, password
+        return None, None
+    
+    def _remove_anti_lockout_accounts(self):
+        """Remove all anti-lockout accounts"""
+        to_remove = []
+        for user_id, user in self.users.get('users', {}).items():
+            if user.get('isAntiLockout', False):
+                to_remove.append(user_id)
+        
+        for user_id in to_remove:
+            del self.users['users'][user_id]
+        
+        if to_remove:
+            self._save_users()
+            print(f"Removed {len(to_remove)} anti-lockout account(s)")
+    
+    def enable_account(self, user_id):
+        """Enable a disabled user account and reset failed attempts"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            user['accountDisabled'] = False
+            user['failedLoginAttempts'] = 0
+            user['disabledAt'] = None
+            self._save_users()
+            
+            # Check if we can remove anti-lockout accounts
+            if self._has_active_admin():
+                self._remove_anti_lockout_accounts()
+            
+            return True, "Account enabled successfully"
     
     def update_user_role(self, user_id, role):
         """Update user role"""
@@ -1090,6 +1362,11 @@ class UserManager:
             if user_id in self.users.get('users', {}):
                 self.users['users'][user_id]['role'] = role
                 self._save_users()
+                
+                # If promoting to admin, check if we can remove anti-lockout accounts
+                if role == 'admin' and self._has_active_admin():
+                    self._remove_anti_lockout_accounts()
+                
                 return True
         return False
     
@@ -1238,10 +1515,225 @@ class UserManager:
         return self.ROLES.get(role, 0)
 
 
+# ==================== Client Manager ====================
+
+class ClientManager:
+    """Manages connected client nodes"""
+    
+    def __init__(self):
+        self.clients = self._load_clients()
+        self.commands = self._load_commands()
+        self.lock = threading.Lock()
+    
+    def _load_clients(self):
+        """Load clients from file"""
+        if CLIENTS_PATH.exists():
+            with open(CLIENTS_PATH, 'r') as f:
+                return json.load(f)
+        return {'clients': {}}
+    
+    def _save_clients(self):
+        """Save clients to file"""
+        with open(CLIENTS_PATH, 'w') as f:
+            json.dump(self.clients, f, indent=2)
+    
+    def _load_commands(self):
+        """Load command queue from file"""
+        if COMMANDS_PATH.exists():
+            with open(COMMANDS_PATH, 'r') as f:
+                return json.load(f)
+        return {'commands': {}}
+    
+    def _save_commands(self):
+        """Save command queue to file"""
+        with open(COMMANDS_PATH, 'w') as f:
+            json.dump(self.commands, f, indent=2)
+    
+    def register_client(self, node_id, system_info):
+        """Register a new client node"""
+        with self.lock:
+            api_key = secrets.token_hex(32)
+            
+            self.clients['clients'][node_id] = {
+                'node_id': node_id,
+                'api_key': api_key,
+                'system_info': system_info,
+                'status': 'online',
+                'registered_at': datetime.now().isoformat(),
+                'last_heartbeat': datetime.now().isoformat(),
+                'servers': [],
+                'stats': {}
+            }
+            self._save_clients()
+            
+            # Initialize command queue for this client
+            if 'commands' not in self.commands:
+                self.commands['commands'] = {}
+            if node_id not in self.commands['commands']:
+                self.commands['commands'][node_id] = []
+                self._save_commands()
+            
+            return api_key
+    
+    def update_heartbeat(self, node_id, stats, servers):
+        """Update client heartbeat"""
+        with self.lock:
+            if node_id in self.clients.get('clients', {}):
+                self.clients['clients'][node_id]['last_heartbeat'] = datetime.now().isoformat()
+                self.clients['clients'][node_id]['status'] = 'online'
+                self.clients['clients'][node_id]['stats'] = stats
+                self.clients['clients'][node_id]['servers'] = servers
+                self._save_clients()
+                return True
+            return False
+    
+    def get_client(self, node_id):
+        """Get client info"""
+        return self.clients.get('clients', {}).get(node_id)
+    
+    def get_all_clients(self):
+        """Get all clients"""
+        return list(self.clients.get('clients', {}).values())
+    
+    def verify_api_key(self, node_id, api_key):
+        """Verify client API key"""
+        client = self.get_client(node_id)
+        return client and client.get('api_key') == api_key
+    
+    def add_command(self, node_id, action, server_id, params=None):
+        """Add a command to the client's queue"""
+        with self.lock:
+            if node_id not in self.commands.get('commands', {}):
+                if 'commands' not in self.commands:
+                    self.commands['commands'] = {}
+                self.commands['commands'][node_id] = []
+            
+            command = {
+                'id': str(uuid.uuid4())[:8],
+                'action': action,
+                'server_id': server_id,
+                'params': params or {},
+                'created_at': datetime.now().isoformat(),
+                'status': 'pending'
+            }
+            
+            self.commands['commands'][node_id].append(command)
+            self._save_commands()
+            return command['id']
+    
+    def get_pending_commands(self, node_id):
+        """Get pending commands for a client"""
+        with self.lock:
+            commands = self.commands.get('commands', {}).get(node_id, [])
+            pending = [cmd for cmd in commands if cmd.get('status') == 'pending']
+            
+            # Mark as delivered
+            for cmd in pending:
+                cmd['status'] = 'delivered'
+                cmd['delivered_at'] = datetime.now().isoformat()
+            
+            if pending:
+                self._save_commands()
+            
+            return pending
+    
+    def update_command_result(self, node_id, command_id, result):
+        """Update command with execution result"""
+        with self.lock:
+            commands = self.commands.get('commands', {}).get(node_id, [])
+            for cmd in commands:
+                if cmd['id'] == command_id:
+                    cmd['status'] = 'completed' if result.get('success') else 'failed'
+                    cmd['result'] = result
+                    cmd['completed_at'] = datetime.now().isoformat()
+                    self._save_commands()
+                    return True
+            return False
+    
+    def disconnect_client(self, node_id):
+        """Mark client as disconnected"""
+        with self.lock:
+            if node_id in self.clients.get('clients', {}):
+                self.clients['clients'][node_id]['status'] = 'offline'
+                self._save_clients()
+                return True
+            return False
+    
+    def get_available_nodes(self):
+        """Get list of available nodes (central + online clients)"""
+        nodes = [{
+            'node_id': 'central',
+            'node_type': 'central',
+            'name': 'Central Controller',
+            'status': 'online',
+            'servers': len(server_manager.get_servers_list()),
+            'stats': stats_manager.get_current_stats()
+        }]
+        
+        # Add online clients
+        for client in self.get_all_clients():
+            if client.get('status') == 'online':
+                nodes.append({
+                    'node_id': client['node_id'],
+                    'node_type': 'client',
+                    'name': client.get('system_info', {}).get('hostname', client['node_id']),
+                    'status': client['status'],
+                    'servers': len(client.get('servers', [])),
+                    'stats': client.get('stats', {}),
+                    'system_info': client.get('system_info', {})
+                })
+        
+        return nodes
+    
+    def calculate_node_load(self, node):
+        """Calculate load score for a node (lower is better)"""
+        stats = node.get('stats', {})
+        
+        # Calculate load score based on CPU, memory, and server count
+        cpu_load = stats.get('cpu_percent', 0) / 100
+        memory_load = stats.get('memory_percent', 0) / 100
+        server_count = node.get('servers', 0)
+        
+        # Weighted score (lower is better)
+        load_score = (cpu_load * 0.4) + (memory_load * 0.4) + (server_count * 0.2)
+        
+        return load_score
+    
+    def get_best_node_for_deployment(self):
+        """Get the best node for deploying a new server based on load"""
+        nodes = self.get_available_nodes()
+        
+        if not nodes:
+            return None
+        
+        # Calculate load for each node and find the best one
+        node_loads = [(node, self.calculate_node_load(node)) for node in nodes]
+        node_loads.sort(key=lambda x: x[1])  # Sort by load score (ascending)
+        
+        best_node = node_loads[0][0]
+        return best_node['node_id']
+    
+    def create_server_on_node(self, node_id, server_config):
+        """Create a server on a specific node (central or client)"""
+        if node_id == 'central':
+            # Create locally on central controller
+            return server_manager.create_server(**server_config), None
+        else:
+            # Create on remote client via command
+            command_id = self.add_command(
+                node_id=node_id,
+                action='CREATE_SERVER',
+                server_id='pending',  # Will be assigned by client
+                params=server_config
+            )
+            return None, command_id  # Returns command_id for tracking
+
+
 # Initialize managers (settings_manager must be first as UserManager uses it)
 settings_manager = SettingsManager()
 user_manager = UserManager()
 stats_manager = StatsManager()
+client_manager = ClientManager()
 
 
 # ==================== Authentication Decorators ====================
@@ -3247,6 +3739,28 @@ def api_reset_user_password(user_id):
         return jsonify({'success': True})
     return jsonify({'error': 'User not found'}), 404
 
+@app.route('/api/admin/users/<user_id>/mfa', methods=['DELETE'])
+@admin_required
+def api_clear_user_mfa(user_id):
+    """Clear user MFA (admin only)"""
+    # Prevent clearing own MFA
+    if user_id == session.get('user_id'):
+        return jsonify({'error': 'Cannot clear your own MFA. Use the profile settings instead.'}), 400
+    
+    success, message = user_manager.disable_mfa(user_id)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 404
+
+@app.route('/api/admin/users/<user_id>/enable', methods=['POST'])
+@admin_required
+def api_enable_user_account(user_id):
+    """Enable a disabled user account (admin only)"""
+    success, message = user_manager.enable_account(user_id)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 404
+
 @app.route('/api/admin/users/<user_id>', methods=['DELETE'])
 @admin_required
 def api_delete_user(user_id):
@@ -3309,6 +3823,169 @@ def api_public_servers():
     return jsonify({'servers': public_servers})
 
 
+# ==================== Client Management API ====================
+
+@app.route('/api/client/register', methods=['POST'])
+def api_client_register():
+    """Register a new client node"""
+    try:
+        data = request.get_json()
+        node_id = data.get('node_id')
+        system_info = data.get('system_info', {})
+        
+        if not node_id:
+            return jsonify({'error': 'node_id is required'}), 400
+        
+        # Check if client already exists
+        existing = client_manager.get_client(node_id)
+        if existing:
+            print(f"[Controller] Client {node_id} re-registering")
+            api_key = existing.get('api_key')
+        else:
+            print(f"[Controller] New client registered: {node_id}")
+            api_key = client_manager.register_client(node_id, system_info)
+        
+        return jsonify({
+            'success': True,
+            'api_key': api_key,
+            'message': 'Registration successful'
+        })
+    except Exception as e:
+        print(f"[Controller] Client registration error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/client/heartbeat', methods=['POST'])
+def api_client_heartbeat():
+    """Receive heartbeat from client"""
+    try:
+        data = request.get_json()
+        node_id = data.get('node_id')
+        stats = data.get('stats', {})
+        servers = data.get('servers', [])
+        
+        if not node_id:
+            return jsonify({'error': 'node_id is required'}), 400
+        
+        # Verify API key
+        api_key = request.headers.get('X-Client-API-Key')
+        if not client_manager.verify_api_key(node_id, api_key):
+            return jsonify({'error': 'Invalid API key'}), 401
+        
+        client_manager.update_heartbeat(node_id, stats, servers)
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"[Controller] Heartbeat error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/client/commands/<node_id>', methods=['GET'])
+def api_client_get_commands(node_id):
+    """Get pending commands for a client"""
+    try:
+        # Verify API key
+        api_key = request.headers.get('X-Client-API-Key')
+        if not client_manager.verify_api_key(node_id, api_key):
+            return jsonify({'error': 'Invalid API key'}), 401
+        
+        commands = client_manager.get_pending_commands(node_id)
+        return jsonify({'commands': commands})
+    except Exception as e:
+        print(f"[Controller] Get commands error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/client/command-result', methods=['POST'])
+def api_client_command_result():
+    """Receive command execution result from client"""
+    try:
+        data = request.get_json()
+        node_id = data.get('node_id')
+        command_id = data.get('command_id')
+        result = data.get('result', {})
+        
+        if not node_id or not command_id:
+            return jsonify({'error': 'node_id and command_id are required'}), 400
+        
+        # Verify API key
+        api_key = request.headers.get('X-Client-API-Key')
+        if not client_manager.verify_api_key(node_id, api_key):
+            return jsonify({'error': 'Invalid API key'}), 401
+        
+        client_manager.update_command_result(node_id, command_id, result)
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"[Controller] Command result error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/client/disconnect', methods=['POST'])
+def api_client_disconnect():
+    """Mark client as disconnected"""
+    try:
+        data = request.get_json()
+        node_id = data.get('node_id')
+        
+        if not node_id:
+            return jsonify({'error': 'node_id is required'}), 400
+        
+        client_manager.disconnect_client(node_id)
+        print(f"[Controller] Client {node_id} disconnected")
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/clients', methods=['GET'])
+@admin_required
+def api_get_clients():
+    """Get all connected clients (admin only)"""
+    clients = client_manager.get_all_clients()
+    return jsonify({'clients': clients})
+
+@app.route('/api/nodes/available', methods=['GET'])
+@login_required
+def get_available_nodes():
+    """Get list of available nodes for server deployment with load info"""
+    nodes = client_manager.get_available_nodes()
+    
+    # Add load scores and recommendations
+    for node in nodes:
+        node['load_score'] = client_manager.calculate_node_load(node)
+        node['recommended'] = False
+    
+    # Mark best node as recommended
+    if nodes:
+        best_node_id = client_manager.get_best_node_for_deployment()
+        for node in nodes:
+            if node['node_id'] == best_node_id:
+                node['recommended'] = True
+                break
+    
+    return jsonify({'nodes': nodes})
+
+@app.route('/api/clients/<node_id>/command', methods=['POST'])
+@admin_required
+def api_send_command_to_client(node_id):
+    """Send a command to a specific client (admin only)"""
+    try:
+        data = request.get_json()
+        action = data.get('action')
+        server_id = data.get('server_id')
+        params = data.get('params', {})
+        
+        if not action or not server_id:
+            return jsonify({'error': 'action and server_id are required'}), 400
+        
+        # Verify client exists
+        client = client_manager.get_client(node_id)
+        if not client:
+            return jsonify({'error': 'Client not found'}), 404
+        
+        command_id = client_manager.add_command(node_id, action, server_id, params)
+        return jsonify({
+            'success': True,
+            'command_id': command_id
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== JAR/Version API ====================
 
 @app.route('/api/server-types', methods=['GET'])
@@ -3365,7 +4042,7 @@ def get_servers():
 @app.route('/api/servers', methods=['POST'])
 @login_required
 def create_server():
-    """Create a new server"""
+    """Create a new server on central or client node"""
     user_id, user = get_current_user()
     
     data = request.get_json()
@@ -3379,23 +4056,48 @@ def create_server():
     version = data.get('version')
     download_jar = data.get('downloadJar', False)
     
+    # NEW: Node selection for distributed deployment
+    target_node = data.get('targetNode', 'central')  # 'central', 'auto', or specific node_id
+    
     # Check if server approval is required (admins are always auto-approved)
     is_admin = user.get('role') == 'admin'
     require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
     approved = is_admin or not require_approval
     
-    # Create the server configuration with owner
-    server_id = server_manager.create_server(
-        name=name,
-        server_path=server_path,
-        executable=executable,
-        java_args=java_args,
-        server_type=server_type,
-        version=version,
-        owner=user_id,
-        approved=approved,
-        category=category
-    )
+    # Auto-select best node if requested
+    if target_node == 'auto':
+        target_node = client_manager.get_best_node_for_deployment()
+        if not target_node:
+            return jsonify({'error': 'No available nodes for deployment'}), 503
+    
+    # Prepare server configuration
+    server_config = {
+        'name': name,
+        'server_path': server_path,
+        'executable': executable,
+        'java_args': java_args,
+        'server_type': server_type,
+        'version': version,
+        'owner': user_id,
+        'approved': approved,
+        'category': category,
+        'download_jar': download_jar
+    }
+    
+    # Create server on selected node
+    if target_node == 'central':
+        # Create locally on central controller
+        server_id = server_manager.create_server(
+            name=name,
+            server_path=server_path,
+            executable=executable,
+            java_args=java_args,
+            server_type=server_type,
+            version=version,
+            owner=user_id,
+            approved=approved,
+            category=category
+        )
     
     # Copy JAR from serverexecutables if requested
     if download_jar and server_type and version:
@@ -3416,10 +4118,36 @@ def create_server():
         eula_path = server_dir / 'eula.txt'
         eula_path.write_text('# By setting this to TRUE, you agree to the Minecraft EULA\neula=false\n')
     
-    response = {'success': True, 'serverId': server_id}
-    if not approved:
-        response['pendingApproval'] = True
-        response['message'] = 'Server created and pending admin approval'
+        response = {'success': True, 'serverId': server_id, 'node': 'central'}
+        if not approved:
+            response['pendingApproval'] = True
+            response['message'] = 'Server created and pending admin approval'
+    else:
+        # Create on remote client node
+        client = client_manager.get_client(target_node)
+        if not client:
+            return jsonify({'error': f'Client node {target_node} not found'}), 404
+        
+        if client.get('status') != 'online':
+            return jsonify({'error': f'Client node {target_node} is offline'}), 503
+        
+        # Queue server creation command for client
+        command_id = client_manager.add_command(
+            node_id=target_node,
+            action='CREATE_SERVER',
+            server_id='pending',
+            params=server_config
+        )
+        
+        response = {
+            'success': True,
+            'serverId': 'pending',
+            'node': target_node,
+            'commandId': command_id,
+            'message': f'Server creation queued on node {target_node}',
+            'pending': True
+        }
+    
     return jsonify(response)
 
 @app.route('/api/servers/import', methods=['POST'])
@@ -5526,7 +6254,132 @@ def handle_subscribe(data):
             emit('message', {'type': 'status', 'running': instance.is_running(), 'serverId': server_id})
 
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description='MServerController - Minecraft Server Management System',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Run in central mode (default - with UI)
+  python server.py --mode central
+  
+  # Run in client mode (headless - connects to central controller)
+  python server.py --mode client --controller http://192.168.1.100:3000 --node-id node-1
+  
+  # Run in central mode on custom port
+  python server.py --mode central --port 8080
+        '''
+    )
+    
+    parser.add_argument(
+        '--mode',
+        choices=['central', 'client'],
+        default='central',
+        help='Operation mode: "central" for full UI controller, "client" for headless managed node'
+    )
+    
+    parser.add_argument(
+        '--controller',
+        type=str,
+        help='Central controller URL (required for client mode). Example: http://192.168.1.100:3000'
+    )
+    
+    parser.add_argument(
+        '--node-id',
+        type=str,
+        help='Unique identifier for this client node (required for client mode)'
+    )
+    
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=PORT,
+        help=f'Port to run the server on (default: {PORT})'
+    )
+    
+    parser.add_argument(
+        '--host',
+        type=str,
+        default='0.0.0.0',
+        help='Host address to bind to (default: 0.0.0.0)'
+    )
+    
+    return parser.parse_args()
+
+
+def run_central_mode(host='0.0.0.0', port=3000):
+    """Run in central mode (full UI controller)"""
+    print('=' * 60)
+    print('MServerController - CENTRAL MODE')
+    print('=' * 60)
+    print(f'Web Interface: http://localhost:{port}')
+    print(f'Listening on: {host}:{port}')
+    print('⚠️  WARNING: Default admin credentials are admin/admin')
+    print('            Change immediately after first login!')
+    print('=' * 60)
+    
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+
+
+def run_client_mode(controller_url, node_id, host='0.0.0.0', port=3000):
+    """Run in client mode (headless managed node)"""
+    from server_client import ClientController
+    
+    print('=' * 60)
+    print('MServerController - CLIENT MODE')
+    print('=' * 60)
+    print(f'Node ID: {node_id}')
+    print(f'Controller: {controller_url}')
+    print(f'Local API: {host}:{port}')
+    print('=' * 60)
+    
+    # Initialize client controller
+    client_controller = ClientController(controller_url, node_id, server_manager)
+    
+    # Start client controller (registration, heartbeat, command polling)
+    if not client_controller.start():
+        print('[Client] Failed to start - exiting')
+        sys.exit(1)
+    
+    print('[Client] Client controller running...')
+    print('[Client] Press Ctrl+C to stop\n')
+    
+    try:
+        # Keep the main thread alive
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print('\n[Client] Shutting down...')
+        client_controller.shutdown()
+        print('[Client] Goodbye!')
+
+
 if __name__ == '__main__':
-    print(f'MServerController running on http://localhost:{PORT}')
-    print('⚠️  WARNING: Default admin credentials are admin/admin - change immediately!')
-    socketio.run(app, host='0.0.0.0', port=PORT, debug=False, allow_unsafe_werkzeug=True)
+    args = parse_arguments()
+    
+    # Validate client mode requirements
+    if args.mode == 'client':
+        if not args.controller:
+            print('ERROR: --controller is required for client mode')
+            print('Example: --controller http://192.168.1.100:3000')
+            sys.exit(1)
+        if not args.node_id:
+            print('ERROR: --node-id is required for client mode')
+            print('Example: --node-id node-1')
+            sys.exit(1)
+    
+    # Update PORT global if custom port specified
+    if args.port != PORT:
+        globals()['PORT'] = args.port
+    
+    # Run in appropriate mode
+    if args.mode == 'central':
+        run_central_mode(host=args.host, port=args.port)
+    else:
+        run_client_mode(
+            controller_url=args.controller,
+            node_id=args.node_id,
+            host=args.host,
+            port=args.port
+        )

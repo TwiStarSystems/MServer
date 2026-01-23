@@ -1,14 +1,23 @@
 # MServerController
 
-A Web-Based Multi-Server Minecraft Manager
+A Web-Based Distributed Multi-Server Minecraft Manager
 
-MServerController is a modern, user-friendly web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python and Flask, it provides a clean interface for server administration with real-time monitoring, file management, and automated backups.
+MServerController is a modern, user-friendly web application for creating, running, and managing **multiple Minecraft servers** across **multiple machines** simultaneously. Built with Python and Flask, it provides a clean interface for server administration with real-time monitoring, file management, automated backups, and **Pterodactyl-style distributed deployment with intelligent load balancing**.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Distributed](https://img.shields.io/badge/Distributed-Multi--Node-purple.svg)
 
 ## Features
+
+### 🌐 **NEW: Distributed Architecture**
+- **Deploy servers across multiple machines** (central controller + client nodes)
+- **Intelligent load balancing** - Automatically select best node based on CPU, RAM, and server count
+- **Manual node selection** - Choose specific machines for each server
+- **Resource monitoring** - Track CPU, RAM, and disk usage across all nodes
+- **Horizontal scaling** - Add more nodes to increase capacity
+- **Pterodactyl-style deployment** - Similar to popular multi-node panel systems
 
 ### 🎮 Multi-Server Support
 - Manage unlimited Minecraft servers from a single dashboard
@@ -38,6 +47,8 @@ MServerController is a modern, user-friendly web application for creating, runni
 - Backups organized by server
 
 ### 🆕 Easy Server Creation
+- **Create on any node** - Deploy to central controller or any client node
+- **Auto load balancing** - Let the system pick the best node
 - **Create Fresh Server** with automatic JAR download:
   - Vanilla (Official Minecraft Server)
   - Paper (High-performance Spigot fork)
@@ -225,8 +236,10 @@ Each server stores its configuration in `config.json`:
 
 If installed via the installation script, MServerController runs as a systemd service:
 
+### Central Controller Mode (Default)
+
 ```bash
-# Start the service
+# Start the central controller
 sudo systemctl start mservercontroller
 
 # Stop the service
@@ -237,6 +250,22 @@ sudo systemctl restart mservercontroller
 
 # Check service status
 sudo systemctl status mservercontroller
+```
+
+### Client Node Mode (Distributed Deployment)
+
+For distributed deployments, run client nodes on additional machines:
+
+```bash
+# Start a client node
+python server.py --mode client \
+  --controller http://CENTRAL_IP:3000 \
+  --node-id production-node-1
+
+# Or run as a service (create custom systemd service)
+```
+
+See [docs/QUICKSTART_DISTRIBUTED.md](docs/QUICKSTART_DISTRIBUTED.md) for complete distributed setup guide.
 
 # View logs
 sudo journalctl -u mservercontroller -f
@@ -366,19 +395,82 @@ sudo tail -f /var/log/nginx/error.log
 
 ```
 MServerController/
-├── server.py           # Main Python/Flask server
-├── requirements.txt    # Python dependencies
-├── nginx.conf          # Nginx configuration
-├── install.sh          # Installation script
-├── config.json         # Server configurations (generated)
-├── public/             # Frontend files
-│   ├── index.html      # Main HTML page
-│   ├── styles.css      # Styles
-│   └── app.js          # Frontend JavaScript
-├── venv/               # Python virtual environment
-├── servers/            # Minecraft server files (per-server subdirectories)
-├── backups/            # Server backups (per-server subdirectories)
-└── uploads/            # Temporary upload directory
+├── server.py                 # Main Python/Flask server
+├── server_client.py          # Client mode controller
+├── server_core.py            # Shared core logic (future)
+├── requirements.txt          # Python dependencies
+├── nginx.conf                # Nginx configuration
+├── install.sh                # Installation script
+├── config.json               # Server configurations (generated)
+├── clients.json              # Registered client nodes (generated)
+├── commands.json             # Command queue (generated)
+├── public/                   # Frontend files
+│   ├── index.html            # Main HTML page
+│   ├── styles.css            # Styles
+│   └── app.js                # Frontend JavaScript
+├── docs/                     # Documentation
+│   ├── DISTRIBUTED_DEPLOYMENT.md      # Distributed deployment guide
+│   ├── DISTRIBUTED_DEPLOYMENT_SUMMARY.md  # Feature summary
+│   ├── QUICKSTART_DISTRIBUTED.md      # Quick start guide
+│   ├── API_DISTRIBUTED.md             # API reference
+│   ├── IMPLEMENTATION_STATUS.md       # Implementation status
+│   ├── REFACTORING.md                 # Architecture details
+│   └── CLIENT_TESTING_GUIDE.md        # Testing guide
+├── venv/                     # Python virtual environment
+├── servers/                  # Minecraft server files (per-server subdirectories)
+├── backups/                  # Server backups (per-server subdirectories)
+├── uploads/                  # Temporary upload directory
+└── test_distributed_deployment.py  # Test suite for distributed features
+```
+
+## Distributed Deployment
+
+MServerController supports **deploying servers across multiple machines** with intelligent load balancing:
+
+### Quick Start
+
+**1. Start Central Controller (Main Server):**
+```bash
+python server.py --mode central
+```
+
+**2. Start Client Nodes (Worker Machines):**
+```bash
+python server.py --mode client \
+  --controller http://CENTRAL_IP:3000 \
+  --node-id worker-node-1
+```
+
+**3. Create Servers with Auto Load Balancing:**
+Use the web UI or API to create servers with `targetNode: "auto"` and the system will automatically select the best node based on CPU, RAM, and server count.
+
+### Features
+
+- ✅ **Multi-node deployment** - Deploy servers on central or any client node
+- ✅ **Automatic load balancing** - System picks the best node based on resources
+- ✅ **Manual node selection** - Choose specific nodes for each server
+- ✅ **Resource monitoring** - Track CPU, RAM, disk across all nodes
+- ✅ **Horizontal scaling** - Add more nodes to increase capacity
+- ✅ **Pterodactyl-style** - Similar to popular distributed panel systems
+
+### Documentation
+
+- **Development Guide**: [docs/DEVELOPMENT_GUIDE.md](docs/DEVELOPMENT_GUIDE.md) - AI-friendly development reference
+- **Quick Start**: [docs/QUICKSTART_DISTRIBUTED.md](docs/QUICKSTART_DISTRIBUTED.md)
+- **Complete Guide**: [docs/DISTRIBUTED_DEPLOYMENT.md](docs/DISTRIBUTED_DEPLOYMENT.md)
+- **API Reference**: [docs/API_DISTRIBUTED.md](docs/API_DISTRIBUTED.md)
+- **Feature Summary**: [docs/DISTRIBUTED_DEPLOYMENT_SUMMARY.md](docs/DISTRIBUTED_DEPLOYMENT_SUMMARY.md)
+
+### Example API Usage
+
+```bash
+# Get available nodes with load info
+curl http://localhost:3000/api/nodes/available
+
+# Create server with auto load balancing
+curl -X POST http://localhost:3000/api/servers \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Server", "targetNode": "auto", ...}'
 ```
 
 ## Contributing

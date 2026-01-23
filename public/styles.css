@@ -1794,6 +1794,72 @@ select.form-control:disabled {
   font-size: 13px;
 }
 
+.admin-actions .user-action-dropdown {
+  cursor: pointer;
+  min-width: 120px;
+  transition: all 0.2s ease;
+}
+
+.admin-actions .user-action-dropdown:hover {
+  border-color: #4caf50;
+  background: #252540;
+}
+
+.admin-actions .user-action-dropdown option[value="delete"] {
+  color: #f44336;
+}
+
+/* Account Status Badges */
+.status-active, .status-disabled, .status-warning, .status-anti-lockout {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-block;
+}
+
+.status-active {
+  background: rgba(76, 175, 80, 0.2);
+  color: #4caf50;
+}
+
+.status-disabled {
+  background: rgba(244, 67, 54, 0.2);
+  color: #f44336;
+  cursor: help;
+}
+
+.status-warning {
+  background: rgba(255, 152, 0, 0.2);
+  color: #ff9800;
+  cursor: help;
+}
+
+.status-anti-lockout {
+  background: rgba(156, 39, 176, 0.2);
+  color: #9c27b0;
+  font-weight: bold;
+}
+
+.anti-lockout-tag {
+  font-size: 14px;
+  margin-left: 4px;
+}
+
+.disabled-row {
+  opacity: 0.6;
+  background: rgba(244, 67, 54, 0.05);
+}
+
+.disabled-row td {
+  color: #999;
+}
+
+.disabled-text {
+  color: #666;
+  font-style: italic;
+}
+
 .btn-small {
   font-size: 12px;
   padding: 6px 10px;
