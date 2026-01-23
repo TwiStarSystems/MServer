@@ -2,9 +2,44 @@
 
 ## 🤖 AI-FRIENDLY DEVELOPMENT REFERENCE
 
-**Last Updated:** 2026-01-22  
-**Version:** 3.0 (Distributed Architecture)  
+**Last Updated:** 2026-01-23  
+**Version:** 3.1 (Orphaned State & Node Manager)  
 **Primary Language:** Python 3.10+
+
+---
+
+## RECENT CHANGES (v3.1)
+
+### Polling Rate Standardization
+- **Master-Slave Heartbeat:** Changed from 30s → **10 seconds**
+- **Command Polling:** Changed from 5s → **10 seconds**
+- **Client Offline Detection:** Timeout threshold is **10 seconds** (no heartbeat)
+- **Orphaned Retry Interval:** When disconnected, both heartbeat and polling change to **30 seconds** to reduce load
+- **Implementation:** Updated `server_client.py` (ClientController class) and `server.py` (ClientManager class)
+
+### Orphaned State Handling
+- **Behavior:** When Slave loses connection to Master, it enters "orphaned state"
+- **Game Servers:** Continue running normally during orphaned state
+- **Recovery:** Automatically reconnects when Master becomes available again
+- **State Transitions:** 
+  - Normal → Orphaned: Heartbeat fails, logs "[Client] ⚠ Lost connection to Master"
+  - Orphaned → Normal: Successful heartbeat, logs "[Client] ✓ Reconnected to Master!"
+- **Logging:** Status changes printed to console and logs for debugging
+
+### Node Manager UI
+- **New Tab:** Added "🖥️ Node Manager" in Settings for admin monitoring
+- **Encryption Display:** Shows encryption status with key visibility toggle (show/hide/copy)
+- **Node Overview:** Displays total nodes, online/offline counts, total servers
+- **Health Scoring:** 0-100% score based on CPU/Memory/Disk usage with color indicators
+- **New Endpoint:** `/api/nodes/encryption` returns encryption configuration status
+- **Real-time Updates:** Manual refresh button to query latest node data
+
+### Encryption Key Flow Changes
+- **Master Installation:** Automatically generates encryption key during setup
+- **Slave Installation:** Prompts admin to provide Master's encryption key (doesn't generate own)
+- **File Storage:** Both modes save key to `/opt/mservercontroller/encryption.key`
+- **Environment Passing:** Key passed to Flask app via `ENCRYPTION_KEY` systemd environment variable
+- **Fix (v3.1):** Slaves no longer incorrectly generate their own encryption keys
 
 ---
 
@@ -66,6 +101,14 @@
 │  │ (local MC)  │  │ │ │ (local MC)│ │ │ │ (local MC)  │ │
 │  └─────────────┘  │ │ └───────────┘ │ │ └─────────────┘ │
 └───────────────────┘ └───────────────┘ └─────────────────┘
+                          │
+              Orphaned State: Retry every 30 seconds
+              (Game servers continue running)
+              
+**Timeouts & Detection:**
+- Client Online Timeout: 10 seconds (no heartbeat = offline)
+- Orphaned Retry: 30 seconds (when disconnected)
+- Normal Polling: 10 seconds (heartbeat + commands)
 ```
 
 ### Operational Modes
@@ -73,7 +116,7 @@
 | Mode | File | Description |
 |------|------|-------------|
 | `central` | `server.py` | Full controller with Web UI, API, all managers |
-| `client` | `server_client.py` | Headless node, polls central for commands |
+| `client` | `server_client.py` | Headless node, polls central for commands (10s interval, 30s orphaned) |
 
 ---
 
@@ -91,6 +134,7 @@
 | QR Codes | qrcode 7.4+ | MFA setup QR generation |
 | Rate Limiting | Flask-Limiter 3.5+ | API protection |
 | System Metrics | psutil | CPU, RAM, disk monitoring |
+| Encryption | cryptography 41.0+ | Fernet symmetric encryption (v3.0+) |
 | WSGI Server | gunicorn 21.2+ | Production deployment |
 | Async Support | gevent 23.9+ | WebSocket handling |
 
@@ -99,7 +143,7 @@
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | Markup | HTML5 | Page structure |
-| Styling | CSS3 | Custom styles |
+| Styling | CSS3 | Custom styles (Node Manager in v3.1) |
 | JavaScript | Vanilla ES6+ | Interactivity |
 | WebSocket Client | Socket.IO Client | Real-time updates |
 
@@ -284,6 +328,8 @@ MServerController/
 #### ClientManager
 **Purpose:** Manage connected client nodes (distributed deployment)
 
+**NEW in v3.1:** Added orphaned state detection and 10-second online/offline timeout
+
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
 | `__init__` | - | - | Initialize |
@@ -296,11 +342,12 @@ MServerController/
 | `get_client` | node_id | dict | Get client info |
 | `get_all_clients` | - | list | Get all clients |
 | `verify_api_key` | node_id, api_key | bool | Verify client key |
+| `is_client_online` | node_id, timeout_seconds=10 | bool | **NEW:** Check if online (10s timeout) |
 | `add_command` | node_id, action, server_id, params | str | Queue command |
 | `get_pending_commands` | node_id | list | Get pending commands |
 | `update_command_result` | node_id, cmd_id, result | bool | Update result |
 | `disconnect_client` | node_id | bool | Mark client offline |
-| `get_available_nodes` | - | list | Get all online nodes |
+| `get_available_nodes` | - | list | **UPDATED:** Uses 10s online check |
 | `calculate_node_load` | node | float | Calculate load score |
 | `get_best_node_for_deployment` | - | str | Get best node |
 | `create_server_on_node` | node_id, config | tuple | Create server on node |
@@ -401,21 +448,36 @@ MServerController/
 #### ClientController
 **Purpose:** Client-side controller for distributed deployment
 
+**NEW in v3.1:** Added orphaned state handling, 10s polling intervals, 30s orphaned retry
+
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
-| `__init__` | controller_url, node_id, server_manager | - | Initialize |
+| `__init__` | controller_url, node_id, server_manager, verify_ssl, encryption_key | - | Initialize with SSL & encryption support |
 | `get_system_info` | - | dict | Get system hardware info |
 | `get_current_stats` | - | dict | Get CPU/RAM/disk usage |
 | `get_server_statuses` | - | list | Get local server statuses |
 | `register` | - | bool | Register with controller |
-| `start_heartbeat` | - | - | Start heartbeat thread |
-| `_send_heartbeat` | - | - | Send heartbeat to controller |
-| `start_command_polling` | - | - | Start command poll thread |
+| `start_heartbeat` | - | - | **UPDATED:** Start heartbeat (10s normal, 30s orphaned) |
+| `_send_heartbeat` | - | - | **UPDATED:** Detect orphaned state, auto-recover |
+| `start_command_polling` | - | - | **UPDATED:** Polling (10s normal, 30s orphaned) |
 | `_poll_and_execute_commands` | - | - | Poll and execute commands |
 | `execute_command` | command | - | Execute received command |
 | `_report_command_result` | command_id, result | - | Report result |
 | `start` | - | bool | Start client controller |
 | `shutdown` | - | - | Graceful shutdown |
+
+**Orphaned State Properties:**
+- `is_orphaned: bool` - True if disconnected from Master
+- `heartbeat_interval: int` - 10 seconds (normal) 
+- `poll_interval: int` - 10 seconds (normal)
+- `orphaned_retry_interval: int` - 30 seconds (when orphaned)
+
+**Behavior:**
+- When heartbeat fails: Sets `is_orphaned = True`
+- Heartbeat & polling use 30s interval when orphaned
+- Game servers keep running during orphaned state
+- Logs: "[Client] ⚠ Lost connection to Master - entering orphaned state"
+- On recovery: "[Client] ✓ Reconnected to Master!"
 
 ---
 
@@ -464,6 +526,7 @@ MServerController/
 | POST | `/api/client/disconnect` | API Key | Disconnect client |
 | GET | `/api/clients` | Admin | List all clients |
 | GET | `/api/nodes/available` | User | List available nodes |
+| GET | `/api/nodes/encryption` | Admin | Get encryption status **NEW v3.1** |
 | POST | `/api/clients/<node_id>/command` | Admin | Send command to client |
 
 ### Server Endpoints

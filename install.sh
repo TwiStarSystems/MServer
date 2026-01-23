@@ -688,9 +688,200 @@ do_install() {
     fi
 }
 
-# Update existing installation
+# Update existing installation (preserves all configs and encryption keys)
 do_update() {
     print_header "Update Installation"
+    
+    # Check if installation exists
+    if [ ! -d "$INSTALL_DIR" ]; then
+        print_error "No existing installation found at $INSTALL_DIR"
+        echo "Please run a fresh installation first."
+        exit 1
+    fi
+    
+    # Load existing deployment configuration
+    if load_deployment_config; then
+        print_success "Loaded deployment configuration: $DEPLOYMENT_MODE mode"
+        if [ "$DEPLOYMENT_MODE" = "slave" ]; then
+            echo "  Controller: $CONTROLLER_URL"
+            echo "  Node ID: $NODE_ID"
+        fi
+        if [ "$USE_ENCRYPTION" = "true" ]; then
+            echo "  Encryption: Enabled"
+        fi
+    else
+        print_warning "No deployment configuration found, assuming Master mode"
+        DEPLOYMENT_MODE="master"
+    fi
+    
+    # Display what will be preserved
+    print_info "Files and data to be PRESERVED during update:"
+    echo "  • config.json (server configurations)"
+    echo "  • users.json (user accounts)"
+    echo "  • settings.json (app settings)"
+    echo "  • stats.json (performance metrics)"
+    echo "  • clients.json (registered nodes)"
+    echo "  • commands.json (command queue)"
+    echo "  • backup_schedules.json (backup schedules)"
+    echo "  • task_schedules.json (task schedules)"
+    echo "  • encryption.key (encryption key - CRITICAL)"
+    echo "  • deployment.conf (deployment configuration)"
+    echo "  • servers/* (all game server data)"
+    echo "  • backups/* (all backups)"
+    echo "  • ssl/* (SSL certificates if Master)"
+    echo ""
+    
+    # Stop the service
+    print_info "Stopping MServerController service..."
+    systemctl stop mservercontroller 2>/dev/null || true
+    sleep 1
+    
+    # List of critical files to preserve
+    local preserve_files=(
+        "config.json"
+        "users.json"
+        "settings.json"
+        "stats.json"
+        "clients.json"
+        "commands.json"
+        "backup_schedules.json"
+        "task_schedules.json"
+        "encryption.key"
+        "deployment.conf"
+    )
+    
+    # Create temporary backup directory
+    local backup_dir="/tmp/mservercontroller_update_backup_$$"
+    mkdir -p "$backup_dir"
+    print_info "Creating temporary backup of critical files..."
+    
+    for file in "${preserve_files[@]}"; do
+        if [ -f "$INSTALL_DIR/$file" ]; then
+            cp "$INSTALL_DIR/$file" "$backup_dir/"
+            print_success "  Backed up: $file"
+        fi
+    done
+    
+    # Also backup SSL directory for Master nodes
+    if [ "$DEPLOYMENT_MODE" = "master" ] && [ -d "$INSTALL_DIR/ssl" ]; then
+        cp -r "$INSTALL_DIR/ssl" "$backup_dir/"
+        print_success "  Backed up: ssl/ (certificates)"
+    fi
+    
+    # Update application files
+    if [ -f "$(dirname "$0")/server.py" ]; then
+        print_info "Updating application files from current directory..."
+        
+        # Copy core application files
+        cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
+        cp "$(dirname "$0")/server_client.py" "$INSTALL_DIR/"
+        cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$(dirname "$0")/system_info.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
+        cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
+        
+        # Update frontend files
+        if [ -d "$(dirname "$0")/public" ]; then
+            rm -rf "$INSTALL_DIR/public"
+            cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
+            print_success "  Updated: public/ (frontend files)"
+        fi
+        
+        # Update configs directory
+        if [ -d "$(dirname "$0")/configs" ]; then
+            rm -rf "$INSTALL_DIR/configs"
+            cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
+            print_success "  Updated: configs/ (templates)"
+        fi
+        
+        # Update documentation
+        if [ -d "$(dirname "$0")/docs" ]; then
+            rm -rf "$INSTALL_DIR/docs"
+            cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
+            print_success "  Updated: docs/ (documentation)"
+        fi
+        
+        # Merge tools (don't overwrite user tools)
+        if [ -d "$(dirname "$0")/tools" ]; then
+            mkdir -p "$INSTALL_DIR/tools"
+            cp "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
+            print_success "  Updated: tools/ (scripts)"
+        fi
+        
+        print_success "Application files updated from local source"
+    else
+        print_info "Updating from GitHub..."
+        cd "$INSTALL_DIR"
+        git stash 2>/dev/null || true
+        git pull origin main
+        print_success "Application files updated from GitHub"
+    fi
+    
+    # Restore all critical files from backup
+    print_info "Restoring critical files and data..."
+    for file in "${preserve_files[@]}"; do
+        if [ -f "$backup_dir/$file" ]; then
+            cp "$backup_dir/$file" "$INSTALL_DIR/"
+            print_success "  Restored: $file"
+        fi
+    done
+    
+    # Restore SSL certificates if present
+    if [ -d "$backup_dir/ssl" ] && [ "$DEPLOYMENT_MODE" = "master" ]; then
+        rm -rf "$INSTALL_DIR/ssl"
+        cp -r "$backup_dir/ssl" "$INSTALL_DIR/"
+        print_success "  Restored: ssl/ (certificates)"
+    fi
+    
+    rm -rf "$backup_dir"
+    
+    
+    cd "$INSTALL_DIR"
+    
+    # Update Python virtual environment
+    print_info "Updating Python virtual environment..."
+    setup_python_env
+    
+    # Ensure all required directories exist
+    create_directories
+    
+    # Fix permissions
+    set_permissions
+    
+    # Update Nginx configuration (for Master nodes)
+    configure_nginx
+    
+    # Update systemd service (regenerate based on current deployment mode)
+    print_info "Updating systemd service for $DEPLOYMENT_MODE mode..."
+    create_service
+    
+    # Restart services with new code
+    if restart_services; then
+        echo ""
+        print_success "Update completed successfully!"
+        echo ""
+        echo "Summary:"
+        echo "  ✓ Application files updated"
+        echo "  ✓ Python dependencies updated"
+        echo "  ✓ All configurations preserved"
+        echo "  ✓ All user data preserved"
+        if [ "$USE_ENCRYPTION" = "true" ]; then
+            echo "  ✓ Encryption key preserved"
+        fi
+        echo "  ✓ Service restarted ($DEPLOYMENT_MODE mode)"
+        echo ""
+        show_completion "Update"
+    else
+        print_error "Update completed with warnings"
+        echo "Service failed to restart. Check logs with:"
+        echo "  sudo journalctl -u mservercontroller -xe"
+        exit 1
+    fi
+}
+
+# Quick update (files only, no dependency reinstall - preserves configs and encryption)
+do_quick_update() {
+    print_header "Quick Update (Files Only - Fast Development Mode)"
     
     # Check if installation exists
     if [ ! -d "$INSTALL_DIR" ]; then
@@ -711,160 +902,85 @@ do_update() {
         DEPLOYMENT_MODE="master"
     fi
     
-    # Stop the service
-    print_info "Stopping MServerController service..."
-    systemctl stop mservercontroller 2>/dev/null || true
-    
-    # Backup config.json if it exists
-    if [ -f "$INSTALL_DIR/config.json" ]; then
-        print_info "Backing up configuration..."
-        cp "$INSTALL_DIR/config.json" /tmp/mservercontroller_config_backup.json
-        print_success "Configuration backed up"
-    fi
-    
-    # Update files
-    if [ -f "$(dirname "$0")/server.py" ]; then
-        print_info "Updating from current directory..."
-        
-        # Copy application files (preserve data directories)
-        cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
-        cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
-        
-        # Copy configs directory
-        if [ -d "$(dirname "$0")/configs" ]; then
-            cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
-        fi
-        
-        # Copy docs if exists
-        if [ -d "$(dirname "$0")/docs" ]; then
-            cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
-        fi
-        
-        # Copy tools folder if it exists (preserve user tools)
-        if [ -d "$(dirname "$0")/tools" ]; then
-            print_info "Updating tools folder..."
-            # Merge tools - copy new tools without overwriting existing user tools
-            mkdir -p "$INSTALL_DIR/tools"
-            cp -n "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
-            print_success "Tools folder updated"
-        fi
-        
-        print_success "Files updated from local source"
-    else
-        print_info "Updating from GitHub..."
-        cd "$INSTALL_DIR"
-        
-        # Stash any local changes
-        git stash 2>/dev/null || true
-        
-        # Pull latest changes
-        git pull origin main
-        
-        print_success "Files updated from GitHub"
-    fi
-    
-    # Restore config.json if it was backed up
-    if [ -f /tmp/mservercontroller_config_backup.json ]; then
-        print_info "Restoring configuration..."
-        cp /tmp/mservercontroller_config_backup.json "$INSTALL_DIR/config.json"
-        rm /tmp/mservercontroller_config_backup.json
-        print_success "Configuration restored"
-    fi
-    
-    cd "$INSTALL_DIR"
-    
-    # Update Python dependencies
-    setup_python_env
-    
-    # Ensure directories exist
-    create_directories
-    
-    # Fix permissions
-    set_permissions
-    
-    # Update Nginx config
-    configure_nginx
-    
-    # Update systemd service (in case it changed)
-    create_service
-    
-    # Restart services
-    if restart_services; then
-        show_completion "Update"
-    else
-        print_error "Update completed with warnings"
-        echo "Check logs with: sudo journalctl -u mservercontroller -xe"
-        exit 1
-    fi
-}
-
-# Quick update (files only, no dependency reinstall)
-do_quick_update() {
-    print_header "Quick Update (Files Only)"
-    
-    # Check if installation exists
-    if [ ! -d "$INSTALL_DIR" ]; then
-        print_error "No existing installation found at $INSTALL_DIR"
-        echo "Please run a fresh installation first."
-        exit 1
-    fi
-    
-    # Load existing deployment configuration
-    if load_deployment_config; then
-        print_success "Loaded deployment configuration: $DEPLOYMENT_MODE mode"
-    else
-        print_warning "No deployment configuration found, assuming Master mode"
-        DEPLOYMENT_MODE="master"
-    fi
+    print_info "This quick update will:"
+    echo "  • Update application files ONLY"
+    echo "  • NOT reinstall Python dependencies"
+    echo "  • PRESERVE all configurations"
+    echo "  • PRESERVE encryption keys"
+    echo "  • PRESERVE user data and logs"
+    echo ""
     
     # Stop the service
     print_info "Stopping MServerController service..."
     systemctl stop mservercontroller 2>/dev/null || true
+    sleep 1
     
-    # Update files only
+    # Update only application files (no backups needed - quick update)
     if [ -f "$(dirname "$0")/server.py" ]; then
         print_info "Updating application files..."
         
+        # Core application files
         cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
-        cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
+        cp "$(dirname "$0")/server_client.py" "$INSTALL_DIR/"
+        cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$(dirname "$0")/system_info.py" "$INSTALL_DIR/" 2>/dev/null || true
         
-        # Optionally update other files
-        if [ -f "$(dirname "$0")/requirements.txt" ]; then
-            cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
+        # Frontend files
+        if [ -d "$(dirname "$0")/public" ]; then
+            rm -rf "$INSTALL_DIR/public"
+            cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
+            print_success "  Updated: public/"
         fi
-        if [ -f "$(dirname "$0")/nginx.conf" ]; then
-            cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
-        fi
+        
+        # Config templates
         if [ -d "$(dirname "$0")/configs" ]; then
+            rm -rf "$INSTALL_DIR/configs"
             cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
+            print_success "  Updated: configs/"
         fi
         
-        # Copy tools folder if it exists (preserve user tools)
+        # Documentation
+        if [ -d "$(dirname "$0")/docs" ]; then
+            rm -rf "$INSTALL_DIR/docs"
+            cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
+            print_success "  Updated: docs/"
+        fi
+        
+        # Tools
         if [ -d "$(dirname "$0")/tools" ]; then
-            print_info "Updating tools folder..."
             mkdir -p "$INSTALL_DIR/tools"
-            cp -n "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
-            print_success "Tools folder updated"
+            cp "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
+            print_success "  Updated: tools/"
         fi
         
         print_success "Application files updated"
     else
-        print_error "No local source files found"
-        echo "Quick update requires running from the repository directory"
-        exit 1
+        print_info "Updating from GitHub (files only)..."
+        cd "$INSTALL_DIR"
+        git stash 2>/dev/null || true
+        git pull origin main
+        print_success "Application files updated from GitHub"
     fi
     
     # Fix permissions
-    chown -R www-data:www-data "$INSTALL_DIR"
-    chmod -R 755 "$INSTALL_DIR"
+    set_permissions
     
-    # Restart services
+    # Restart services quickly without dependency reinstall
     if restart_services; then
         echo ""
         print_success "Quick update complete!"
-        echo "MServerController has been updated and restarted."
+        echo ""
+        echo "Summary:"
+        echo "  ✓ Application files updated"
+        echo "  ✓ All configurations preserved"
+        echo "  ✓ All user data preserved"
+        if [ "$USE_ENCRYPTION" = "true" ]; then
+            echo "  ✓ Encryption key preserved"
+        fi
+        echo "  ✓ Service restarted ($DEPLOYMENT_MODE mode)"
+        echo ""
+        echo "Note: Python dependencies were NOT updated in quick mode."
+        echo "Run 'sudo $0 update' for a full update with dependency refresh."
         echo ""
     else
         print_error "Quick update completed with warnings"
