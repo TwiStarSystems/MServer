@@ -34,8 +34,10 @@ class ClientController:
         self.server_manager = local_server_manager
         self.registered = False
         self.running = True
-        self.heartbeat_interval = 30  # seconds
-        self.poll_interval = 5  # seconds
+        self.heartbeat_interval = 10  # seconds - send heartbeat every 10s
+        self.poll_interval = 10  # seconds - poll for commands every 10s
+        self.orphaned_retry_interval = 30  # seconds - retry connection when orphaned
+        self.is_orphaned = False  # Track if disconnected from master
         self.api_key = None  # Will be set during registration
         self.session = requests.Session()
         self.verify_ssl = verify_ssl
@@ -208,11 +210,14 @@ class ClientController:
                         self._send_heartbeat()
                 except Exception as e:
                     print(f"[Client] Heartbeat error: {e}")
-                time.sleep(self.heartbeat_interval)
+                
+                # Use longer interval when orphaned
+                sleep_time = self.orphaned_retry_interval if self.is_orphaned else self.heartbeat_interval
+                time.sleep(sleep_time)
         
         thread = threading.Thread(target=heartbeat_loop, daemon=True)
         thread.start()
-        print(f"[Client] Heartbeat started (interval: {self.heartbeat_interval}s)")
+        print(f"[Client] Heartbeat started (normal: {self.heartbeat_interval}s, orphaned retry: {self.orphaned_retry_interval}s)")
     
     def _send_heartbeat(self):
         """Send heartbeat with current status to controller"""
@@ -234,15 +239,24 @@ class ClientController:
             )
             
             if response.status_code == 200:
-                # Heartbeat successful
-                pass
+                # Heartbeat successful - recover from orphaned state
+                if self.is_orphaned:
+                    print(f"[Client] ✓ Reconnected to Master!")
+                    self.is_orphaned = False
             else:
                 print(f"[Client] Heartbeat failed: {response.status_code}")
+                if not self.is_orphaned:
+                    print(f"[Client] ⚠ Lost connection to Master - entering orphaned state")
+                    self.is_orphaned = True
                 
         except requests.RequestException as e:
-            print(f"[Client] Heartbeat network error: {e}")
+            if not self.is_orphaned:
+                print(f"[Client] ⚠ Lost connection to Master - entering orphaned state: {e}")
+                self.is_orphaned = True
         except Exception as e:
             print(f"[Client] Heartbeat error: {e}")
+            if not self.is_orphaned:
+                self.is_orphaned = True
     
     def start_command_polling(self):
         """Start command polling thread"""
@@ -250,14 +264,20 @@ class ClientController:
             while self.running:
                 try:
                     if self.registered:
-                        self._poll_and_execute_commands()
+                        if self.is_orphaned:
+                            # In orphaned state, use longer retry interval
+                            time.sleep(self.orphaned_retry_interval)
+                        else:
+                            # Normal polling
+                            self._poll_and_execute_commands()
+                            time.sleep(self.poll_interval)
                 except Exception as e:
                     print(f"[Client] Command poll error: {e}")
-                time.sleep(self.poll_interval)
+                    time.sleep(self.poll_interval)
         
         thread = threading.Thread(target=poll_loop, daemon=True)
         thread.start()
-        print(f"[Client] Command polling started (interval: {self.poll_interval}s)")
+        print(f"[Client] Command polling started (interval: {self.poll_interval}s, orphaned retry: {self.orphaned_retry_interval}s)")
     
     def _poll_and_execute_commands(self):
         """Poll for commands from the controller and execute them"""

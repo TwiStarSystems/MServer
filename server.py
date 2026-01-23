@@ -1638,6 +1638,25 @@ class ClientManager:
         client = self.get_client(node_id)
         return client and client.get('api_key') == api_key
     
+    def is_client_online(self, node_id, timeout_seconds=10):
+        """Check if a client is online based on heartbeat timeout (default: 10 seconds)"""
+        client = self.get_client(node_id)
+        if not client:
+            return False
+        
+        last_heartbeat = client.get('last_heartbeat')
+        if not last_heartbeat:
+            return False
+        
+        try:
+            last_seen = datetime.fromisoformat(last_heartbeat)
+            time_since_heartbeat = (datetime.now() - last_seen).total_seconds()
+            is_online = time_since_heartbeat < timeout_seconds
+            return is_online
+        except Exception as e:
+            print(f"[Controller] Error checking client status: {e}")
+            return False
+    
     def add_command(self, node_id, action, server_id, params=None):
         """Add a command to the client's queue"""
         with self.lock:
@@ -1708,18 +1727,18 @@ class ClientManager:
             'stats': stats_manager.get_current_stats()
         }]
         
-        # Add online clients
+        # Add online clients (using 10-second heartbeat timeout)
         for client in self.get_all_clients():
-            if client.get('status') == 'online':
-                nodes.append({
-                    'node_id': client['node_id'],
-                    'node_type': 'client',
-                    'name': client.get('system_info', {}).get('hostname', client['node_id']),
-                    'status': client['status'],
-                    'servers': len(client.get('servers', [])),
-                    'stats': client.get('stats', {}),
-                    'system_info': client.get('system_info', {})
-                })
+            is_online = self.is_client_online(client['node_id'], timeout_seconds=10)
+            nodes.append({
+                'node_id': client['node_id'],
+                'node_type': 'client',
+                'name': client.get('system_info', {}).get('hostname', client['node_id']),
+                'status': 'online' if is_online else 'offline',
+                'servers': len(client.get('servers', [])),
+                'stats': client.get('stats', {}),
+                'system_info': client.get('system_info', {})
+            })
         
         return nodes
     
