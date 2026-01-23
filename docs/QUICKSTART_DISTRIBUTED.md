@@ -6,7 +6,7 @@ Create Minecraft servers on multiple machines with automatic load balancing!
 
 ## Setup (5 Minutes)
 
-### 1. Start Central Controller
+### 1. Start Master Controller
 
 On your main server:
 ```bash
@@ -15,22 +15,22 @@ python server.py --mode central
 
 Access web UI at: `http://localhost:3000`
 
-### 2. Start Client Nodes
+### 2. Start Slave Nodes
 
 On each worker machine:
 ```bash
 python server.py --mode client \
-  --controller http://CENTRAL_IP:3000 \
+  --controller http://MASTER_IP:3000 \
   --node-id production-node-1
 ```
 
 Replace:
-- `CENTRAL_IP` with your central controller's IP address
+- `MASTER_IP` with your master controller's IP address
 - `production-node-1` with a unique identifier for this node
 
 ### 3. Verify Registration
 
-Check that clients appear as online:
+Check that slave nodes appear as online:
 ```bash
 curl http://localhost:3000/api/clients \
   -H "Cookie: user_id=YOUR_USER_ID"

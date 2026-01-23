@@ -32,3 +32,6 @@ eventlet>=0.33.3
 
 # System monitoring (CPU, RAM, disk - used by central and client modes)
 psutil>=5.9.0
+
+# Encryption for secure Master-Slave communication
+cryptography>=41.0.0

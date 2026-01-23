@@ -1520,10 +1520,22 @@ An emergency admin account has been created:
 class ClientManager:
     """Manages connected client nodes"""
     
-    def __init__(self):
+    def __init__(self, encryption_key=None):
         self.clients = self._load_clients()
         self.commands = self._load_commands()
         self.lock = threading.Lock()
+        
+        # Encryption support
+        self.encryption_key = encryption_key
+        self.fernet = None
+        if encryption_key:
+            try:
+                from cryptography.fernet import Fernet
+                self.fernet = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
+                print('[Controller] Payload encryption enabled for client communication')
+            except Exception as e:
+                print(f'[Controller] Failed to initialize encryption: {e}')
+                self.fernet = None
     
     def _load_clients(self):
         """Load clients from file"""
@@ -1548,6 +1560,32 @@ class ClientManager:
         """Save command queue to file"""
         with open(COMMANDS_PATH, 'w') as f:
             json.dump(self.commands, f, indent=2)
+    
+    def _encrypt_payload(self, data):
+        """Encrypt payload data if encryption is enabled"""
+        if not self.fernet:
+            return data
+        
+        try:
+            json_data = json.dumps(data)
+            encrypted = self.fernet.encrypt(json_data.encode())
+            return {'encrypted': True, 'data': encrypted.decode()}
+        except Exception as e:
+            print(f"[Controller] Encryption error: {e}")
+            return data
+    
+    def _decrypt_payload(self, data):
+        """Decrypt payload data if encryption is enabled"""
+        if not self.fernet or not isinstance(data, dict) or not data.get('encrypted'):
+            return data
+        
+        try:
+            encrypted_data = data['data'].encode()
+            decrypted = self.fernet.decrypt(encrypted_data)
+            return json.loads(decrypted.decode())
+        except Exception as e:
+            print(f"[Controller] Decryption error: {e}")
+            return data
     
     def register_client(self, node_id, system_info):
         """Register a new client node"""
@@ -1733,7 +1771,8 @@ class ClientManager:
 settings_manager = SettingsManager()
 user_manager = UserManager()
 stats_manager = StatsManager()
-client_manager = ClientManager()
+# ClientManager will load encryption key from environment variable if set
+client_manager = ClientManager(encryption_key=os.environ.get('ENCRYPTION_KEY'))
 
 
 # ==================== Authentication Decorators ====================
@@ -3830,6 +3869,9 @@ def api_client_register():
     """Register a new client node"""
     try:
         data = request.get_json()
+        # Decrypt payload if encrypted
+        data = client_manager._decrypt_payload(data)
+        
         node_id = data.get('node_id')
         system_info = data.get('system_info', {})
         
@@ -3845,11 +3887,17 @@ def api_client_register():
             print(f"[Controller] New client registered: {node_id}")
             api_key = client_manager.register_client(node_id, system_info)
         
-        return jsonify({
+        response_data = {
             'success': True,
             'api_key': api_key,
             'message': 'Registration successful'
-        })
+        }
+        
+        # Encrypt response if client supports encryption
+        if data.get('encryption_enabled'):
+            response_data = client_manager._encrypt_payload(response_data)
+        
+        return jsonify(response_data)
     except Exception as e:
         print(f"[Controller] Client registration error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -3859,6 +3907,9 @@ def api_client_heartbeat():
     """Receive heartbeat from client"""
     try:
         data = request.get_json()
+        # Decrypt payload if encrypted
+        data = client_manager._decrypt_payload(data)
+        
         node_id = data.get('node_id')
         stats = data.get('stats', {})
         servers = data.get('servers', [])
@@ -3887,7 +3938,12 @@ def api_client_get_commands(node_id):
             return jsonify({'error': 'Invalid API key'}), 401
         
         commands = client_manager.get_pending_commands(node_id)
-        return jsonify({'commands': commands})
+        response_data = {'commands': commands}
+        
+        # Encrypt response if encryption is enabled
+        response_data = client_manager._encrypt_payload(response_data)
+        
+        return jsonify(response_data)
     except Exception as e:
         print(f"[Controller] Get commands error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -3897,6 +3953,9 @@ def api_client_command_result():
     """Receive command execution result from client"""
     try:
         data = request.get_json()
+        # Decrypt payload if encrypted
+        data = client_manager._decrypt_payload(data)
+        
         node_id = data.get('node_id')
         command_id = data.get('command_id')
         result = data.get('result', {})
@@ -6305,37 +6364,100 @@ Examples:
         help='Host address to bind to (default: 0.0.0.0)'
     )
     
+    parser.add_argument(
+        '--ssl-cert',
+        type=str,
+        help='Path to SSL certificate file for HTTPS (Master mode)'
+    )
+    
+    parser.add_argument(
+        '--ssl-key',
+        type=str,
+        help='Path to SSL private key file for HTTPS (Master mode)'
+    )
+    
+    parser.add_argument(
+        '--no-verify-ssl',
+        action='store_true',
+        help='Disable SSL certificate verification for Slave nodes (insecure)'
+    )
+    
+    parser.add_argument(
+        '--encryption-key',
+        type=str,
+        help='32-byte base64 encryption key for payload encryption (Master-Slave communication)'
+    )
+    
     return parser.parse_args()
 
 
-def run_central_mode(host='0.0.0.0', port=3000):
+def run_central_mode(host='0.0.0.0', port=3000, ssl_cert=None, ssl_key=None):
     """Run in central mode (full UI controller)"""
     print('=' * 60)
-    print('MServerController - CENTRAL MODE')
+    print('MServerController - MASTER MODE')
     print('=' * 60)
-    print(f'Web Interface: http://localhost:{port}')
+    
+    # Determine protocol
+    protocol = 'https' if ssl_cert and ssl_key else 'http'
+    print(f'Web Interface: {protocol}://localhost:{port}')
     print(f'Listening on: {host}:{port}')
+    
+    if ssl_cert and ssl_key:
+        print(f'✓ SSL/TLS Enabled')
+        print(f'  Certificate: {ssl_cert}')
+        print(f'  Key: {ssl_key}')
+    else:
+        print('⚠️  WARNING: Running without SSL/TLS encryption')
+    
     print('⚠️  WARNING: Default admin credentials are admin/admin')
     print('            Change immediately after first login!')
     print('=' * 60)
     
-    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+    # Configure SSL context if certificates provided
+    if ssl_cert and ssl_key:
+        import ssl
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        ssl_context.load_cert_chain(ssl_cert, ssl_key)
+        socketio.run(app, host=host, port=port, debug=False, ssl_context=ssl_context)
+    else:
+        socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 
-def run_client_mode(controller_url, node_id, host='0.0.0.0', port=3000):
+def run_client_mode(controller_url, node_id, host='0.0.0.0', port=3000, verify_ssl=True, encryption_key=None):
     """Run in client mode (headless managed node)"""
     from server_client import ClientController
     
     print('=' * 60)
-    print('MServerController - CLIENT MODE')
+    print('MServerController - SLAVE MODE')
     print('=' * 60)
     print(f'Node ID: {node_id}')
     print(f'Controller: {controller_url}')
     print(f'Local API: {host}:{port}')
+    
+    if controller_url.startswith('https'):
+        print('✓ Connecting via HTTPS')
+        if verify_ssl:
+            print('  SSL verification: Enabled')
+        else:
+            print('  ⚠️  SSL verification: DISABLED (insecure)')
+    else:
+        print('⚠️  WARNING: Connecting via HTTP (unencrypted)')
+    
+    if encryption_key:
+        print('✓ Payload encryption: Enabled')
+    else:
+        print('  Payload encryption: Disabled')
+    
     print('=' * 60)
     
-    # Initialize client controller
-    client_controller = ClientController(controller_url, node_id, server_manager)
+    # Initialize client controller with SSL and encryption settings
+    client_controller = ClientController(
+        controller_url, 
+        node_id, 
+        server_manager,
+        verify_ssl=verify_ssl,
+        encryption_key=encryption_key
+    )
     
     # Start client controller (registration, heartbeat, command polling)
     if not client_controller.start():
@@ -6362,11 +6484,17 @@ if __name__ == '__main__':
     if args.mode == 'client':
         if not args.controller:
             print('ERROR: --controller is required for client mode')
-            print('Example: --controller http://192.168.1.100:3000')
+            print('Example: --controller https://192.168.1.100:3000')
             sys.exit(1)
         if not args.node_id:
             print('ERROR: --node-id is required for client mode')
             print('Example: --node-id node-1')
+            sys.exit(1)
+    
+    # Validate SSL arguments for central mode
+    if args.mode == 'central':
+        if (args.ssl_cert and not args.ssl_key) or (args.ssl_key and not args.ssl_cert):
+            print('ERROR: Both --ssl-cert and --ssl-key are required for SSL')
             sys.exit(1)
     
     # Update PORT global if custom port specified
@@ -6375,11 +6503,18 @@ if __name__ == '__main__':
     
     # Run in appropriate mode
     if args.mode == 'central':
-        run_central_mode(host=args.host, port=args.port)
+        run_central_mode(
+            host=args.host, 
+            port=args.port,
+            ssl_cert=args.ssl_cert,
+            ssl_key=args.ssl_key
+        )
     else:
         run_client_mode(
             controller_url=args.controller,
             node_id=args.node_id,
             host=args.host,
-            port=args.port
+            port=args.port,
+            verify_ssl=not args.no_verify_ssl,
+            encryption_key=args.encryption_key
         )

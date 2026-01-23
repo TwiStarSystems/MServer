@@ -4,16 +4,40 @@
 
 MServerController now supports creating Minecraft servers on multiple nodes with intelligent load balancing, similar to how Pterodactyl manages distributed panels. This allows you to:
 
-- Deploy servers on the central controller or any connected client node
+- Deploy servers on the master controller or any connected slave node
 - Automatically balance load across multiple machines
 - Monitor resource usage per node
-- Scale horizontally by adding more client nodes
+- Scale horizontally by adding more slave nodes
+- **Secure communication with SSL/TLS and payload encryption**
+
+## Security
+
+Master-Slave communication supports multiple security layers:
+
+- **SSL/TLS (HTTPS)** - Encrypts transport layer
+- **Payload Encryption** - Encrypts data with Fernet symmetric encryption
+- **API Key Authentication** - Each slave has unique API key
+
+For detailed security setup, see **[SECURITY.md](SECURITY.md)**
+
+Quick start with encryption:
+```bash
+# Master with SSL + Encryption
+export ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+python server.py --mode central --ssl-cert cert.pem --ssl-key key.pem
+
+# Slave with SSL + Encryption
+python server.py --mode client \
+  --controller https://master-ip:3000 \
+  --node-id slave-01 \
+  --encryption-key "YOUR_ENCRYPTION_KEY"
+```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────┐
-│   Central Controller (Node)         │
+│   Master Controller (Node)          │
 │   - Web UI/API                       │
 │   - Load Balancer                    │
 │   - Can host servers locally         │
@@ -22,7 +46,7 @@ MServerController now supports creating Minecraft servers on multiple nodes with
     ┌─────────┴─────────┬──────────────┐
     │                   │              │
 ┌───▼─────┐      ┌──────▼───┐   ┌─────▼─────┐
-│ Client  │      │ Client   │   │ Client    │
+│ Slave   │      │ Slave    │   │ Slave     │
 │ Node 1  │      │ Node 2   │   │ Node 3    │
 │         │      │          │   │           │
 │ Servers │      │ Servers  │   │ Servers   │
@@ -33,9 +57,9 @@ MServerController now supports creating Minecraft servers on multiple nodes with
 
 When creating a server, you can specify a target node:
 
-1. **`central`** - Deploy on the central controller itself
+1. **`central`** - Deploy on the master controller itself
 2. **`auto`** - Automatically select the best node based on load
-3. **`<node_id>`** - Deploy on a specific client node (e.g., `node-1`)
+3. **`<node_id>`** - Deploy on a specific slave node (e.g., `node-1`)
 
 ## Load Balancing Algorithm
 
@@ -80,8 +104,8 @@ curl -X GET http://localhost:3000/api/nodes/available \
   "nodes": [
     {
       "node_id": "central",
-      "node_type": "central",
-      "name": "Central Controller",
+      "node_type": "master",
+      "name": "Master Controller",
       "status": "online",
       "servers": 3,
       "stats": {
@@ -94,7 +118,7 @@ curl -X GET http://localhost:3000/api/nodes/available \
     },
     {
       "node_id": "node-1",
-      "node_type": "client",
+      "node_type": "slave",
       "name": "production-server-01",
       "status": "online",
       "servers": 1,
