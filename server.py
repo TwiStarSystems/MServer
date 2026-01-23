@@ -6415,10 +6415,9 @@ def run_central_mode(host='0.0.0.0', port=3000, ssl_cert=None, ssl_key=None):
     
     # Configure SSL context if certificates provided
     if ssl_cert and ssl_key:
-        import ssl
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-        ssl_context.load_cert_chain(ssl_cert, ssl_key)
-        socketio.run(app, host=host, port=port, debug=False, ssl_context=ssl_context)
+        # For Flask-SocketIO with eventlet, we need to pass certfile and keyfile
+        socketio.run(app, host=host, port=port, debug=False, 
+                    certfile=ssl_cert, keyfile=ssl_key)
     else:
         socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
