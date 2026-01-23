@@ -5979,7 +5979,7 @@ def get_stats_history():
 # ==================== System Updates API ====================
 
 @app.route('/api/system/version', methods=['GET'])
-@user_required
+@login_required
 def get_current_version():
     """Get current version from git"""
     import subprocess
