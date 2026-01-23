@@ -105,17 +105,23 @@ prompt_deployment_mode() {
             # Prompt for SSL/TLS
             echo ""
             read -p "Enable SSL/TLS encryption (HTTPS)? (y/n) (default: n): " use_ssl_choice
+            use_ssl_choice=${use_ssl_choice:-n}
             if [[ $use_ssl_choice =~ ^[Yy]$ ]]; then
                 USE_SSL="true"
                 print_info "SSL/TLS will be enabled with self-signed certificate"
+            else
+                USE_SSL="false"
             fi
             
             # Prompt for payload encryption
             echo ""
             read -p "Enable payload encryption for Master-Slave communication? (y/n) (default: n): " use_enc_choice
+            use_enc_choice=${use_enc_choice:-n}
             if [[ $use_enc_choice =~ ^[Yy]$ ]]; then
                 USE_ENCRYPTION="true"
                 print_info "Payload encryption will be enabled"
+            else
+                USE_ENCRYPTION="false"
             fi
             ;;
         2)
@@ -142,11 +148,14 @@ prompt_deployment_mode() {
                 if [[ ! $verify_ssl_choice =~ ^[Yy]$ ]]; then
                     print_warning "SSL verification will be disabled (insecure)"
                 fi
+            else
+                USE_SSL="false"
             fi
             
             # Prompt for payload encryption
             echo ""
             read -p "Enable payload encryption (if Master has it enabled)? (y/n) (default: n): " use_enc_choice
+            use_enc_choice=${use_enc_choice:-n}
             if [[ $use_enc_choice =~ ^[Yy]$ ]]; then
                 USE_ENCRYPTION="true"
                 echo "Enter the encryption key (copy from Master node's $ENCRYPTION_KEY_FILE):"
@@ -155,6 +164,8 @@ prompt_deployment_mode() {
                     print_error "Encryption key is required when encryption is enabled"
                     exit 1
                 fi
+            else
+                USE_ENCRYPTION="false"
             fi
             
             # Prompt for node ID
@@ -381,15 +392,18 @@ configure_nginx() {
     
     if [ "$USE_SSL" = "true" ]; then
         print_info "Skipping Nginx configuration (SSL enabled - app handles HTTPS directly)"
+        print_info "Application will listen on port 3000 with HTTPS"
         # Disable nginx if it's running
-        if systemctl is-active --quiet nginx; then
-            systemctl stop nginx
-            systemctl disable nginx
+        if systemctl is-active --quiet nginx 2>/dev/null; then
+            systemctl stop nginx 2>/dev/null || true
+            systemctl disable nginx 2>/dev/null || true
         fi
         return 0
     fi
     
-    print_info "Configuring Nginx..."
+    print_info "Configuring Nginx as reverse proxy..."
+    print_info "Nginx will listen on port 80, proxy to app on port 3000"
+    
     cp "$INSTALL_DIR/nginx.conf" /etc/nginx/sites-available/mservercontroller
     ln -sf /etc/nginx/sites-available/mservercontroller /etc/nginx/sites-enabled/mservercontroller
     rm -f /etc/nginx/sites-enabled/default
@@ -398,6 +412,7 @@ configure_nginx() {
         print_success "Nginx configuration valid"
     else
         print_error "Nginx configuration test failed"
+        nginx -t
         exit 1
     fi
 }
@@ -409,6 +424,7 @@ create_service() {
     # Determine ExecStart command based on deployment mode
     local exec_start
     local description
+    local service_port="3000"  # Default port
     
     if [ "$DEPLOYMENT_MODE" = "slave" ]; then
         description="MServerController - Minecraft Server Manager (Slave Node)"
@@ -447,11 +463,14 @@ WantedBy=multi-user.target
 EOF
     else
         description="MServerController - Minecraft Server Manager (Master Node)"
-        exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central"
         
-        # Add SSL arguments if enabled
+        # Determine port based on SSL
         if [ "$USE_SSL" = "true" ]; then
-            exec_start="$exec_start --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
+            service_port="443"
+            exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central --port 443 --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
+        else
+            service_port="3000"
+            exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central --port 3000"
         fi
         
         # Create service file with encryption key in environment if enabled
@@ -471,7 +490,7 @@ RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=mservercontroller
-Environment=PORT=3000
+Environment=PORT=$service_port
 Environment=ENCRYPTION_KEY=$(cat $ENCRYPTION_KEY_FILE)
 
 [Install]
@@ -493,7 +512,7 @@ RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=mservercontroller
-Environment=PORT=3000
+Environment=PORT=$service_port
 
 [Install]
 WantedBy=multi-user.target
@@ -511,10 +530,17 @@ start_services() {
     systemctl enable mservercontroller
     systemctl start mservercontroller
     
-    # Reload Nginx only for Master nodes without SSL
-    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" != "true" ]; then
+    # Start Nginx only for Master nodes without SSL
+    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" = "false" ]; then
+        print_info "Starting Nginx reverse proxy..."
         systemctl enable nginx
-        systemctl reload nginx
+        systemctl start nginx
+        
+        if systemctl is-active --quiet nginx; then
+            print_success "Nginx is running"
+        else
+            print_warning "Nginx failed to start"
+        fi
     fi
     
     sleep 2
@@ -538,8 +564,12 @@ restart_services() {
     fi
     
     # Reload Nginx only if it's a Master node without SSL
-    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" != "true" ] && systemctl is-active --quiet nginx; then
-        systemctl reload nginx
+    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" = "false" ]; then
+        if systemctl is-active --quiet nginx 2>/dev/null; then
+            systemctl reload nginx
+        else
+            systemctl start nginx
+        fi
     fi
     
     sleep 2
@@ -563,11 +593,30 @@ show_completion() {
     if [ "$DEPLOYMENT_MODE" = "master" ]; then
         echo "Deployment Mode: Master Node (Central Controller)"
         echo ""
+        
+        # Show configuration
+        echo "Configuration:"
+        if [ "$USE_SSL" = "true" ]; then
+            echo "  Transport Security: HTTPS (SSL/TLS Enabled) on port 443"
+        else
+            echo "  Transport Security: HTTP on port 80 (via Nginx reverse proxy)"
+        fi
+        
+        if [ "$USE_ENCRYPTION" = "true" ]; then
+            echo "  Payload Encryption: Enabled (Fernet)"
+        else
+            echo "  Payload Encryption: Disabled"
+        fi
+        echo ""
+        
+        # Show access URL
         if [ "$USE_SSL" = "true" ]; then
             echo "Access the web interface at:"
-            echo "  https://$(hostname -I | awk '{print $1}'):3000"
+            echo "  https://$(hostname -I | awk '{print $1}'):443"
             echo "  or"
-            echo "  https://localhost:3000"
+            echo "  https://$(hostname -I | awk '{print $1}')"
+            echo "  or"
+            echo "  https://localhost"
             echo ""
             print_warning "Using self-signed certificate - browsers will show security warning"
             echo "Accept the certificate warning to proceed."
@@ -576,6 +625,8 @@ show_completion() {
             echo "  http://$(hostname -I | awk '{print $1}')"
             echo "  or"
             echo "  http://localhost"
+            echo ""
+            echo "(Nginx reverse proxy on port 80 -> App on port 3000)"
         fi
         echo ""
     else
