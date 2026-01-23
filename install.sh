@@ -219,20 +219,54 @@ generate_ssl_certs() {
         
         mkdir -p "$SSL_DIR"
         
+        # Get IP address for SAN
+        local ip_addr=$(hostname -I | awk '{print $1}')
+        local hostname=$(hostname)
+        
+        # Create OpenSSL config for SAN
+        cat > "$SSL_DIR/openssl.cnf" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = State
+L = City
+O = MServerController
+CN = $hostname
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $hostname
+DNS.2 = localhost
+IP.1 = 127.0.0.1
+IP.2 = $ip_addr
+EOF
+        
         # Generate self-signed certificate (valid for 365 days)
         openssl req -x509 -newkey rsa:4096 -nodes \
             -keyout "$SSL_DIR/key.pem" \
             -out "$SSL_DIR/cert.pem" \
             -days 365 \
-            -subj "/C=US/ST=State/L=City/O=MServerController/CN=$(hostname)" \
+            -config "$SSL_DIR/openssl.cnf" \
             2>/dev/null
         
         chmod 600 "$SSL_DIR/key.pem"
         chmod 644 "$SSL_DIR/cert.pem"
+        rm -f "$SSL_DIR/openssl.cnf"
         
         print_success "SSL certificate generated"
         echo "  Certificate: $SSL_DIR/cert.pem"
         echo "  Private Key: $SSL_DIR/key.pem"
+        echo "  Valid for: 365 days"
+        echo "  Hostname: $hostname"
+        echo "  IP Address: $ip_addr"
         echo ""
         print_warning "This is a self-signed certificate. For production, use a certificate from a trusted CA."
         echo ""
@@ -342,6 +376,16 @@ set_permissions() {
 configure_nginx() {
     if [ "$DEPLOYMENT_MODE" != "master" ]; then
         print_info "Skipping Nginx configuration (Slave node)"
+        return 0
+    fi
+    
+    if [ "$USE_SSL" = "true" ]; then
+        print_info "Skipping Nginx configuration (SSL enabled - app handles HTTPS directly)"
+        # Disable nginx if it's running
+        if systemctl is-active --quiet nginx; then
+            systemctl stop nginx
+            systemctl disable nginx
+        fi
         return 0
     fi
     
@@ -467,8 +511,9 @@ start_services() {
     systemctl enable mservercontroller
     systemctl start mservercontroller
     
-    # Reload Nginx only for Master nodes
-    if [ "$DEPLOYMENT_MODE" = "master" ]; then
+    # Reload Nginx only for Master nodes without SSL
+    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" != "true" ]; then
+        systemctl enable nginx
         systemctl reload nginx
     fi
     
@@ -492,8 +537,8 @@ restart_services() {
         systemctl start mservercontroller
     fi
     
-    # Reload Nginx only if it's a Master node
-    if [ "$DEPLOYMENT_MODE" = "master" ] && systemctl is-active --quiet nginx; then
+    # Reload Nginx only if it's a Master node without SSL
+    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" != "true" ] && systemctl is-active --quiet nginx; then
         systemctl reload nginx
     fi
     
@@ -518,10 +563,20 @@ show_completion() {
     if [ "$DEPLOYMENT_MODE" = "master" ]; then
         echo "Deployment Mode: Master Node (Central Controller)"
         echo ""
-        echo "Access the web interface at:"
-        echo "  http://$(hostname -I | awk '{print $1}')"
-        echo "  or"
-        echo "  http://localhost"
+        if [ "$USE_SSL" = "true" ]; then
+            echo "Access the web interface at:"
+            echo "  https://$(hostname -I | awk '{print $1}'):3000"
+            echo "  or"
+            echo "  https://localhost:3000"
+            echo ""
+            print_warning "Using self-signed certificate - browsers will show security warning"
+            echo "Accept the certificate warning to proceed."
+        else
+            echo "Access the web interface at:"
+            echo "  http://$(hostname -I | awk '{print $1}')"
+            echo "  or"
+            echo "  http://localhost"
+        fi
         echo ""
     else
         echo "Deployment Mode: Slave Node (Client Worker)"
