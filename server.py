@@ -3997,6 +3997,18 @@ def api_get_clients():
     clients = client_manager.get_all_clients()
     return jsonify({'clients': clients})
 
+@app.route('/api/nodes/encryption', methods=['GET'])
+@admin_required
+def api_get_encryption_info():
+    """Get encryption configuration info (admin only)"""
+    encryption_key = os.environ.get('ENCRYPTION_KEY')
+    enabled = encryption_key is not None and encryption_key != ''
+    
+    return jsonify({
+        'enabled': enabled,
+        'key': encryption_key if enabled else None
+    })
+
 @app.route('/api/nodes/available', methods=['GET'])
 @login_required
 def get_available_nodes():

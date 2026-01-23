@@ -37,6 +37,7 @@
           <button type="button" class="settings-tab-btn" data-tab="branding">🎨 Branding</button>
           <button type="button" class="settings-tab-btn" data-tab="users">👥 User Management</button>
           <button type="button" class="settings-tab-btn" data-tab="approvals">✅ Approvals</button>
+          <button type="button" class="settings-tab-btn" data-tab="nodes">🖥️ Node Manager</button>
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
           <button type="button" class="settings-tab-btn" data-tab="tools">🛠️ Tools</button>
         </nav>
@@ -165,8 +166,68 @@
             </div>
           </div>
         </section>
-        
-        <!-- Server Settings Section -->
+                <!-- Node Manager Section -->
+        <section id="nodes-section" class="settings-section">
+          <div class="nodes-header">
+            <h2>🖥️ Distributed Node Management</h2>
+            <p class="section-description">Manage Master-Slave distributed deployment nodes and encryption</p>
+          </div>
+          
+          <!-- Encryption Key Card -->
+          <div class="node-card encryption-card">
+            <h3>🔐 Encryption Configuration</h3>
+            <div class="encryption-info">
+              <div class="encryption-status" id="encryption-status">
+                <span class="status-indicator"></span>
+                <span class="status-text">Loading...</span>
+              </div>
+              <div class="encryption-key-display" id="encryption-key-container" style="display: none;">
+                <label>Encryption Key:</label>
+                <div class="key-display-wrapper">
+                  <code id="encryption-key" class="encryption-key">••••••••••••••••••••</code>
+                  <button class="btn btn-small" id="toggle-key-btn" onclick="toggleEncryptionKey()">👁️ Show</button>
+                  <button class="btn btn-small" onclick="copyEncryptionKey()">📋 Copy</button>
+                </div>
+                <small class="help-text">⚠️ Keep this key secure! Required for Slave nodes to connect with encryption.</small>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Connected Nodes Overview -->
+          <div class="node-card">
+            <div class="card-header">
+              <h3>📡 Connected Nodes</h3>
+              <button class="btn btn-small" onclick="refreshNodes()">🔄 Refresh</button>
+            </div>
+            <div class="nodes-summary" id="nodes-summary">
+              <div class="summary-stat">
+                <div class="stat-label">Total Nodes</div>
+                <div class="stat-value" id="total-nodes">0</div>
+              </div>
+              <div class="summary-stat">
+                <div class="stat-label">Online</div>
+                <div class="stat-value online" id="online-nodes">0</div>
+              </div>
+              <div class="summary-stat">
+                <div class="stat-label">Offline</div>
+                <div class="stat-value offline" id="offline-nodes">0</div>
+              </div>
+              <div class="summary-stat">
+                <div class="stat-label">Total Servers</div>
+                <div class="stat-value" id="total-servers">0</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Nodes List -->
+          <div class="node-card">
+            <h3>📋 Node Details</h3>
+            <div id="nodes-list" class="nodes-list">
+              <div class="loading-text">Loading nodes...</div>
+            </div>
+          </div>
+        </section>
+                <!-- Server Settings Section -->
         <section id="appsettings-section" class="settings-section">
           <div class="settings-card">
             <h3>👤 User Creation & Modification</h3>

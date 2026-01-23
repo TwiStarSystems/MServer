@@ -204,6 +204,12 @@ prompt_deployment_mode() {
 
 # Generate encryption key
 generate_encryption_key() {
+    # Only generate encryption key for MASTER nodes
+    if [ "$DEPLOYMENT_MODE" != "master" ]; then
+        print_info "Skipping encryption key generation (Slave node receives key from Master)"
+        return 0
+    fi
+    
     if [ "$USE_ENCRYPTION" = "true" ]; then
         print_info "Generating encryption key..."
         
@@ -302,6 +308,9 @@ EOF
     # Add encryption key reference for slave nodes
     if [ "$DEPLOYMENT_MODE" = "slave" ] && [ "$USE_ENCRYPTION" = "true" ]; then
         echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> "$DEPLOYMENT_CONFIG"
+        # Also save to encryption.key file for systemd service
+        echo "$ENCRYPTION_KEY" > "$ENCRYPTION_KEY_FILE"
+        chmod 600 "$ENCRYPTION_KEY_FILE"
     elif [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_ENCRYPTION" = "true" ]; then
         echo "ENCRYPTION_KEY_FILE=$ENCRYPTION_KEY_FILE" >> "$DEPLOYMENT_CONFIG"
     fi
@@ -408,6 +417,7 @@ create_service() {
     local exec_start
     local description
     local service_port="3000"  # Default port
+    local encryption_env=""
     
     if [ "$DEPLOYMENT_MODE" = "slave" ]; then
         description="MServerController - Minecraft Server Manager (Slave Node)"
@@ -418,12 +428,12 @@ create_service() {
             exec_start="$exec_start --no-verify-ssl"
         fi
         
-        # Add encryption key if enabled
+        # Set encryption environment variable if enabled
         if [ "$USE_ENCRYPTION" = "true" ]; then
-            exec_start="$exec_start --encryption-key \"$ENCRYPTION_KEY\""
+            encryption_env="Environment=ENCRYPTION_KEY=$ENCRYPTION_KEY"
         fi
         
-        # Create service file without encryption key in environment (passed via args)
+        # Create service file
         cat > /etc/systemd/system/mservercontroller.service <<EOF
 [Unit]
 Description=$description
@@ -440,6 +450,7 @@ StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=mservercontroller
 Environment=PORT=3000
+$encryption_env
 
 [Install]
 WantedBy=multi-user.target

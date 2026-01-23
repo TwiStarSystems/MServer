@@ -37,6 +37,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab === 'approvals') {
         loadPendingApprovals();
       }
+      // Load nodes when Node Manager tab is clicked
+      if (tab === 'nodes') {
+        loadNodeManager();
+      }
       // Load app settings when Server Settings tab is clicked
       if (tab === 'appsettings') {
         loadAppSettings();
@@ -1142,4 +1146,235 @@ async function saveAppSettings() {
     console.error('Failed to save app settings:', err);
     alert('Failed to save settings: ' + err.message);
   }
+}
+
+// ==================== Node Manager Functions ====================
+
+let encryptionKeyVisible = false;
+let actualEncryptionKey = null;
+
+async function loadNodeManager() {
+  await loadEncryptionStatus();
+  await loadNodes();
+}
+
+async function loadEncryptionStatus() {
+  try {
+    const response = await fetch('/api/nodes/encryption');
+    if (!response.ok) throw new Error('Failed to load encryption status');
+    
+    const data = await response.json();
+    const statusEl = document.getElementById('encryption-status');
+    const keyContainer = document.getElementById('encryption-key-container');
+    
+    if (data.enabled) {
+      statusEl.innerHTML = `
+        <span class="status-indicator online"></span>
+        <span class="status-text">Encryption Enabled (Fernet)</span>
+      `;
+      keyContainer.style.display = 'block';
+      actualEncryptionKey = data.key;
+    } else {
+      statusEl.innerHTML = `
+        <span class="status-indicator offline"></span>
+        <span class="status-text">Encryption Disabled</span>
+      `;
+      keyContainer.style.display = 'none';
+    }
+  } catch (err) {
+    console.error('Failed to load encryption status:', err);
+    document.getElementById('encryption-status').innerHTML = `
+      <span class="status-indicator"></span>
+      <span class="status-text">Error loading encryption status</span>
+    `;
+  }
+}
+
+function toggleEncryptionKey() {
+  const keyEl = document.getElementById('encryption-key');
+  const btnEl = document.getElementById('toggle-key-btn');
+  
+  encryptionKeyVisible = !encryptionKeyVisible;
+  
+  if (encryptionKeyVisible) {
+    keyEl.textContent = actualEncryptionKey;
+    btnEl.innerHTML = '🙈 Hide';
+  } else {
+    keyEl.textContent = '••••••••••••••••••••';
+    btnEl.innerHTML = '👁️ Show';
+  }
+}
+
+function copyEncryptionKey() {
+  if (!actualEncryptionKey) return;
+  
+  navigator.clipboard.writeText(actualEncryptionKey).then(() => {
+    const originalText = event.target.textContent;
+    event.target.textContent = '✓ Copied!';
+    setTimeout(() => {
+      event.target.textContent = originalText;
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy:', err);
+    alert('Failed to copy to clipboard');
+  });
+}
+
+async function loadNodes() {
+  try {
+    const response = await fetch('/api/clients');
+    if (!response.ok) throw new Error('Failed to load nodes');
+    
+    const data = await response.json();
+    const nodes = data.clients || [];
+    
+    updateNodesSummary(nodes);
+    displayNodesList(nodes);
+  } catch (err) {
+    console.error('Failed to load nodes:', err);
+    document.getElementById('nodes-list').innerHTML = '<div class="error-text">Failed to load nodes</div>';
+  }
+}
+
+function updateNodesSummary(nodes) {
+  const now = new Date();
+  const onlineNodes = nodes.filter(node => {
+    if (!node.last_heartbeat) return false;
+    const lastSeen = new Date(node.last_heartbeat);
+    const diffSeconds = (now - lastSeen) / 1000;
+    return diffSeconds < 60; // Online if heartbeat within last 60 seconds
+  });
+  
+  const totalServers = nodes.reduce((sum, node) => sum + (node.servers?.length || 0), 0);
+  
+  document.getElementById('total-nodes').textContent = nodes.length;
+  document.getElementById('online-nodes').textContent = onlineNodes.length;
+  document.getElementById('offline-nodes').textContent = nodes.length - onlineNodes.length;
+  document.getElementById('total-servers').textContent = totalServers;
+}
+
+function displayNodesList(nodes) {
+  const listEl = document.getElementById('nodes-list');
+  
+  if (nodes.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">No nodes connected. Install a Slave node to get started.</div>';
+    return;
+  }
+  
+  const now = new Date();
+  
+  const nodeCards = nodes.map(node => {
+    const isOnline = node.last_heartbeat && ((now - new Date(node.last_heartbeat)) / 1000 < 60);
+    const statusClass = isOnline ? 'online' : 'offline';
+    const statusText = isOnline ? 'Online' : 'Offline';
+    
+    const stats = node.stats || {};
+    const cpuUsage = stats.cpu_percent || 0;
+    const memUsage = stats.memory_percent || 0;
+    const diskUsage = stats.disk_percent || 0;
+    
+    const servers = node.servers || [];
+    const runningServers = servers.filter(s => s.status === 'running').length;
+    
+    // Health score calculation
+    let healthScore = 100;
+    if (cpuUsage > 80) healthScore -= 30;
+    else if (cpuUsage > 60) healthScore -= 15;
+    if (memUsage > 80) healthScore -= 30;
+    else if (memUsage > 60) healthScore -= 15;
+    if (diskUsage > 90) healthScore -= 20;
+    else if (diskUsage > 75) healthScore -= 10;
+    if (!isOnline) healthScore = 0;
+    
+    let healthClass = 'excellent';
+    if (healthScore < 30) healthClass = 'critical';
+    else if (healthScore < 50) healthClass = 'warning';
+    else if (healthScore < 80) healthClass = 'good';
+    
+    const registeredAt = node.registered_at ? new Date(node.registered_at).toLocaleString() : 'Unknown';
+    const lastSeen = node.last_heartbeat ? new Date(node.last_heartbeat).toLocaleString() : 'Never';
+    
+    return `
+      <div class="node-item">
+        <div class="node-header">
+          <div class="node-title">
+            <h4>🖥️ ${escapeHtml(node.node_id)}</h4>
+            <span class="node-status ${statusClass}">${statusText}</span>
+          </div>
+          <div class="node-health health-${healthClass}">
+            Health: ${healthScore}%
+          </div>
+        </div>
+        
+        <div class="node-details">
+          <div class="node-info-grid">
+            <div class="info-item">
+              <span class="info-label">OS:</span>
+              <span class="info-value">${escapeHtml(node.system_info?.os || 'Unknown')}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Hostname:</span>
+              <span class="info-value">${escapeHtml(node.system_info?.hostname || 'Unknown')}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Registered:</span>
+              <span class="info-value">${registeredAt}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Last Seen:</span>
+              <span class="info-value">${lastSeen}</span>
+            </div>
+          </div>
+          
+          <div class="node-stats">
+            <div class="stat-bar-container">
+              <div class="stat-bar-label">
+                <span>CPU</span>
+                <span>${cpuUsage.toFixed(1)}%</span>
+              </div>
+              <div class="stat-bar">
+                <div class="stat-bar-fill cpu" style="width: ${cpuUsage}%"></div>
+              </div>
+            </div>
+            
+            <div class="stat-bar-container">
+              <div class="stat-bar-label">
+                <span>Memory</span>
+                <span>${memUsage.toFixed(1)}%</span>
+              </div>
+              <div class="stat-bar">
+                <div class="stat-bar-fill memory" style="width: ${memUsage}%"></div>
+              </div>
+            </div>
+            
+            <div class="stat-bar-container">
+              <div class="stat-bar-label">
+                <span>Disk</span>
+                <span>${diskUsage.toFixed(1)}%</span>
+              </div>
+              <div class="stat-bar">
+                <div class="stat-bar-fill disk" style="width: ${diskUsage}%"></div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="node-servers">
+            <strong>Servers:</strong> ${servers.length} total, ${runningServers} running
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  listEl.innerHTML = nodeCards;
+}
+
+function refreshNodes() {
+  loadNodes();
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
