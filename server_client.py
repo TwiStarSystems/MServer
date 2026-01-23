@@ -380,6 +380,49 @@ class ClientController:
             elif action == 'BACKUP':
                 # Trigger backup - would need backup_scheduler integration
                 result = {'success': False, 'message': 'Backup not yet implemented in client mode'}
+            
+            elif action == 'UPDATE':
+                # Slave node update triggered by Master
+                print(f"[Client] Update command received from Master")
+                try:
+                    import subprocess
+                    import threading
+                    
+                    update_type = params.get('type', 'quick')
+                    
+                    def perform_update():
+                        print(f"[Client] Starting {update_type} update in background...")
+                        try:
+                            # Use quick-update for faster Slave updates with --non-interactive flag
+                            cmd = f'sudo /opt/mservercontroller/install.sh quick-update --non-interactive'
+                            result_proc = subprocess.run(
+                                cmd,
+                                shell=True,
+                                capture_output=True,
+                                text=True,
+                                timeout=600
+                            )
+                            
+                            if result_proc.returncode == 0:
+                                print(f"[Client] Update completed successfully!")
+                            else:
+                                print(f"[Client] Update failed: {result_proc.stderr}")
+                        except Exception as e:
+                            print(f"[Client] Update error: {e}")
+                    
+                    # Run update in background thread so this response can complete
+                    update_thread = threading.Thread(target=perform_update, daemon=True)
+                    update_thread.start()
+                    
+                    result = {
+                        'success': True,
+                        'message': f'Update started in background (type: {update_type})'
+                    }
+                except Exception as e:
+                    result = {
+                        'success': False,
+                        'message': f'Failed to start update: {str(e)}'
+                    }
                 
             else:
                 result = {'success': False, 'message': f'Unknown action: {action}'}

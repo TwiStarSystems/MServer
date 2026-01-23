@@ -5976,6 +5976,224 @@ def get_stats_history():
     return jsonify({'history': history})
 
 
+# ==================== System Updates API ====================
+
+@app.route('/api/system/version', methods=['GET'])
+@user_required
+def get_current_version():
+    """Get current version from git"""
+    import subprocess
+    
+    try:
+        # Get current git commit hash and info
+        result = subprocess.run(
+            ['git', 'describe', '--tags', '--always', '--abbrev=7'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            version = result.stdout.strip()
+        else:
+            version = "unknown"
+        
+        # Get commit date
+        result = subprocess.run(
+            ['git', 'log', '-1', '--format=%ai'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        commit_date = result.stdout.strip() if result.returncode == 0 else "unknown"
+        
+        # Get deployment mode
+        deployment_mode = "unknown"
+        if deployment_config.get('DEPLOYMENT_MODE'):
+            deployment_mode = deployment_config['DEPLOYMENT_MODE']
+        
+        return jsonify({
+            'version': version,
+            'commit_date': commit_date,
+            'deployment_mode': deployment_mode,
+            'installed_at': INSTALL_DIR
+        })
+    except Exception as e:
+        print(f"[API] Error getting version: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/system/updates/check', methods=['GET'])
+@admin_required
+def check_for_updates():
+    """Check GitHub for new version"""
+    import subprocess
+    
+    try:
+        # Get current version
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode != 0:
+            return jsonify({'error': 'Could not get current version'}), 500
+        
+        current_commit = result.stdout.strip()
+        
+        # Fetch latest from GitHub
+        result = subprocess.run(
+            ['git', 'fetch', 'origin', 'main', '--dry-run'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        # Get latest remote commit
+        result = subprocess.run(
+            ['git', 'rev-parse', 'origin/main'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode != 0:
+            return jsonify({'error': 'Could not check remote version'}), 500
+        
+        latest_commit = result.stdout.strip()
+        
+        # Get current version info
+        result = subprocess.run(
+            ['git', 'describe', '--tags', '--always', '--abbrev=7'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        current_version = result.stdout.strip()
+        
+        # Get latest version info
+        result = subprocess.run(
+            ['git', 'describe', '--tags', '--always', '--abbrev=7', 'origin/main'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        latest_version = result.stdout.strip()
+        
+        # Get changelog (commits since current)
+        result = subprocess.run(
+            ['git', 'log', '--oneline', f'{current_commit}..origin/main'],
+            cwd=INSTALL_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        changelog = result.stdout.strip().split('\n') if result.returncode == 0 else []
+        
+        update_available = current_commit != latest_commit
+        
+        return jsonify({
+            'update_available': update_available,
+            'current_version': current_version,
+            'latest_version': latest_version,
+            'current_commit': current_commit[:7],
+            'latest_commit': latest_commit[:7],
+            'changelog': changelog[:10]  # Last 10 commits
+        })
+    except Exception as e:
+        print(f"[API] Error checking for updates: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/system/updates/install', methods=['POST'])
+@admin_required
+def install_updates():
+    """Trigger update installation on this node"""
+    import subprocess
+    
+    try:
+        # Determine deployment mode
+        deployment_mode = deployment_config.get('DEPLOYMENT_MODE', 'master')
+        
+        print(f"[API] Update requested for {deployment_mode} node")
+        
+        # For Master: use full update
+        # For Slave: would use slave update, but we'll use the same installer
+        
+        if deployment_mode == 'master':
+            # Master runs full update
+            update_command = [
+                'sudo', 
+                f'{INSTALL_DIR}/install.sh', 
+                'quick-update',
+                '--non-interactive'
+            ]
+            
+            # Send update command to all connected slaves
+            print("[API] Notifying Slave nodes about update...")
+            for node_id, client in client_manager.get_all_clients().items():
+                if client.get('status') == 'online':
+                    cmd_id = client_manager.add_command(
+                        node_id=node_id,
+                        action='UPDATE',
+                        server_id='system',
+                        params={'type': 'full'}
+                    )
+                    print(f"[API] Sent update command to {node_id}: {cmd_id}")
+        
+        else:
+            # Slave runs update via quick-update with non-interactive flag
+            update_command = [
+                'sudo',
+                f'{INSTALL_DIR}/install.sh',
+                'quick-update',
+                '--non-interactive'
+            ]
+        
+        # Start update in background thread
+        def run_update():
+            try:
+                print(f"[API] Starting {deployment_mode} node update...")
+                result = subprocess.run(
+                    update_command,
+                    cwd=INSTALL_DIR,
+                    capture_output=True,
+                    text=True,
+                    timeout=600  # 10 minute timeout
+                )
+                
+                if result.returncode == 0:
+                    print(f"[API] Update completed successfully")
+                else:
+                    print(f"[API] Update failed: {result.stderr}")
+            except Exception as e:
+                print(f"[API] Error during update: {e}")
+        
+        import threading
+        update_thread = threading.Thread(target=run_update, daemon=True)
+        update_thread.start()
+        
+        return jsonify({
+            'status': 'update_started',
+            'deployment_mode': deployment_mode,
+            'message': f'Update started for {deployment_mode} node'
+        })
+    except Exception as e:
+        print(f"[API] Error starting update: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== JAR Downloader API ====================
 
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'

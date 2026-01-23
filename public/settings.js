@@ -45,6 +45,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab === 'appsettings') {
         loadAppSettings();
       }
+      // Load update tool when Tools tab is clicked
+      if (tab === 'tools') {
+        loadUpdateTool();
+      }
     });
   });
   
@@ -584,6 +588,164 @@ async function runTool(toolName) {
   } finally {
     btn.disabled = false;
     btn.textContent = '▶️ Run Tool';
+  }
+}
+
+// ==================== Auto-Update Functions ====================
+
+// Load update tool on Tools tab click
+function loadUpdateTool() {
+  loadCurrentVersion();
+  
+  // Load version info when page loads
+  document.getElementById('check-updates-btn').disabled = false;
+}
+
+// Load current version info
+async function loadCurrentVersion() {
+  try {
+    const response = await fetch('/api/system/version');
+    if (!response.ok) throw new Error('Failed to load version info');
+    
+    const data = await response.json();
+    
+    document.getElementById('current-version').textContent = data.version || 'Unknown';
+    document.getElementById('current-date').textContent = data.commit_date ? new Date(data.commit_date).toLocaleString() : '--';
+    document.getElementById('deployment-mode').textContent = (data.deployment_mode || 'unknown').toUpperCase();
+  } catch (error) {
+    console.error('Error loading version:', error);
+    document.getElementById('current-version').textContent = 'Error';
+  }
+}
+
+// Check for updates
+async function checkForUpdates() {
+  const btn = document.getElementById('check-updates-btn');
+  const availableAlert = document.getElementById('update-available-alert');
+  const noUpdateAlert = document.getElementById('no-update-alert');
+  const changelogContainer = document.getElementById('changelog-container');
+  const updateActionSection = document.getElementById('update-action-section');
+  const statusMsg = document.getElementById('update-status-msg');
+  
+  btn.disabled = true;
+  btn.textContent = '⏳ Checking...';
+  availableAlert.style.display = 'none';
+  noUpdateAlert.style.display = 'none';
+  changelogContainer.style.display = 'none';
+  updateActionSection.style.display = 'none';
+  statusMsg.innerHTML = '';
+  
+  try {
+    const response = await fetch('/api/system/updates/check');
+    if (!response.ok) throw new Error('Failed to check for updates');
+    
+    const data = await response.json();
+    
+    if (data.update_available) {
+      // Show update available
+      availableAlert.style.display = 'block';
+      const infoHtml = `
+        <div>
+          <strong>Current:</strong> ${escapeHtml(data.current_version)} | 
+          <strong>Latest:</strong> ${escapeHtml(data.latest_version)}
+        </div>
+      `;
+      document.getElementById('available-version-info').innerHTML = infoHtml;
+      
+      // Show changelog
+      if (data.changelog && data.changelog.length > 0) {
+        changelogContainer.style.display = 'block';
+        const changelogHtml = data.changelog
+          .map(line => `<div class="changelog-item">${escapeHtml(line)}</div>`)
+          .join('');
+        document.getElementById('changelog-list').innerHTML = changelogHtml;
+      }
+      
+      // Show update button
+      updateActionSection.style.display = 'block';
+    } else {
+      // No update available
+      noUpdateAlert.style.display = 'block';
+    }
+    
+  } catch (error) {
+    console.error('Error checking for updates:', error);
+    statusMsg.innerHTML = `<div class="alert alert-error">❌ Error checking for updates: ${error.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔍 Check For Updates';
+  }
+}
+
+// Trigger update installation
+async function triggerUpdate() {
+  if (!confirm('Are you sure you want to update? The application will restart during the update process. Game servers will continue running.')) {
+    return;
+  }
+  
+  const updateBtn = document.getElementById('update-btn');
+  const progressSection = document.getElementById('update-progress-section');
+  const updateActionSection = document.getElementById('update-action-section');
+  const statusMsg = document.getElementById('update-status-msg');
+  const statusText = document.getElementById('update-status-text');
+  
+  updateBtn.disabled = true;
+  updateActionSection.style.display = 'none';
+  progressSection.style.display = 'block';
+  statusMsg.innerHTML = '';
+  statusText.textContent = 'Starting update...';
+  
+  try {
+    const response = await fetch('/api/system/updates/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (!response.ok) throw new Error('Failed to start update');
+    
+    const data = await response.json();
+    statusText.textContent = data.message || 'Update in progress...';
+    
+    // Poll for update completion
+    let maxAttempts = 60; // 10 minutes with 10-second intervals
+    let updateComplete = false;
+    
+    const pollInterval = setInterval(async () => {
+      maxAttempts--;
+      
+      if (maxAttempts <= 0) {
+        clearInterval(pollInterval);
+        statusText.textContent = 'Update timeout - please check manually';
+        statusMsg.innerHTML = '<div class="alert alert-warning">⚠️ Update may still be in progress. Check the application status.</div>';
+        return;
+      }
+      
+      try {
+        const versionResponse = await fetch('/api/system/version');
+        if (versionResponse.ok) {
+          // If we can reach the API, update is likely complete
+          clearInterval(pollInterval);
+          progressSection.style.display = 'none';
+          statusMsg.innerHTML = '<div class="alert alert-success">✓ Update completed! The application has restarted.</div>';
+          
+          // Reload version info
+          setTimeout(() => {
+            loadCurrentVersion();
+          }, 1000);
+        }
+      } catch (e) {
+        // API not responding - update still in progress
+        statusText.textContent = `Updating... (${Math.floor((60 - maxAttempts) * 10 / 60 * 100)}%)`;
+      }
+    }, 10000); // Check every 10 seconds
+    
+  } catch (error) {
+    console.error('Error triggering update:', error);
+    statusMsg.innerHTML = `<div class="alert alert-error">❌ Error starting update: ${error.message}</div>`;
+    progressSection.style.display = 'none';
+    updateActionSection.style.display = 'block';
+  } finally {
+    updateBtn.disabled = false;
   }
 }
 

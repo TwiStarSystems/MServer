@@ -20,6 +20,7 @@ NODE_ID=""
 USE_SSL="false"
 USE_ENCRYPTION="false"
 ENCRYPTION_KEY=""
+INTERACTIVE="true"  # Set to "false" for API-driven updates
 
 # Colors for output
 RED='\033[0;31m'
@@ -86,6 +87,17 @@ check_debian() {
 
 # Prompt for deployment mode
 prompt_deployment_mode() {
+    # If non-interactive, load from deployment.conf instead of prompting
+    if [ "$INTERACTIVE" == "false" ]; then
+        if [ ! -f "$DEPLOYMENT_CONFIG" ]; then
+            print_error "Non-interactive mode requires existing deployment.conf"
+            exit 1
+        fi
+        print_info "Loading deployment configuration from deployment.conf..."
+        load_deployment_config
+        return
+    fi
+    
     print_header "Deployment Configuration"
     
     echo "Select deployment mode:"
@@ -1207,6 +1219,11 @@ show_menu() {
 
 # Main entry point
 main() {
+    # Check for --non-interactive flag
+    if [[ "$2" == "--non-interactive" ]] || [[ "$2" == "--no-interactive" ]] || [[ "$1" == "--non-interactive" ]] || [[ "$1" == "--no-interactive" ]]; then
+        INTERACTIVE="false"
+    fi
+    
     case "${1:-}" in
         install)
             check_root
@@ -1233,8 +1250,22 @@ main() {
         help|-h|--help)
             show_usage
             ;;
+        --non-interactive|--no-interactive)
+            check_root
+            if [ -z "${2:-}" ]; then
+                print_error "Action required with --non-interactive flag"
+                show_usage
+                exit 1
+            fi
+            # Re-call main with the actual command
+            main "$2"
+            ;;
         "")
-            # No argument - show interactive menu
+            # No argument - show interactive menu or error if non-interactive
+            if [ "$INTERACTIVE" == "false" ]; then
+                print_error "Non-interactive mode requires an action (install, update, quick-update, status, etc)"
+                exit 1
+            fi
             show_menu
             ;;
         *)
