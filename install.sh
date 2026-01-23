@@ -365,7 +365,6 @@ create_service() {
     # Determine ExecStart command based on deployment mode
     local exec_start
     local description
-    local environment_vars="Environment=PORT=3000"
     
     if [ "$DEPLOYMENT_MODE" = "slave" ]; then
         description="MServerController - Minecraft Server Manager (Slave Node)"
@@ -380,22 +379,9 @@ create_service() {
         if [ "$USE_ENCRYPTION" = "true" ]; then
             exec_start="$exec_start --encryption-key \"$ENCRYPTION_KEY\""
         fi
-    else
-        description="MServerController - Minecraft Server Manager (Master Node)"
-        exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central"
         
-        # Add SSL arguments if enabled
-        if [ "$USE_SSL" = "true" ]; then
-            exec_start="$exec_start --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
-        fi
-        
-        # Add encryption key environment variable if enabled
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            environment_vars="$environment_vars\nEnvironment=ENCRYPTION_KEY=$(cat $ENCRYPTION_KEY_FILE)"
-        fi
-    fi
-    
-    cat > /etc/systemd/system/mservercontroller.service <<EOF
+        # Create service file without encryption key in environment (passed via args)
+        cat > /etc/systemd/system/mservercontroller.service <<EOF
 [Unit]
 Description=$description
 After=network.target
@@ -410,11 +396,66 @@ RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=mservercontroller
-$environment_vars
+Environment=PORT=3000
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    else
+        description="MServerController - Minecraft Server Manager (Master Node)"
+        exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central"
+        
+        # Add SSL arguments if enabled
+        if [ "$USE_SSL" = "true" ]; then
+            exec_start="$exec_start --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
+        fi
+        
+        # Create service file with encryption key in environment if enabled
+        if [ "$USE_ENCRYPTION" = "true" ]; then
+            cat > /etc/systemd/system/mservercontroller.service <<EOF
+[Unit]
+Description=$description
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$exec_start
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=mservercontroller
+Environment=PORT=3000
+Environment=ENCRYPTION_KEY=$(cat $ENCRYPTION_KEY_FILE)
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        else
+            cat > /etc/systemd/system/mservercontroller.service <<EOF
+[Unit]
+Description=$description
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$exec_start
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=mservercontroller
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        fi
+    fi
 
     systemctl daemon-reload
     print_success "Systemd service created for $DEPLOYMENT_MODE mode"
