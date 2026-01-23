@@ -196,8 +196,8 @@ generate_encryption_key() {
     if [ "$USE_ENCRYPTION" = "true" ]; then
         print_info "Generating encryption key..."
         
-        # Generate a Fernet-compatible key using Python
-        ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+        # Generate a Fernet-compatible key using Python from virtual environment
+        ENCRYPTION_KEY=$("$INSTALL_DIR/venv/bin/python3" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
         
         # Save to file
         echo "$ENCRYPTION_KEY" > "$ENCRYPTION_KEY_FILE"
