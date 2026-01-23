@@ -390,31 +390,14 @@ configure_nginx() {
         return 0
     fi
     
-    if [ "$USE_SSL" = "true" ]; then
-        print_info "Skipping Nginx configuration (SSL enabled - app handles HTTPS directly)"
-        print_info "Application will listen on port 3000 with HTTPS"
-        # Disable nginx if it's running
-        if systemctl is-active --quiet nginx 2>/dev/null; then
-            systemctl stop nginx 2>/dev/null || true
-            systemctl disable nginx 2>/dev/null || true
-        fi
-        return 0
+    print_info "Skipping Nginx configuration (app listens directly on HTTP/HTTPS ports)"
+    # Disable nginx if it's running
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        systemctl stop nginx 2>/dev/null || true
+        systemctl disable nginx 2>/dev/null || true
+        print_success "Nginx disabled"
     fi
-    
-    print_info "Configuring Nginx as reverse proxy..."
-    print_info "Nginx will listen on port 80, proxy to app on port 3000"
-    
-    cp "$INSTALL_DIR/nginx.conf" /etc/nginx/sites-available/mservercontroller
-    ln -sf /etc/nginx/sites-available/mservercontroller /etc/nginx/sites-enabled/mservercontroller
-    rm -f /etc/nginx/sites-enabled/default
-    
-    if nginx -t 2>/dev/null; then
-        print_success "Nginx configuration valid"
-    else
-        print_error "Nginx configuration test failed"
-        nginx -t
-        exit 1
-    fi
+    return 0
 }
 
 # Create systemd service
@@ -530,19 +513,6 @@ start_services() {
     systemctl enable mservercontroller
     systemctl start mservercontroller
     
-    # Start Nginx only for Master nodes without SSL
-    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" = "false" ]; then
-        print_info "Starting Nginx reverse proxy..."
-        systemctl enable nginx
-        systemctl start nginx
-        
-        if systemctl is-active --quiet nginx; then
-            print_success "Nginx is running"
-        else
-            print_warning "Nginx failed to start"
-        fi
-    fi
-    
     sleep 2
     if systemctl is-active --quiet mservercontroller; then
         print_success "MServerController service is running"
@@ -561,15 +531,6 @@ restart_services() {
         systemctl restart mservercontroller
     else
         systemctl start mservercontroller
-    fi
-    
-    # Reload Nginx only if it's a Master node without SSL
-    if [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_SSL" = "false" ]; then
-        if systemctl is-active --quiet nginx 2>/dev/null; then
-            systemctl reload nginx
-        else
-            systemctl start nginx
-        fi
     fi
     
     sleep 2
@@ -599,7 +560,7 @@ show_completion() {
         if [ "$USE_SSL" = "true" ]; then
             echo "  Transport Security: HTTPS (SSL/TLS Enabled) on port 443"
         else
-            echo "  Transport Security: HTTP on port 80 (via Nginx reverse proxy)"
+            echo "  Transport Security: HTTP on port 3000"
         fi
         
         if [ "$USE_ENCRYPTION" = "true" ]; then
@@ -622,11 +583,9 @@ show_completion() {
             echo "Accept the certificate warning to proceed."
         else
             echo "Access the web interface at:"
-            echo "  http://$(hostname -I | awk '{print $1}')"
+            echo "  http://$(hostname -I | awk '{print $1}'):3000"
             echo "  or"
-            echo "  http://localhost"
-            echo ""
-            echo "(Nginx reverse proxy on port 80 -> App on port 3000)"
+            echo "  http://localhost:3000"
         fi
         echo ""
     else
