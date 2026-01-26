@@ -788,9 +788,10 @@ do_update() {
         cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
         cp "$(dirname "$0")/server_client.py" "$INSTALL_DIR/"
         cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$(dirname "$0")/system_info.py" "$INSTALL_DIR/" 2>/dev/null || true
         cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
         cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
+        cp "$(dirname "$0")/version" "$INSTALL_DIR/" 2>/dev/null || true
+        print_success "  Updated: version file"
         
         # Update frontend files
         if [ -d "$(dirname "$0")/public" ]; then
@@ -935,7 +936,8 @@ do_quick_update() {
         cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
         cp "$(dirname "$0")/server_client.py" "$INSTALL_DIR/"
         cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$(dirname "$0")/system_info.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$(dirname "$0")/version" "$INSTALL_DIR/" 2>/dev/null || true
+        print_success "  Updated: version file"
         
         # Frontend files
         if [ -d "$(dirname "$0")/public" ]; then

@@ -78,10 +78,115 @@ COMMANDS_PATH = BASE_DIR / 'commands.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
+VERSION_FILE = BASE_DIR / 'version'
 
 # Ensure directories exist
 for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, TOOLS_DIR, RESOURCEPACKS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
+
+
+# ==================== Version Helper Functions ====================
+
+def read_version_file():
+    """
+    Read version from version file.
+    Returns version string or None if file doesn't exist or is invalid.
+    Supports both 'version=X.X.X' and 'X.X.X' formats.
+    """
+    try:
+        if not VERSION_FILE.exists():
+            return None
+
+        content = VERSION_FILE.read_text().strip()
+
+        # Try 'version=X.X.X' format first
+        if '=' in content:
+            parts = content.split('=', 1)
+            if len(parts) == 2:
+                version = parts[1].strip()
+                # Validate format
+                if version and all(c.isdigit() or c == '.' for c in version):
+                    return version
+
+        # Try plain 'X.X.X' format
+        if all(c.isdigit() or c == '.' for c in content):
+            return content
+
+        return None
+    except Exception as e:
+        print(f"[Version] Error reading version file: {e}")
+        return None
+
+
+def get_current_version():
+    """
+    Get current version with fallback to git if version file doesn't exist.
+    Returns tuple: (version_string, source)
+    source can be: 'file', 'git', or 'unknown'
+    """
+    # Try reading from version file first
+    file_version = read_version_file()
+    if file_version:
+        return (file_version, 'file')
+
+    # Fallback to git
+    try:
+        result = subprocess.run(
+            ['git', 'describe', '--tags', '--always', '--abbrev=7'],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            return (version, 'git')
+    except Exception as e:
+        print(f"[Version] Error getting version from git: {e}")
+
+    return ('unknown', 'unknown')
+
+
+def get_remote_version_file():
+    """
+    Fetch the version file from the remote repository.
+    Returns version string or None if unable to fetch.
+    """
+    try:
+        # Fetch latest from remote
+        subprocess.run(
+            ['git', 'fetch', 'origin', 'main'],
+            cwd=BASE_DIR,
+            capture_output=True,
+            timeout=10
+        )
+
+        # Get version file content from origin/main
+        result = subprocess.run(
+            ['git', 'show', 'origin/main:version'],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode == 0:
+            content = result.stdout.strip()
+
+            # Parse content (supports both formats)
+            if '=' in content:
+                parts = content.split('=', 1)
+                if len(parts) == 2:
+                    return parts[1].strip()
+
+            # Plain version format
+            if all(c.isdigit() or c == '.' for c in content):
+                return content
+
+        return None
+    except Exception as e:
+        print(f"[Version] Error fetching remote version: {e}")
+        return None
 
 
 # ==================== Settings Manager ====================
@@ -5980,46 +6085,37 @@ def get_stats_history():
 
 @app.route('/api/system/version', methods=['GET'])
 @login_required
-def get_current_version():
-    """Get current version from git"""
-    import subprocess
-    
+def api_get_current_version():
+    """Get current version from version file"""
     try:
-        # Get current git commit hash and info
-        result = subprocess.run(
-            ['git', 'describe', '--tags', '--always', '--abbrev=7'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode == 0:
-            version = result.stdout.strip()
-        else:
-            version = "unknown"
-        
+        # Get current version (from file or fallback to git)
+        version, source = get_current_version()
+
         # Get commit date
-        result = subprocess.run(
-            ['git', 'log', '-1', '--format=%ai'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        commit_date = result.stdout.strip() if result.returncode == 0 else "unknown"
-        
+        commit_date = "unknown"
+        try:
+            result = subprocess.run(
+                ['git', 'log', '-1', '--format=%ai'],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            commit_date = result.stdout.strip() if result.returncode == 0 else "unknown"
+        except:
+            pass
+
         # Get deployment mode
         deployment_mode = "unknown"
         if deployment_config.get('DEPLOYMENT_MODE'):
             deployment_mode = deployment_config['DEPLOYMENT_MODE']
-        
+
         return jsonify({
             'version': version,
+            'version_source': source,
             'commit_date': commit_date,
             'deployment_mode': deployment_mode,
-            'installed_at': INSTALL_DIR
+            'installed_at': str(BASE_DIR)
         })
     except Exception as e:
         print(f"[API] Error getting version: {e}")
@@ -6029,87 +6125,71 @@ def get_current_version():
 @app.route('/api/system/updates/check', methods=['GET'])
 @admin_required
 def check_for_updates():
-    """Check GitHub for new version"""
-    import subprocess
-    
+    """Check GitHub for new version using version file"""
     try:
-        # Get current version
-        result = subprocess.run(
-            ['git', 'rev-parse', 'HEAD'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode != 0:
-            return jsonify({'error': 'Could not get current version'}), 500
-        
-        current_commit = result.stdout.strip()
-        
-        # Fetch latest from GitHub
-        result = subprocess.run(
-            ['git', 'fetch', 'origin', 'main', '--dry-run'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
+        # Get current version from file
+        current_version, source = get_current_version()
+        if not current_version or current_version == 'unknown':
+            return jsonify({'error': 'Could not determine current version'}), 500
+
+        # Get remote version from version file
+        latest_version = get_remote_version_file()
+        if not latest_version:
+            return jsonify({'error': 'Could not fetch remote version file'}), 500
+
+        # Check if update is available (simple version comparison)
+        update_available = current_version != latest_version
+
+        # Get current commit for changelog
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            current_commit = result.stdout.strip() if result.returncode == 0 else 'unknown'
+        except:
+            current_commit = 'unknown'
+
         # Get latest remote commit
-        result = subprocess.run(
-            ['git', 'rev-parse', 'origin/main'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode != 0:
-            return jsonify({'error': 'Could not check remote version'}), 500
-        
-        latest_commit = result.stdout.strip()
-        
-        # Get current version info
-        result = subprocess.run(
-            ['git', 'describe', '--tags', '--always', '--abbrev=7'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        current_version = result.stdout.strip()
-        
-        # Get latest version info
-        result = subprocess.run(
-            ['git', 'describe', '--tags', '--always', '--abbrev=7', 'origin/main'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        latest_version = result.stdout.strip()
-        
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', 'origin/main'],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            latest_commit = result.stdout.strip() if result.returncode == 0 else 'unknown'
+        except:
+            latest_commit = 'unknown'
+
         # Get changelog (commits since current)
-        result = subprocess.run(
-            ['git', 'log', '--oneline', f'{current_commit}..origin/main'],
-            cwd=INSTALL_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        changelog = result.stdout.strip().split('\n') if result.returncode == 0 else []
-        
-        update_available = current_commit != latest_commit
-        
+        changelog = []
+        try:
+            if current_commit != 'unknown' and latest_commit != 'unknown':
+                result = subprocess.run(
+                    ['git', 'log', '--oneline', f'{current_commit}..origin/main'],
+                    cwd=BASE_DIR,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    changelog = result.stdout.strip().split('\n')[:10]  # Last 10 commits
+        except:
+            pass
+
         return jsonify({
             'update_available': update_available,
             'current_version': current_version,
             'latest_version': latest_version,
-            'current_commit': current_commit[:7],
-            'latest_commit': latest_commit[:7],
-            'changelog': changelog[:10]  # Last 10 commits
+            'current_commit': current_commit[:7] if current_commit != 'unknown' else 'unknown',
+            'latest_commit': latest_commit[:7] if latest_commit != 'unknown' else 'unknown',
+            'changelog': changelog,
+            'version_source': source
         })
     except Exception as e:
         print(f"[API] Error checking for updates: {e}")
@@ -6134,12 +6214,12 @@ def install_updates():
         if deployment_mode == 'master':
             # Master runs full update
             update_command = [
-                'sudo', 
-                f'{INSTALL_DIR}/install.sh', 
+                'sudo',
+                f'{BASE_DIR}/install.sh',
                 'quick-update',
                 '--non-interactive'
             ]
-            
+
             # Send update command to all connected slaves
             print("[API] Notifying Slave nodes about update...")
             for node_id, client in client_manager.get_all_clients().items():
@@ -6151,23 +6231,23 @@ def install_updates():
                         params={'type': 'full'}
                     )
                     print(f"[API] Sent update command to {node_id}: {cmd_id}")
-        
+
         else:
             # Slave runs update via quick-update with non-interactive flag
             update_command = [
                 'sudo',
-                f'{INSTALL_DIR}/install.sh',
+                f'{BASE_DIR}/install.sh',
                 'quick-update',
                 '--non-interactive'
             ]
-        
+
         # Start update in background thread
         def run_update():
             try:
                 print(f"[API] Starting {deployment_mode} node update...")
                 result = subprocess.run(
                     update_command,
-                    cwd=INSTALL_DIR,
+                    cwd=BASE_DIR,
                     capture_output=True,
                     text=True,
                     timeout=600  # 10 minute timeout
