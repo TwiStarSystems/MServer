@@ -1629,7 +1629,8 @@ class ClientManager:
         self.clients = self._load_clients()
         self.commands = self._load_commands()
         self.lock = threading.Lock()
-        
+        self.monitor_running = True
+
         # Encryption support
         self.encryption_key = encryption_key
         self.fernet = None
@@ -1641,6 +1642,11 @@ class ClientManager:
             except Exception as e:
                 print(f'[Controller] Failed to initialize encryption: {e}')
                 self.fernet = None
+
+        # Start background heartbeat monitor
+        self.monitor_thread = threading.Thread(target=self._monitor_client_heartbeats, daemon=True)
+        self.monitor_thread.start()
+        print('[Controller] Client heartbeat monitor started')
     
     def _load_clients(self):
         """Load clients from file"""
@@ -1748,11 +1754,11 @@ class ClientManager:
         client = self.get_client(node_id)
         if not client:
             return False
-        
+
         last_heartbeat = client.get('last_heartbeat')
         if not last_heartbeat:
             return False
-        
+
         try:
             last_seen = datetime.fromisoformat(last_heartbeat)
             time_since_heartbeat = (datetime.now() - last_seen).total_seconds()
@@ -1761,7 +1767,53 @@ class ClientManager:
         except Exception as e:
             print(f"[Controller] Error checking client status: {e}")
             return False
-    
+
+    def _monitor_client_heartbeats(self):
+        """Background task to monitor client heartbeats and update statuses"""
+        import time
+
+        while self.monitor_running:
+            try:
+                time.sleep(5)  # Check every 5 seconds
+
+                with self.lock:
+                    for node_id, client in self.clients.get('clients', {}).items():
+                        last_heartbeat = client.get('last_heartbeat')
+                        current_status = client.get('status', 'offline')
+
+                        if not last_heartbeat:
+                            continue
+
+                        try:
+                            last_seen = datetime.fromisoformat(last_heartbeat)
+                            time_since_heartbeat = (datetime.now() - last_seen).total_seconds()
+
+                            # Check if client has timed out (10 second timeout)
+                            if time_since_heartbeat >= 10:
+                                if current_status == 'online':
+                                    # Client has gone offline
+                                    client['status'] = 'offline'
+                                    print(f"[Controller] Client {node_id} marked offline (no heartbeat for {time_since_heartbeat:.1f}s)")
+
+                                    # Mark all servers on this client as unknown
+                                    for server in client.get('servers', []):
+                                        if server.get('status') not in ['unknown', 'stopped', 'stopping']:
+                                            server['status'] = 'unknown'
+
+                                    self._save_clients()
+                            else:
+                                # Client is within timeout window
+                                if current_status != 'online':
+                                    # Client has come back online (or status was stale)
+                                    client['status'] = 'online'
+                                    self._save_clients()
+
+                        except Exception as e:
+                            print(f"[Controller] Error monitoring client {node_id}: {e}")
+
+            except Exception as e:
+                print(f"[Controller] Error in heartbeat monitor: {e}")
+
     def add_command(self, node_id, action, server_id, params=None):
         """Add a command to the client's queue"""
         with self.lock:

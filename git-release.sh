@@ -178,9 +178,9 @@ main() {
 
     echo ""
     print_header "Review Changes"
-    echo "Commit message: ${CYAN}$commit_message${NC}"
-    echo "Version:        ${GREEN}$current_version${NC} → ${GREEN}$new_version${NC}"
-    echo "Tag:            ${YELLOW}v$new_version${NC}"
+    echo -e "Commit message: ${CYAN}$commit_message${NC}"
+    echo -e "Version:        ${GREEN}$current_version${NC} → ${GREEN}$new_version${NC}"
+    echo -e "Tag:            ${YELLOW}v$new_version${NC}"
     echo ""
 
     read -p "Proceed with commit, tag, and push? (Y/n): " confirm
@@ -230,9 +230,9 @@ main() {
 
     echo ""
     print_header "Release Complete! 🎉"
-    echo "Version:  ${GREEN}v$new_version${NC}"
-    echo "Commit:   ${CYAN}$commit_message${NC}"
-    echo "Branch:   ${BLUE}$DEFAULT_BRANCH${NC}"
+    echo -e "Version:  ${GREEN}v$new_version${NC}"
+    echo -e "Commit:   ${CYAN}$commit_message${NC}"
+    echo -e "Branch:   ${BLUE}$DEFAULT_BRANCH${NC}"
     echo ""
     print_info "Your release is now available on GitHub!"
     print_info "Check the Actions tab for automated release creation."
