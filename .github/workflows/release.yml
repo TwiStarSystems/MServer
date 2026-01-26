@@ -1,0 +1,156 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags (e.g., v3.1, v3.2.0)
+  workflow_dispatch:  # Allow manual trigger from GitHub Actions tab
+    inputs:
+      tag_name:
+        description: 'Tag name for the release (e.g., v3.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write  # Required to create releases
+
+jobs:
+  create_release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
+
+      - name: Get Version Info
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual trigger - use input tag
+            TAG_NAME="${{ github.event.inputs.tag_name }}"
+          else
+            # Tag push trigger - use the pushed tag
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "version=${TAG_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate Changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_TAG" ]; then
+            # First release - get all commits
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Get commits since previous tag
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREVIOUS_TAG}..HEAD)
+          fi
+
+          # Save changelog to file (handle multiline)
+          echo "$CHANGELOG" > /tmp/changelog.txt
+
+          # Also get commit count
+          if [ -z "$PREVIOUS_TAG" ]; then
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+          else
+            COMMIT_COUNT=$(git rev-list --count ${PREVIOUS_TAG}..HEAD)
+          fi
+          echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
+          echo "previous_tag=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Create Release Notes
+        id: release_notes
+        run: |
+          TAG_NAME="${{ steps.version.outputs.tag_name }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          PREVIOUS_TAG="${{ steps.changelog.outputs.previous_tag }}"
+          COMMIT_COUNT="${{ steps.changelog.outputs.commit_count }}"
+
+          # Create release notes
+          cat > /tmp/release_notes.md <<EOF
+          # MServerController ${VERSION}
+
+          ## 🚀 What's New
+
+          This release includes ${COMMIT_COUNT} new commits with improvements and bug fixes.
+
+          ## 📝 Changelog
+
+          $(cat /tmp/changelog.txt)
+
+          ## 📦 Installation
+
+          ### Fresh Installation
+
+          \`\`\`bash
+          git clone https://github.com/TwiStarSystems/MServerController.git
+          cd MServerController
+          sudo ./install.sh install
+          \`\`\`
+
+          ### Update Existing Installation
+
+          **Master Node:**
+          \`\`\`bash
+          cd /opt/mservercontroller
+          git pull origin main
+          sudo ./install.sh update
+          \`\`\`
+
+          **Slave Node:**
+          \`\`\`bash
+          cd /opt/mservercontroller
+          git pull origin main
+          sudo ./install.sh update
+          \`\`\`
+
+          Or use the built-in auto-update feature from the web interface (Settings → Tools → Auto-Update).
+
+          ## 🔒 Security Notes
+
+          - All configurations and encryption keys are preserved during updates
+          - Master-Slave communication remains encrypted
+          - User data and server files are never touched during updates
+
+          ## 📚 Documentation
+
+          - [Quick Start Guide](README.md)
+          - [Development Guide](docs/DEVELOPMENT_GUIDE.md)
+          - [Update Guide](docs/UPDATE_GUIDE.md)
+          - [Distributed Deployment](docs/DISTRIBUTED_DEPLOYMENT.md)
+
+          ## ⚙️ System Requirements
+
+          - Ubuntu 20.04+ or Debian 11+
+          - Python 3.10+
+          - Java 21+ (for Minecraft servers)
+          - 2GB+ RAM recommended
+          - Git (for updates)
+
+          ---
+
+          **Full Changelog**: ${PREVIOUS_TAG:+https://github.com/TwiStarSystems/MServerController/compare/${PREVIOUS_TAG}...${TAG_NAME}}
+          EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: Release ${{ steps.version.outputs.tag_name }}
+          body_path: /tmp/release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release Summary
+        run: |
+          echo "✅ Release created successfully!"
+          echo "📦 Version: ${{ steps.version.outputs.tag_name }}"
+          echo "📝 Commits: ${{ steps.changelog.outputs.commit_count }}"
+          echo "🔗 https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag_name }}"
