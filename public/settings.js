@@ -1404,7 +1404,7 @@ function updateNodesSummary(nodes) {
     if (!node.last_heartbeat) return false;
     const lastSeen = new Date(node.last_heartbeat);
     const diffSeconds = (now - lastSeen) / 1000;
-    return diffSeconds < 60; // Online if heartbeat within last 60 seconds
+    return diffSeconds < 10; // Online if heartbeat within last 10 seconds
   });
   
   const totalServers = nodes.reduce((sum, node) => sum + (node.servers?.length || 0), 0);
@@ -1426,7 +1426,7 @@ function displayNodesList(nodes) {
   const now = new Date();
   
   const nodeCards = nodes.map(node => {
-    const isOnline = node.last_heartbeat && ((now - new Date(node.last_heartbeat)) / 1000 < 60);
+    const isOnline = node.last_heartbeat && ((now - new Date(node.last_heartbeat)) / 1000 < 10);
     const statusClass = isOnline ? 'online' : 'offline';
     const statusText = isOnline ? 'Online' : 'Offline';
     
