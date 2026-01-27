@@ -21,13 +21,14 @@ import json
 import ssl
 import urllib3
 from datetime import datetime
-from cryptography.fernet import Fernet
 from pathlib import Path
+
+from server_core import PayloadEncryption
 
 
 class ClientController:
     """Manages the client connection to the central controller"""
-    
+
     def __init__(self, controller_url, node_id, local_server_manager, verify_ssl=True, encryption_key=None):
         self.controller_url = controller_url.rstrip('/')
         self.node_id = node_id
@@ -41,51 +42,27 @@ class ClientController:
         self.api_key = None  # Will be set during registration
         self.session = requests.Session()
         self.verify_ssl = verify_ssl
-        
-        # Encryption support
-        self.encryption_key = encryption_key
-        self.fernet = None
-        if encryption_key:
-            try:
-                self.fernet = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
-                print('[Client] Payload encryption enabled')
-            except Exception as e:
-                print(f'[Client] Failed to initialize encryption: {e}')
-                self.fernet = None
-        
+
+        # Use shared encryption utility from server_core
+        self.encryptor = PayloadEncryption(encryption_key)
+        if self.encryptor.is_enabled:
+            print('[Client] Payload encryption enabled')
+
         # SSL configuration
         if not verify_ssl:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             print('[Client] WARNING: SSL verification disabled')
-        
+
         # Configure session for SSL
         self.session.verify = verify_ssl
-        
+
     def _encrypt_payload(self, data):
         """Encrypt payload data if encryption is enabled"""
-        if not self.fernet:
-            return data
-        
-        try:
-            json_data = json.dumps(data)
-            encrypted = self.fernet.encrypt(json_data.encode())
-            return {'encrypted': True, 'data': encrypted.decode()}
-        except Exception as e:
-            print(f"[Client] Encryption error: {e}")
-            return data
-    
+        return self.encryptor.encrypt(data)
+
     def _decrypt_payload(self, data):
         """Decrypt payload data if encryption is enabled"""
-        if not self.fernet or not isinstance(data, dict) or not data.get('encrypted'):
-            return data
-        
-        try:
-            encrypted_data = data['data'].encode()
-            decrypted = self.fernet.decrypt(encrypted_data)
-            return json.loads(decrypted.decode())
-        except Exception as e:
-            print(f"[Client] Decryption error: {e}")
-            return data
+        return self.encryptor.decrypt(data)
     
     def get_system_info(self):
         """Get system information for registration"""
@@ -162,7 +139,7 @@ class ClientController:
                 'node_id': self.node_id,
                 'system_info': system_info,
                 'timestamp': datetime.now().isoformat(),
-                'encryption_enabled': self.fernet is not None
+                'encryption_enabled': self.encryptor.is_enabled
             }
             
             # Encrypt payload if encryption is enabled

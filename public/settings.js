@@ -870,23 +870,8 @@ async function deleteJar(serverType, filename) {
   }
 }
 
-// ==================== Utility Functions ====================
-
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
 // ==================== User Management Functions ====================
+// Note: Utility functions (formatBytes, escapeHtml) are in utils.js
 
 async function loadUsers() {
   try {
@@ -1533,10 +1518,4 @@ function displayNodesList(nodes) {
 
 function refreshNodes() {
   loadNodes();
-}
-
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }

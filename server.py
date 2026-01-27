@@ -31,6 +31,8 @@ from functools import wraps
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from server_core import PayloadEncryption
+
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 from flask_limiter import Limiter
@@ -1624,79 +1626,54 @@ An emergency admin account has been created:
 
 class ClientManager:
     """Manages connected client nodes"""
-    
+
     def __init__(self, encryption_key=None):
         self.clients = self._load_clients()
         self.commands = self._load_commands()
         self.lock = threading.Lock()
         self.monitor_running = True
 
-        # Encryption support
-        self.encryption_key = encryption_key
-        self.fernet = None
-        if encryption_key:
-            try:
-                from cryptography.fernet import Fernet
-                self.fernet = Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
-                print('[Controller] Payload encryption enabled for client communication')
-            except Exception as e:
-                print(f'[Controller] Failed to initialize encryption: {e}')
-                self.fernet = None
+        # Use shared encryption utility from server_core
+        self.encryptor = PayloadEncryption(encryption_key)
+        if self.encryptor.is_enabled:
+            print('[Controller] Payload encryption enabled for client communication')
 
         # Start background heartbeat monitor
         self.monitor_thread = threading.Thread(target=self._monitor_client_heartbeats, daemon=True)
         self.monitor_thread.start()
         print('[Controller] Client heartbeat monitor started')
-    
+
     def _load_clients(self):
         """Load clients from file"""
         if CLIENTS_PATH.exists():
             with open(CLIENTS_PATH, 'r') as f:
                 return json.load(f)
         return {'clients': {}}
-    
+
     def _save_clients(self):
         """Save clients to file"""
         with open(CLIENTS_PATH, 'w') as f:
             json.dump(self.clients, f, indent=2)
-    
+
     def _load_commands(self):
         """Load command queue from file"""
         if COMMANDS_PATH.exists():
             with open(COMMANDS_PATH, 'r') as f:
                 return json.load(f)
         return {'commands': {}}
-    
+
     def _save_commands(self):
         """Save command queue to file"""
         with open(COMMANDS_PATH, 'w') as f:
             json.dump(self.commands, f, indent=2)
-    
+
     def _encrypt_payload(self, data):
         """Encrypt payload data if encryption is enabled"""
-        if not self.fernet:
-            return data
-        
-        try:
-            json_data = json.dumps(data)
-            encrypted = self.fernet.encrypt(json_data.encode())
-            return {'encrypted': True, 'data': encrypted.decode()}
-        except Exception as e:
-            print(f"[Controller] Encryption error: {e}")
-            return data
-    
+        return self.encryptor.encrypt(data)
+
     def _decrypt_payload(self, data):
         """Decrypt payload data if encryption is enabled"""
-        if not self.fernet or not isinstance(data, dict) or not data.get('encrypted'):
-            return data
-        
-        try:
-            encrypted_data = data['data'].encode()
-            decrypted = self.fernet.decrypt(encrypted_data)
-            return json.loads(decrypted.decode())
-        except Exception as e:
-            print(f"[Controller] Decryption error: {e}")
-            return data
+        return self.encryptor.decrypt(data)
     
     def register_client(self, node_id, system_info):
         """Register a new client node"""

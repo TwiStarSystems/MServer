@@ -80,9 +80,4 @@ function createServerCard(server) {
         </div>
     `;
 }
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
+// Note: escapeHtml is in utils.js

@@ -2,13 +2,57 @@
 
 ## 🤖 AI-FRIENDLY DEVELOPMENT REFERENCE
 
-**Last Updated:** 2026-01-23  
-**Version:** 3.1 (Orphaned State & Node Manager)  
+**Last Updated:** 2026-01-27
+**Version:** 3.2 (Code Consolidation & Auto-Update)
 **Primary Language:** Python 3.10+
 
 ---
 
-## RECENT CHANGES (v3.1)
+## RECENT CHANGES (v3.2)
+
+### Code Consolidation & Clean Root Directory
+- **Design Principle:** Keep root directory clean; consolidate related files into appropriate folders
+- **Documentation:** All `.md` documentation files moved to `docs/` folder
+- **Shared Python Logic:** Common utilities extracted to `server_core.py`
+- **Shared JavaScript:** Common frontend utilities extracted to `public/utils.js`
+
+### Shared Core Module (server_core.py)
+- **PayloadEncryption Class:** Handles encryption/decryption between Master and Slave nodes
+- **Usage:** Imported by both `server.py` (ClientManager) and `server_client.py` (ClientController)
+- **Purpose:** Eliminates code duplication for Fernet encryption logic
+
+### Frontend Utility Consolidation (public/utils.js)
+- **Extracted Functions:**
+  - `formatBytes(bytes)` - Format bytes into human-readable string (e.g., "1.5 GB")
+  - `escapeHtml(text)` - Escape HTML special characters to prevent XSS
+- **Usage:** Include `<script src="utils.js"></script>` before page-specific JS files
+- **Files Updated:** `index.html`, `public.html`, `settings.html` now include `utils.js`
+
+### Auto-Update System
+- **Feature:** Automatic update checking and installation from GitHub releases
+- **Endpoint:** `/api/settings/updates/check` - Check for available updates
+- **Endpoint:** `/api/settings/updates/apply` - Download and apply updates
+- **UI Location:** Settings page "Updates" tab for admin users
+- **Version File:** `version` file in root tracks current version (format: `version=X.Y.Z`)
+
+### Git Release Script (git-release.sh)
+- **Purpose:** Automates git commit, versioning, tagging, and pushing
+- **Features:**
+  - Automatic semantic version bumping (major/minor/patch)
+  - Version file updates
+  - Git tag creation
+  - Interactive commit message prompts
+- **Usage:** `./git-release.sh` from repository root
+
+### Version File System
+- **File:** `version` in project root
+- **Format:** `version=X.Y.Z` (e.g., `version=3.2.4`)
+- **Read By:** Auto-update system, install script, release script
+- **Update Method:** Use `git-release.sh` or edit manually
+
+---
+
+## CHANGES FROM v3.1
 
 ### Polling Rate Standardization
 - **Master-Slave Heartbeat:** Changed from 30s → **10 seconds**
@@ -162,11 +206,13 @@
 ```
 MServerController/
 ├── server.py                 # MAIN: Central controller (6400+ lines)
-├── server_client.py          # Client mode controller (380+ lines)
-├── server_core.py            # Shared core logic (placeholder)
+├── server_client.py          # Client mode controller (500+ lines)
+├── server_core.py            # Shared core logic (PayloadEncryption class)
 ├── requirements.txt          # Python dependencies
 ├── install.sh                # Installation script
+├── git-release.sh            # Release automation script (NEW v3.2)
 ├── nginx.conf                # Nginx configuration
+├── version                   # Version file (NEW v3.2) - format: version=X.Y.Z
 │
 ├── config.json               # Server configurations (generated)
 ├── users.json                # User accounts (generated)
@@ -186,6 +232,7 @@ MServerController/
 │   ├── login.js              # Login logic
 │   ├── settings.js           # Settings logic
 │   ├── public.js             # Public page logic
+│   ├── utils.js              # Shared utilities (NEW v3.2) - formatBytes, escapeHtml
 │   └── styles.css            # Stylesheet
 │
 ├── servers/                  # Minecraft server files
@@ -213,11 +260,15 @@ MServerController/
 │   ├── get_forge_jars.py
 │   └── ...
 │
-└── docs/                     # Documentation
-    ├── DEVELOPMENT_GUIDE.md  # THIS FILE
-    ├── API_DISTRIBUTED.md
-    ├── DISTRIBUTED_DEPLOYMENT.md
-    └── ...
+└── docs/                     # Documentation (ALL docs consolidated here)
+    ├── DEVELOPMENT_GUIDE.md  # THIS FILE - AI-friendly dev reference
+    ├── API_DISTRIBUTED.md    # Distributed API documentation
+    ├── DISTRIBUTED_DEPLOYMENT.md  # Deployment guide
+    ├── AUTO_UPDATE_GUIDE.md  # Auto-update system docs
+    ├── SECURITY.md           # Security documentation
+    ├── VERSION_FILE_GUIDE.md # Version file system docs
+    ├── GIT_RELEASE_SCRIPT.md # Release script documentation
+    └── ...                   # Other documentation files
 ```
 
 ---
@@ -478,6 +529,46 @@ MServerController/
 - Game servers keep running during orphaned state
 - Logs: "[Client] ⚠ Lost connection to Master - entering orphaned state"
 - On recovery: "[Client] ✓ Reconnected to Master!"
+
+### Shared Core Classes (server_core.py) - NEW v3.2
+
+#### PayloadEncryption
+**Purpose:** Handles encryption/decryption of payloads for Master-Slave communication
+
+**Used by:**
+- `ClientManager` (server.py) on the Master/Controller side
+- `ClientController` (server_client.py) on the Slave/Client side
+
+| Method | Parameters | Returns | Description |
+|--------|------------|---------|-------------|
+| `__init__` | encryption_key: str = None | - | Initialize with Fernet key (or None to disable) |
+| `is_enabled` | - | bool | Property: Check if encryption is enabled |
+| `encrypt` | data: dict | dict | Encrypt payload, returns `{'encrypted': True, 'data': ...}` |
+| `decrypt` | data: dict | dict | Decrypt payload, returns original data dict |
+
+**Usage Example:**
+```python
+from server_core import PayloadEncryption
+
+encryptor = PayloadEncryption(encryption_key)
+encrypted = encryptor.encrypt({'action': 'START', 'server_id': '...'})
+decrypted = encryptor.decrypt(encrypted)
+```
+
+### Shared Frontend Utilities (public/utils.js) - NEW v3.2
+
+**Purpose:** Common JavaScript utility functions used across multiple pages
+
+| Function | Parameters | Returns | Description |
+|----------|------------|---------|-------------|
+| `formatBytes` | bytes: number | string | Format bytes to human-readable (e.g., "1.5 GB") |
+| `escapeHtml` | text: string | string | Escape HTML special characters (XSS prevention) |
+
+**Usage:** Include before page-specific JS files:
+```html
+<script src="utils.js"></script>
+<script src="app.js"></script>
+```
 
 ---
 
@@ -802,6 +893,67 @@ return jsonify({'error': 'Error message'}), status_code
 | `server_output` | Server→Client | Console output |
 | `server_status` | Server→Client | Status change |
 
+### Rule 8: Clean Root Directory (NEW v3.2)
+
+**Keep the project root directory clean and organized:**
+
+```
+✅ ROOT DIRECTORY SHOULD CONTAIN:
+- Main Python files (server.py, server_client.py, server_core.py)
+- Configuration files (requirements.txt, nginx.conf)
+- Scripts (install.sh, git-release.sh)
+- Version file (version)
+- License and gitignore
+
+❌ DO NOT ADD TO ROOT:
+- Documentation files (*.md) → Use docs/ folder
+- Test files → Use testing_files/ folder
+- Temporary files → Use appropriate temp directories
+- Utility scripts → Use tools/ folder
+```
+
+**When adding new files:**
+1. **Documentation:** Always place in `docs/` folder
+2. **Utility scripts:** Place in `tools/` folder
+3. **Test files:** Place in `testing_files/` folder
+4. **Frontend assets:** Place in `public/` folder
+
+### Rule 9: Code Consolidation (NEW v3.2)
+
+**Avoid code duplication by consolidating shared logic:**
+
+**Python (Backend):**
+- Shared logic between `server.py` and `server_client.py` → Put in `server_core.py`
+- Example: PayloadEncryption class is used by both Master and Slave
+
+**JavaScript (Frontend):**
+- Shared functions across multiple pages → Put in `public/utils.js`
+- Example: `formatBytes()`, `escapeHtml()` are used by app.js, settings.js, public.js
+
+**When to consolidate:**
+1. Function is used in 2+ files
+2. Logic is identical or nearly identical
+3. Changes to the logic should affect all usages
+
+**How to consolidate:**
+```python
+# server_core.py - Shared Python utilities
+class SharedClass:
+    def shared_method(self):
+        pass
+
+# server.py / server_client.py - Import and use
+from server_core import SharedClass
+```
+
+```javascript
+// utils.js - Shared JavaScript utilities
+function sharedFunction() { }
+
+// app.js - Use (after including utils.js in HTML)
+sharedFunction();
+```
+
 ---
 
 ## REQUIREMENTS MANAGEMENT
@@ -905,9 +1057,12 @@ pip install -r requirements.txt
 | New API endpoint | server.py | API Endpoints Reference |
 | New command type | server.py, server_client.py | Command Types |
 | New class | server.py or server_client.py | Class Reference |
+| Shared Python logic | server_core.py | Shared Core Classes |
+| Shared JS function | public/utils.js | Shared Frontend Utilities |
 | New dependency | requirements.txt | Requirements Management |
 | New file type | File Structure section | File Structure |
 | Architecture change | Multiple sections | Core Architecture |
+| New documentation | docs/ folder | File Structure |
 
 ---
 
@@ -950,16 +1105,19 @@ python server.py --mode central  # Flask debug mode is enabled by default in dev
 |---------|----------|
 | Main backend | server.py |
 | Client mode | server_client.py |
-| Shared logic | server_core.py (future) |
+| Shared logic | server_core.py (PayloadEncryption) |
 | Frontend HTML | public/*.html |
 | Frontend JS | public/*.js |
+| Shared JS utils | public/utils.js |
 | Frontend CSS | public/styles.css |
 | Dependencies | requirements.txt |
+| Version file | version |
 | Server configs | config.json |
 | User data | users.json |
 | App settings | settings.json |
 | Client nodes | clients.json |
 | Commands queue | commands.json |
+| Documentation | docs/*.md |
 
 ---
 
@@ -970,9 +1128,11 @@ python server.py --mode central  # Flask debug mode is enabled by default in dev
 | 1.0 | Initial | Basic server management |
 | 2.0 | 2025 | Multi-user, RBAC, MFA |
 | 3.0 | 2026-01 | Distributed architecture, load balancing |
+| 3.1 | 2026-01-23 | Orphaned state handling, Node Manager UI, polling standardization |
+| 3.2 | 2026-01-27 | Code consolidation (server_core.py, utils.js), auto-update system, version file, git-release.sh |
 
 ---
 
 **This guide must be kept up-to-date with all critical changes.**
 
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-27
