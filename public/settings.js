@@ -79,6 +79,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     socket = io();
     socket.on('stats_update', updateCurrentStats);
+    
+    // Listen for node status updates
+    socket.on('node_status_update', (data) => {
+      console.log('[Socket.IO] Node status update received:', data);
+      // Check if the nodes tab is currently active
+      const nodesSection = document.getElementById('nodes-section');
+      if (nodesSection && nodesSection.classList.contains('active')) {
+        loadNodes(); // Refresh nodes list
+      }
+    });
   } catch (err) {
     console.error('Socket.IO error:', err);
   }
@@ -1299,10 +1309,36 @@ async function saveAppSettings() {
 
 let encryptionKeyVisible = false;
 let actualEncryptionKey = null;
+let nodesRefreshInterval = null;
 
 async function loadNodeManager() {
   await loadEncryptionStatus();
   await loadNodes();
+  
+  // Start auto-refresh for nodes (every 5 seconds)
+  startNodesAutoRefresh();
+}
+
+function startNodesAutoRefresh() {
+  // Clear any existing interval
+  if (nodesRefreshInterval) {
+    clearInterval(nodesRefreshInterval);
+  }
+  
+  // Only refresh if nodes tab is active
+  nodesRefreshInterval = setInterval(() => {
+    const nodesSection = document.getElementById('nodes-section');
+    if (nodesSection && nodesSection.classList.contains('active')) {
+      loadNodes();
+    }
+  }, 5000); // Refresh every 5 seconds
+}
+
+function stopNodesAutoRefresh() {
+  if (nodesRefreshInterval) {
+    clearInterval(nodesRefreshInterval);
+    nodesRefreshInterval = null;
+  }
 }
 
 async function loadEncryptionStatus() {

@@ -29,9 +29,10 @@ BASE_DIR = SCRIPT_DIR.parent
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables' / 'purpur'
 
 
-def fetch_purpur_versions():
+def fetch_purpur_versions(quiet=False):
     """Fetch all available Purpur versions from the API"""
-    print("📥 Fetching Purpur versions...")
+    if not quiet:
+        print("📥 Fetching Purpur versions...")
     try:
         response = requests.get(PURPUR_API_BASE, timeout=30)
         response.raise_for_status()
@@ -41,7 +42,8 @@ def fetch_purpur_versions():
         versions = list(reversed(versions))
         return versions
     except requests.exceptions.RequestException as e:
-        print(f"❌ Failed to fetch Purpur versions: {e}")
+        if not quiet:
+            print(f"❌ Failed to fetch Purpur versions: {e}")
         return None
 
 
@@ -187,55 +189,85 @@ def download_jar(version, build, url, skip_existing=True):
         return False, str(e), 0
 
 
-def bulk_download(server_info, skip_existing=True):
+def bulk_download(server_info, skip_existing=True, json_output=False):
     """
     Download multiple JAR files
-    
+
     Args:
         server_info: List of dicts with version, build, url keys
         skip_existing: Skip files that already exist
+        json_output: Return results as dict for JSON output
+
+    Returns:
+        Dict with download results if json_output=True
     """
     total = len(server_info)
     downloaded = 0
     skipped = 0
     failed = 0
     total_bytes = 0
-    
-    print(f"\n📥 Downloading {total} Purpur server JARs to:")
-    print(f"   {SERVER_EXECUTABLES_DIR}")
-    print("-" * 60)
-    
+    results_list = []
+
+    if not json_output:
+        print(f"\n📥 Downloading {total} Purpur server JARs to:")
+        print(f"   {SERVER_EXECUTABLES_DIR}")
+        print("-" * 60)
+
     for i, item in enumerate(server_info):
         version = item['version']
         build = item['build']
         url = item['url']
-        
-        print(f"  [{i + 1}/{total}] purpur-{version}-{build}.jar...", end=" ", flush=True)
-        
+
+        if not json_output:
+            print(f"  [{i + 1}/{total}] purpur-{version}-{build}.jar...", end=" ", flush=True)
+
         success, message, size = download_jar(version, build, url, skip_existing)
-        
+
         if success:
             if message == "Already exists":
                 skipped += 1
-                print(f"⏭️ {message} ({format_bytes(size)})")
+                if not json_output:
+                    print(f"⏭️ {message} ({format_bytes(size)})")
             else:
                 downloaded += 1
                 total_bytes += size
-                print(f"✅ {message} ({format_bytes(size)})")
+                if not json_output:
+                    print(f"✅ {message} ({format_bytes(size)})")
         else:
             failed += 1
-            print(f"❌ {message}")
-        
+            if not json_output:
+                print(f"❌ {message}")
+
+        results_list.append({
+            "version": version,
+            "build": build,
+            "success": success,
+            "message": message,
+            "size": size
+        })
+
         # Small delay between downloads
         if success and message != "Already exists":
             time.sleep(0.2)
-    
-    print("-" * 60)
-    print(f"\n📊 Download Summary:")
-    print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
-    print(f"   ⏭️ Skipped (existing): {skipped}")
-    print(f"   ❌ Failed: {failed}")
-    print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
+
+    if not json_output:
+        print("-" * 60)
+        print(f"\n📊 Download Summary:")
+        print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
+        print(f"   ⏭️ Skipped (existing): {skipped}")
+        print(f"   ❌ Failed: {failed}")
+        print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
+
+    if json_output:
+        return {
+            "success": True,
+            "mode": "download",
+            "downloaded": downloaded,
+            "skipped": skipped,
+            "failed": failed,
+            "total_bytes": total_bytes,
+            "results": results_list
+        }
 
 
 def format_bytes(bytes_size):
@@ -250,62 +282,99 @@ def format_bytes(bytes_size):
     return f"{bytes_size:.2f} {sizes[i]}"
 
 
+def list_downloaded_silent():
+    """List already downloaded JAR files (returns data only, no printing)"""
+    if not SERVER_EXECUTABLES_DIR.exists():
+        return []
+
+    files = list(SERVER_EXECUTABLES_DIR.glob("purpur-*.jar"))
+    files.sort(reverse=True)
+
+    result = []
+    for f in files:
+        result.append({
+            "name": f.name,
+            "size": f.stat().st_size,
+            "path": str(f)
+        })
+    return result
+
+
 def list_downloaded():
     """List already downloaded JAR files"""
     if not SERVER_EXECUTABLES_DIR.exists():
         print("\n📁 No downloaded files yet.")
         return []
-    
+
     files = list(SERVER_EXECUTABLES_DIR.glob("purpur-*.jar"))
     files.sort(reverse=True)
-    
+
     if not files:
         print("\n📁 No downloaded files yet.")
         return []
-    
+
     print(f"\n📁 Downloaded files in {SERVER_EXECUTABLES_DIR}:")
     print("-" * 60)
-    
+
     total_size = 0
     for f in files:
         size = f.stat().st_size
         total_size += size
         print(f"  {f.name} ({format_bytes(size)})")
-    
+
     print("-" * 60)
     print(f"   Total: {len(files)} files ({format_bytes(total_size)})")
-    
+
     return files
 
 
-def download_single_version(version, force=False):
+def download_single_version(version, force=False, json_output=False):
     """Download a specific Purpur version (latest build)"""
-    print(f"\n🔍 Fetching latest build for Purpur {version}...")
-    
+    if not json_output:
+        print(f"\n🔍 Fetching latest build for Purpur {version}...")
+
     build = get_latest_build(version)
     if not build:
-        print(f"❌ No builds found for version {version}")
+        if not json_output:
+            print(f"❌ No builds found for version {version}")
+        if json_output:
+            return {"success": False, "error": f"No builds found for version {version}"}
         return False
-    
+
     url = get_download_url(version, build)
-    
-    print(f"✅ Found build {build}")
-    print(f"\n📥 Downloading purpur-{version}-{build}.jar...")
-    
+
+    if not json_output:
+        print(f"✅ Found build {build}")
+        print(f"\n📥 Downloading purpur-{version}-{build}.jar...")
+
     success, message, size = download_jar(
-        version, build, url, 
+        version, build, url,
         skip_existing=not force
     )
-    
+
     if success:
-        if message == "Already exists":
-            print(f"⏭️ {message} ({format_bytes(size)})")
-        else:
-            print(f"✅ {message} ({format_bytes(size)})")
-        print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / f'purpur-{version}-{build}.jar'}")
+        if not json_output:
+            if message == "Already exists":
+                print(f"⏭️ {message} ({format_bytes(size)})")
+            else:
+                print(f"✅ {message} ({format_bytes(size)})")
+            print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / f'purpur-{version}-{build}.jar'}")
+        if json_output:
+            return {
+                "success": True,
+                "mode": "single",
+                "version": version,
+                "build": build,
+                "message": message,
+                "size": size,
+                "path": str(SERVER_EXECUTABLES_DIR / f'purpur-{version}-{build}.jar')
+            }
         return True
     else:
-        print(f"❌ {message}")
+        if not json_output:
+            print(f"❌ {message}")
+        if json_output:
+            return {"success": False, "error": message}
         return False
 
 
@@ -324,6 +393,7 @@ Modes:
 Options:
   --force             Re-download even if file exists
   --quiet, -q         Suppress progress output during URL fetching
+  --json              Output results as JSON (for programmatic use)
 
 Examples:
   python get_purpur_jars.py --list
@@ -331,6 +401,7 @@ Examples:
   python get_purpur_jars.py --version=1.21.4
   python get_purpur_jars.py --download --force
   python get_purpur_jars.py --list-downloaded
+  python get_purpur_jars.py --list --json
 
 Note: Purpur downloads always use the latest build for each version.
 Format: purpur:<version>=API (build fetched automatically)
@@ -342,18 +413,22 @@ About Purpur:
 
 
 def main():
-    print("=" * 60)
-    print("🟣 Purpur Server JAR Fetcher & Downloader")
-    print("=" * 60)
-    
     # Parse arguments
     args = sys.argv[1:]
-    
+
+    # Check for JSON output mode first
+    json_output = '--json' in args
+
+    if not json_output:
+        print("=" * 60)
+        print("🟣 Purpur Server JAR Fetcher & Downloader")
+        print("=" * 60)
+
     mode = 'list'  # default
     limit = None
     specific_version = None
     force_download = '--force' in args
-    quiet = '--quiet' in args or '-q' in args
+    quiet = '--quiet' in args or '-q' in args or json_output
     
     # Determine mode
     if '--download' in args:
@@ -383,66 +458,97 @@ def main():
     
     # Execute based on mode
     if mode == 'list-downloaded':
-        list_downloaded()
+        files = list_downloaded_silent() if json_output else None
+        if json_output:
+            result = {"success": True, "mode": "list-downloaded", "files": files or []}
+            print(json.dumps(result))
+        else:
+            list_downloaded()
         return
-    
+
     if mode == 'single':
         if not specific_version:
-            print("❌ No version specified. Use --version=X.X.X")
+            if json_output:
+                print(json.dumps({"success": False, "error": "No version specified"}))
+            else:
+                print("❌ No version specified. Use --version=X.X.X")
             return
-        download_single_version(specific_version, force=force_download)
+        result = download_single_version(specific_version, force=force_download, json_output=json_output)
+        if json_output:
+            print(json.dumps(result))
         return
-    
+
     # Fetch versions for list or download modes
-    versions = fetch_purpur_versions()
+    versions = fetch_purpur_versions(quiet=json_output)
     if not versions:
-        print("\n❌ Could not fetch Purpur versions. Exiting.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "Could not fetch Purpur versions"}))
+        else:
+            print("\n❌ Could not fetch Purpur versions. Exiting.")
         return
-    
-    print(f"✅ Found {len(versions)} Purpur versions")
-    print(f"   Latest: {versions[0]}")
-    print(f"   Oldest: {versions[-1]}")
-    
+
+    if not json_output:
+        print(f"✅ Found {len(versions)} Purpur versions")
+        print(f"   Latest: {versions[0]}")
+        print(f"   Oldest: {versions[-1]}")
+
     # Get server info
     server_info = get_server_info(
-        versions, 
+        versions,
         limit=limit,
         quiet=quiet
     )
-    
+
     if not server_info:
-        print("\n❌ No Purpur server JARs found.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "No Purpur server JARs found"}))
+        else:
+            print("\n❌ No Purpur server JARs found.")
         return
-    
+
     if mode == 'list':
-        # Format and display output
-        print("\n" + "=" * 60)
-        print("📋 PURPUR SERVER JARS (purpur:<version>=API)")
-        print("=" * 60 + "\n")
-        
-        output_lines = format_output(server_info)
-        for line in output_lines:
-            print(line)
-        
-        # Save to file
-        output_file = BASE_DIR / "purpur_server_urls.txt"
-        with open(output_file, 'w') as f:
-            f.write("# Purpur Server JAR Download Info\n")
-            f.write(f"# Generated from {PURPUR_API_BASE}\n")
-            f.write(f"# Total: {len(output_lines)} versions\n")
-            f.write("# Format: purpur:<version>=API (latest build fetched automatically)\n\n")
-            for item in server_info:
-                f.write(f"purpur:{item['version']}=API (build {item['build']}, url: {item['url']})\n")
-        
-        print(f"\n💾 Saved to: {output_file}")
-        
+        if json_output:
+            # JSON output format
+            result = {
+                "success": True,
+                "mode": "list",
+                "count": len(server_info),
+                "versions": [{"version": item['version'], "build": item['build'], "url": item['url']} for item in server_info]
+            }
+            print(json.dumps(result))
+        else:
+            # Format and display output
+            print("\n" + "=" * 60)
+            print("📋 PURPUR SERVER JARS (purpur:<version>=API)")
+            print("=" * 60 + "\n")
+
+            output_lines = format_output(server_info)
+            for line in output_lines:
+                print(line)
+
+            # Save to file
+            output_file = BASE_DIR / "purpur_server_urls.txt"
+            with open(output_file, 'w') as f:
+                f.write("# Purpur Server JAR Download Info\n")
+                f.write(f"# Generated from {PURPUR_API_BASE}\n")
+                f.write(f"# Total: {len(output_lines)} versions\n")
+                f.write("# Format: purpur:<version>=API (latest build fetched automatically)\n\n")
+                for item in server_info:
+                    f.write(f"purpur:{item['version']}=API (build {item['build']}, url: {item['url']})\n")
+
+            print(f"\n💾 Saved to: {output_file}")
+
     elif mode == 'download':
         # Bulk download
-        bulk_download(server_info, skip_existing=not force_download)
-    
-    print("\n✅ Done!")
+        results = bulk_download(server_info, skip_existing=not force_download, json_output=json_output)
+        if json_output:
+            print(json.dumps(results))
+
+    if not json_output:
+        print("\n✅ Done!")
 
 
 if __name__ == "__main__":
-    print_usage()
+    if '--json' not in sys.argv:
+        print_usage()
     main()

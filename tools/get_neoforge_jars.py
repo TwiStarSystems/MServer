@@ -54,9 +54,10 @@ BASE_DIR = SCRIPT_DIR.parent
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables' / 'neoforge'
 
 
-def fetch_neoforge_versions():
+def fetch_neoforge_versions(quiet=False):
     """Fetch all available NeoForge versions from the API"""
-    print("📥 Fetching NeoForge versions...")
+    if not quiet:
+        print("📥 Fetching NeoForge versions...")
     try:
         response = requests.get(NEOFORGE_API_URL, timeout=30)
         response.raise_for_status()
@@ -64,7 +65,8 @@ def fetch_neoforge_versions():
         versions = data.get('versions', [])
         return versions
     except requests.exceptions.RequestException as e:
-        print(f"❌ Failed to fetch NeoForge versions: {e}")
+        if not quiet:
+            print(f"❌ Failed to fetch NeoForge versions: {e}")
         return None
 
 
@@ -319,57 +321,86 @@ def download_jar(version, url, filename, skip_existing=True):
         return False, str(e), 0
 
 
-def bulk_download(server_info, skip_existing=True):
+def bulk_download(server_info, skip_existing=True, json_output=False):
     """
     Download multiple JAR files
-    
+
     Args:
         server_info: List of dicts with version, url keys
         skip_existing: Skip files that already exist
+        json_output: Return results as dict for JSON output
+
+    Returns:
+        Dict with download results if json_output=True
     """
     total = len(server_info)
     downloaded = 0
     skipped = 0
     failed = 0
     total_bytes = 0
-    
-    print(f"\n📥 Downloading {total} NeoForge installer JARs to:")
-    print(f"   {SERVER_EXECUTABLES_DIR}")
-    print("-" * 60)
-    
+    results_list = []
+
+    if not json_output:
+        print(f"\n📥 Downloading {total} NeoForge installer JARs to:")
+        print(f"   {SERVER_EXECUTABLES_DIR}")
+        print("-" * 60)
+
     for i, item in enumerate(server_info):
         version = item['version']
         url = item['url']
         filename = item['filename']
-        
-        print(f"  [{i + 1}/{total}] neoforge-{version}-installer.jar...", end=" ", flush=True)
-        
+
+        if not json_output:
+            print(f"  [{i + 1}/{total}] neoforge-{version}-installer.jar...", end=" ", flush=True)
+
         success, message, size = download_jar(version, url, filename, skip_existing)
-        
+
         if success:
             if message == "Already exists":
                 skipped += 1
-                print(f"⏭️ {message} ({format_bytes(size)})")
+                if not json_output:
+                    print(f"⏭️ {message} ({format_bytes(size)})")
             else:
                 downloaded += 1
                 total_bytes += size
-                print(f"✅ {message} ({format_bytes(size)})")
+                if not json_output:
+                    print(f"✅ {message} ({format_bytes(size)})")
         else:
             failed += 1
-            print(f"❌ {message}")
-        
+            if not json_output:
+                print(f"❌ {message}")
+
+        results_list.append({
+            "version": version,
+            "success": success,
+            "message": message,
+            "size": size
+        })
+
         # Small delay between downloads
         if success and message != "Already exists":
             time.sleep(0.2)
-    
-    print("-" * 60)
-    print(f"\n📊 Download Summary:")
-    print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
-    print(f"   ⏭️ Skipped (existing): {skipped}")
-    print(f"   ❌ Failed: {failed}")
-    print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
-    print(f"\n💡 To install a server, run:")
-    print(f"   java -jar neoforge-<VERSION>-installer.jar --installServer")
+
+    if not json_output:
+        print("-" * 60)
+        print(f"\n📊 Download Summary:")
+        print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
+        print(f"   ⏭️ Skipped (existing): {skipped}")
+        print(f"   ❌ Failed: {failed}")
+        print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
+        print(f"\n💡 To install a server, run:")
+        print(f"   java -jar neoforge-<VERSION>-installer.jar --installServer")
+
+    if json_output:
+        return {
+            "success": True,
+            "mode": "download",
+            "downloaded": downloaded,
+            "skipped": skipped,
+            "failed": failed,
+            "total_bytes": total_bytes,
+            "results": results_list
+        }
 
 
 def format_bytes(bytes_size):
@@ -384,65 +415,101 @@ def format_bytes(bytes_size):
     return f"{bytes_size:.2f} {sizes[i]}"
 
 
+def list_downloaded_silent():
+    """List already downloaded JAR files (returns data only, no printing)"""
+    if not SERVER_EXECUTABLES_DIR.exists():
+        return []
+
+    files = list(SERVER_EXECUTABLES_DIR.glob("neoforge-*-installer.jar"))
+    files.sort(reverse=True)
+
+    result = []
+    for f in files:
+        result.append({
+            "name": f.name,
+            "size": f.stat().st_size,
+            "path": str(f)
+        })
+    return result
+
+
 def list_downloaded():
     """List already downloaded JAR files"""
     if not SERVER_EXECUTABLES_DIR.exists():
         print("\n📁 No downloaded files yet.")
         return []
-    
+
     files = list(SERVER_EXECUTABLES_DIR.glob("neoforge-*-installer.jar"))
     files.sort(reverse=True)
-    
+
     if not files:
         print("\n📁 No downloaded files yet.")
         return []
-    
+
     print(f"\n📁 Downloaded files in {SERVER_EXECUTABLES_DIR}:")
     print("-" * 60)
-    
+
     total_size = 0
     for f in files:
         size = f.stat().st_size
         total_size += size
         print(f"  {f.name} ({format_bytes(size)})")
-    
+
     print("-" * 60)
     print(f"   Total: {len(files)} files ({format_bytes(total_size)})")
-    
+
     return files
 
 
-def download_single_version(version, force=False):
+def download_single_version(version, force=False, json_output=False):
     """Download a specific NeoForge version"""
-    print(f"\n🔍 Preparing to download NeoForge {version}...")
-    
+    if not json_output:
+        print(f"\n🔍 Preparing to download NeoForge {version}...")
+
     url, filename = get_download_url(version)
-    
+
     # Verify URL exists
     exists, size = verify_url(url)
     if not exists:
-        print(f"❌ Version {version} not found or installer doesn't exist")
+        if not json_output:
+            print(f"❌ Version {version} not found or installer doesn't exist")
+        if json_output:
+            return {"success": False, "error": f"Version {version} not found or installer doesn't exist"}
         return False
-    
-    print(f"✅ Found: {filename} ({format_bytes(size)})")
-    print(f"\n📥 Downloading...")
-    
+
+    if not json_output:
+        print(f"✅ Found: {filename} ({format_bytes(size)})")
+        print(f"\n📥 Downloading...")
+
     success, message, downloaded_size = download_jar(
         version, url, filename,
         skip_existing=not force
     )
-    
+
     if success:
-        if message == "Already exists":
-            print(f"⏭️ {message} ({format_bytes(downloaded_size)})")
-        else:
-            print(f"✅ {message} ({format_bytes(downloaded_size)})")
-        print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / filename}")
-        print(f"\n💡 To install the server, run:")
-        print(f"   java -jar {filename} --installServer")
+        if not json_output:
+            if message == "Already exists":
+                print(f"⏭️ {message} ({format_bytes(downloaded_size)})")
+            else:
+                print(f"✅ {message} ({format_bytes(downloaded_size)})")
+            print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / filename}")
+            print(f"\n💡 To install the server, run:")
+            print(f"   java -jar {filename} --installServer")
+        if json_output:
+            return {
+                "success": True,
+                "mode": "single",
+                "version": version,
+                "message": message,
+                "size": downloaded_size,
+                "path": str(SERVER_EXECUTABLES_DIR / filename)
+            }
         return True
     else:
-        print(f"❌ {message}")
+        if not json_output:
+            print(f"❌ {message}")
+        if json_output:
+            return {"success": False, "error": message}
         return False
 
 
@@ -465,6 +532,7 @@ Options:
   --verify            Verify URLs exist before listing (slower)
   --force             Re-download even if file exists
   --quiet, -q         Suppress progress output during processing
+  --json              Output results as JSON (for programmatic use)
 
 Examples:
   python get_neoforge_jars.py --list
@@ -474,6 +542,7 @@ Examples:
   python get_neoforge_jars.py --version=21.4.156
   python get_neoforge_jars.py --download --include-beta --force
   python get_neoforge_jars.py --list-downloaded
+  python get_neoforge_jars.py --list --json
 
 NeoForge Version Mapping:
   20.x.y -> Minecraft 1.20.x
@@ -486,18 +555,22 @@ Note: NeoForge provides installer JARs. After downloading, run:
 
 
 def main():
-    print("=" * 60)
-    print("🔶 NeoForge Server JAR Fetcher & Downloader")
-    print("=" * 60)
-    
     # Parse arguments
     args = sys.argv[1:]
-    
+
+    # Check for JSON output mode first
+    json_output = '--json' in args
+
+    if not json_output:
+        print("=" * 60)
+        print("🔶 NeoForge Server JAR Fetcher & Downloader")
+        print("=" * 60)
+
     mode = 'list'  # default
     limit = None
     specific_version = None
     force_download = '--force' in args
-    quiet = '--quiet' in args or '-q' in args
+    quiet = '--quiet' in args or '-q' in args or json_output
     include_beta = '--include-beta' in args
     stable_only = '--stable-only' in args or not include_beta
     latest_per_mc = '--latest-per-mc' in args
@@ -531,81 +604,121 @@ def main():
     
     # Execute based on mode
     if mode == 'list-downloaded':
-        list_downloaded()
+        files = list_downloaded_silent() if json_output else None
+        if json_output:
+            result = {"success": True, "mode": "list-downloaded", "files": files or []}
+            print(json.dumps(result))
+        else:
+            list_downloaded()
         return
-    
+
     if mode == 'single':
         if not specific_version:
-            print("❌ No version specified. Use --version=X.X.X")
+            if json_output:
+                print(json.dumps({"success": False, "error": "No version specified"}))
+            else:
+                print("❌ No version specified. Use --version=X.X.X")
             return
-        download_single_version(specific_version, force=force_download)
+        result = download_single_version(specific_version, force=force_download, json_output=json_output)
+        if json_output:
+            print(json.dumps(result))
         return
-    
+
     # Fetch versions for list or download modes
-    raw_versions = fetch_neoforge_versions()
+    raw_versions = fetch_neoforge_versions(quiet=json_output)
     if not raw_versions:
-        print("\n❌ Could not fetch NeoForge versions. Exiting.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "Could not fetch NeoForge versions"}))
+        else:
+            print("\n❌ Could not fetch NeoForge versions. Exiting.")
         return
-    
+
     # Filter and parse versions
     versions = filter_versions(raw_versions, stable_only=stable_only, include_beta=include_beta)
-    
+
     if not versions:
-        print("\n❌ No valid NeoForge versions found.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "No valid NeoForge versions found"}))
+        else:
+            print("\n❌ No valid NeoForge versions found.")
         return
-    
-    print(f"✅ Found {len(versions)} NeoForge versions")
-    
+
+    if not json_output:
+        print(f"✅ Found {len(versions)} NeoForge versions")
+
     # Get latest per MC version if requested
     if latest_per_mc:
         versions = get_latest_per_mc_version(versions)
-        print(f"   (Filtered to {len(versions)} - latest per MC version)")
-    
-    if versions:
+        if not json_output:
+            print(f"   (Filtered to {len(versions)} - latest per MC version)")
+
+    if versions and not json_output:
         print(f"   Latest: {versions[0]['version']} (MC {versions[0]['mc_version']})")
         print(f"   Oldest: {versions[-1]['version']} (MC {versions[-1]['mc_version']})")
-    
+
     # Get server info
     server_info = get_server_info(
-        versions, 
+        versions,
         limit=limit,
         quiet=quiet,
         verify=verify
     )
-    
+
     if not server_info:
-        print("\n❌ No NeoForge installer JARs found.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "No NeoForge installer JARs found"}))
+        else:
+            print("\n❌ No NeoForge installer JARs found.")
         return
-    
+
     if mode == 'list':
-        # Format and display output
-        print("\n" + "=" * 60)
-        print("📋 NEOFORGE INSTALLER JARS (neoforge:<version>=URL)")
-        print("=" * 60 + "\n")
-        
-        output_lines = format_output(server_info)
-        for line in output_lines:
-            print(line)
-        
-        # Save to file
-        output_file = BASE_DIR / "neoforge_server_urls.txt"
-        with open(output_file, 'w') as f:
-            f.write("# NeoForge Server Installer JAR Download URLs\n")
-            f.write(f"# Generated from {NEOFORGE_API_URL}\n")
-            f.write(f"# Total: {len(output_lines)} versions\n")
-            f.write("# Format: neoforge:<version>=URL\n\n")
+        if json_output:
+            # JSON output format
+            result = {
+                "success": True,
+                "mode": "list",
+                "count": len(server_info),
+                "versions": [{
+                    "version": item['version'],
+                    "mc_version": item['mc_version'],
+                    "is_beta": item['is_beta'],
+                    "url": item['url']
+                } for item in server_info]
+            }
+            print(json.dumps(result))
+        else:
+            # Format and display output
+            print("\n" + "=" * 60)
+            print("📋 NEOFORGE INSTALLER JARS (neoforge:<version>=URL)")
+            print("=" * 60 + "\n")
+
+            output_lines = format_output(server_info)
             for line in output_lines:
-                f.write(line + "\n")
-        
-        print(f"\n💾 Saved to: {output_file}")
-        
+                print(line)
+
+            # Save to file
+            output_file = BASE_DIR / "neoforge_server_urls.txt"
+            with open(output_file, 'w') as f:
+                f.write("# NeoForge Server Installer JAR Download URLs\n")
+                f.write(f"# Generated from {NEOFORGE_API_URL}\n")
+                f.write(f"# Total: {len(output_lines)} versions\n")
+                f.write("# Format: neoforge:<version>=URL\n\n")
+                for line in output_lines:
+                    f.write(line + "\n")
+
+            print(f"\n💾 Saved to: {output_file}")
+
     elif mode == 'download':
         # Bulk download
-        bulk_download(server_info, skip_existing=not force_download)
-    
-    print("\n✅ Done!")
+        results = bulk_download(server_info, skip_existing=not force_download, json_output=json_output)
+        if json_output:
+            print(json.dumps(results))
+
+    if not json_output:
+        print("\n✅ Done!")
 
 
 if __name__ == "__main__":
-    print_usage()
+    if '--json' not in sys.argv:
+        print_usage()
     main()

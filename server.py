@@ -1778,12 +1778,34 @@ class ClientManager:
                                             server['status'] = 'unknown'
 
                                     self._save_clients()
+                                    
+                                    # Emit node status change via Socket.IO
+                                    try:
+                                        socketio.emit('node_status_update', {
+                                            'node_id': node_id,
+                                            'status': 'offline',
+                                            'last_heartbeat': last_heartbeat,
+                                            'time_since_heartbeat': time_since_heartbeat
+                                        })
+                                    except Exception as emit_err:
+                                        print(f"[Controller] Failed to emit node status update: {emit_err}")
                             else:
                                 # Client is within timeout window
                                 if current_status != 'online':
                                     # Client has come back online (or status was stale)
                                     client['status'] = 'online'
                                     self._save_clients()
+                                    
+                                    # Emit node status change via Socket.IO
+                                    try:
+                                        socketio.emit('node_status_update', {
+                                            'node_id': node_id,
+                                            'status': 'online',
+                                            'last_heartbeat': last_heartbeat,
+                                            'time_since_heartbeat': time_since_heartbeat
+                                        })
+                                    except Exception as emit_err:
+                                        print(f"[Controller] Failed to emit node status update: {emit_err}")
 
                         except Exception as e:
                             print(f"[Controller] Error monitoring client {node_id}: {e}")

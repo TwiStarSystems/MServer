@@ -32,9 +32,10 @@ BASE_DIR = SCRIPT_DIR.parent
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables' / 'forge'
 
 
-def fetch_forge_versions():
+def fetch_forge_versions(quiet=False):
     """Fetch all available Forge versions from the promotions API"""
-    print("📥 Fetching Forge versions...")
+    if not quiet:
+        print("📥 Fetching Forge versions...")
     try:
         response = requests.get(FORGE_PROMOTIONS_URL, timeout=30)
         response.raise_for_status()
@@ -42,7 +43,8 @@ def fetch_forge_versions():
         promos = data.get('promos', {})
         return promos
     except requests.exceptions.RequestException as e:
-        print(f"❌ Failed to fetch Forge versions: {e}")
+        if not quiet:
+            print(f"❌ Failed to fetch Forge versions: {e}")
         return None
 
 
@@ -246,59 +248,89 @@ def download_jar(mc_version, forge_version, url, filename, skip_existing=True):
         return False, str(e), 0
 
 
-def bulk_download(server_info, skip_existing=True):
+def bulk_download(server_info, skip_existing=True, json_output=False):
     """
     Download multiple JAR files
-    
+
     Args:
         server_info: List of dicts with version info
         skip_existing: Skip files that already exist
+        json_output: Return results as dict for JSON output
+
+    Returns:
+        Dict with download results if json_output=True
     """
     total = len(server_info)
     downloaded = 0
     skipped = 0
     failed = 0
     total_bytes = 0
-    
-    print(f"\n📥 Downloading {total} Forge installer JARs to:")
-    print(f"   {SERVER_EXECUTABLES_DIR}")
-    print("-" * 60)
-    
+    results_list = []
+
+    if not json_output:
+        print(f"\n📥 Downloading {total} Forge installer JARs to:")
+        print(f"   {SERVER_EXECUTABLES_DIR}")
+        print("-" * 60)
+
     for i, item in enumerate(server_info):
         mc_version = item['mc_version']
         forge_version = item['forge_version']
         url = item['url']
         filename = item['filename']
-        
-        type_badge = "⭐" if item['type'] == 'recommended' else "🔄"
-        print(f"  [{i + 1}/{total}] {type_badge} forge-{mc_version}-{forge_version}-installer.jar...", end=" ", flush=True)
-        
+
+        if not json_output:
+            type_badge = "⭐" if item['type'] == 'recommended' else "🔄"
+            print(f"  [{i + 1}/{total}] {type_badge} forge-{mc_version}-{forge_version}-installer.jar...", end=" ", flush=True)
+
         success, message, size = download_jar(mc_version, forge_version, url, filename, skip_existing)
-        
+
         if success:
             if message == "Already exists":
                 skipped += 1
-                print(f"⏭️ {message} ({format_bytes(size)})")
+                if not json_output:
+                    print(f"⏭️ {message} ({format_bytes(size)})")
             else:
                 downloaded += 1
                 total_bytes += size
-                print(f"✅ {message} ({format_bytes(size)})")
+                if not json_output:
+                    print(f"✅ {message} ({format_bytes(size)})")
         else:
             failed += 1
-            print(f"❌ {message}")
-        
+            if not json_output:
+                print(f"❌ {message}")
+
+        results_list.append({
+            "mc_version": mc_version,
+            "forge_version": forge_version,
+            "success": success,
+            "message": message,
+            "size": size
+        })
+
         # Small delay between downloads
         if success and message != "Already exists":
             time.sleep(0.3)
-    
-    print("-" * 60)
-    print(f"\n📊 Download Summary:")
-    print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
-    print(f"   ⏭️ Skipped (existing): {skipped}")
-    print(f"   ❌ Failed: {failed}")
-    print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
-    print(f"\n💡 To install a Forge server, run:")
-    print(f"   java -jar forge-X.X.X-X.X.X-installer.jar --installServer")
+
+    if not json_output:
+        print("-" * 60)
+        print(f"\n📊 Download Summary:")
+        print(f"   ✅ Downloaded: {downloaded} ({format_bytes(total_bytes)})")
+        print(f"   ⏭️ Skipped (existing): {skipped}")
+        print(f"   ❌ Failed: {failed}")
+        print(f"\n📁 Files saved to: {SERVER_EXECUTABLES_DIR}")
+        print(f"\n💡 To install a Forge server, run:")
+        print(f"   java -jar forge-X.X.X-X.X.X-installer.jar --installServer")
+
+    if json_output:
+        return {
+            "success": True,
+            "mode": "download",
+            "downloaded": downloaded,
+            "skipped": skipped,
+            "failed": failed,
+            "total_bytes": total_bytes,
+            "results": results_list
+        }
 
 
 def format_bytes(bytes_size):
@@ -313,78 +345,120 @@ def format_bytes(bytes_size):
     return f"{bytes_size:.2f} {sizes[i]}"
 
 
+def list_downloaded_silent():
+    """List already downloaded JAR files (returns data only, no printing)"""
+    if not SERVER_EXECUTABLES_DIR.exists():
+        return []
+
+    files = list(SERVER_EXECUTABLES_DIR.glob("forge-*-installer.jar"))
+    files.sort(reverse=True)
+
+    result = []
+    for f in files:
+        result.append({
+            "name": f.name,
+            "size": f.stat().st_size,
+            "path": str(f)
+        })
+    return result
+
+
 def list_downloaded():
     """List already downloaded JAR files"""
     if not SERVER_EXECUTABLES_DIR.exists():
         print("\n📁 No downloaded files yet.")
         return []
-    
+
     files = list(SERVER_EXECUTABLES_DIR.glob("forge-*-installer.jar"))
     files.sort(reverse=True)
-    
+
     if not files:
         print("\n📁 No downloaded files yet.")
         return []
-    
+
     print(f"\n📁 Downloaded files in {SERVER_EXECUTABLES_DIR}:")
     print("-" * 60)
-    
+
     total_size = 0
     for f in files:
         size = f.stat().st_size
         total_size += size
         print(f"  {f.name} ({format_bytes(size)})")
-    
+
     print("-" * 60)
     print(f"   Total: {len(files)} files ({format_bytes(total_size)})")
-    
+
     return files
 
 
-def download_single_version(mc_version, forge_version=None, force=False):
+def download_single_version(mc_version, forge_version=None, force=False, json_output=False):
     """Download a specific Forge version"""
     if forge_version:
-        print(f"\n🔍 Downloading Forge {mc_version}-{forge_version}...")
+        if not json_output:
+            print(f"\n🔍 Downloading Forge {mc_version}-{forge_version}...")
     else:
-        print(f"\n🔍 Fetching latest Forge for MC {mc_version}...")
-        
+        if not json_output:
+            print(f"\n🔍 Fetching latest Forge for MC {mc_version}...")
+
         # Fetch versions to find the forge version
-        promos = fetch_forge_versions()
+        promos = fetch_forge_versions(quiet=json_output)
         if not promos:
-            print("❌ Could not fetch Forge versions")
+            if not json_output:
+                print("❌ Could not fetch Forge versions")
+            if json_output:
+                return {"success": False, "error": "Could not fetch Forge versions"}
             return False
-        
+
         # Try recommended first, then latest
         forge_version = promos.get(f"{mc_version}-recommended")
         if not forge_version:
             forge_version = promos.get(f"{mc_version}-latest")
-        
+
         if not forge_version:
-            print(f"❌ No Forge version found for MC {mc_version}")
+            if not json_output:
+                print(f"❌ No Forge version found for MC {mc_version}")
+            if json_output:
+                return {"success": False, "error": f"No Forge version found for MC {mc_version}"}
             return False
-        
-        print(f"✅ Found Forge {forge_version}")
-    
+
+        if not json_output:
+            print(f"✅ Found Forge {forge_version}")
+
     url, filename = get_download_url(mc_version, forge_version)
-    
-    print(f"\n📥 Downloading forge-{mc_version}-{forge_version}-installer.jar...")
-    
+
+    if not json_output:
+        print(f"\n📥 Downloading forge-{mc_version}-{forge_version}-installer.jar...")
+
     success, message, size = download_jar(
-        mc_version, forge_version, url, filename, 
+        mc_version, forge_version, url, filename,
         skip_existing=not force
     )
-    
+
     if success:
-        if message == "Already exists":
-            print(f"⏭️ {message} ({format_bytes(size)})")
-        else:
-            print(f"✅ {message} ({format_bytes(size)})")
-        print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / f'forge-{mc_version}-{forge_version}-installer.jar'}")
-        print(f"\n💡 To install the server, run:")
-        print(f"   java -jar forge-{mc_version}-{forge_version}-installer.jar --installServer")
+        if not json_output:
+            if message == "Already exists":
+                print(f"⏭️ {message} ({format_bytes(size)})")
+            else:
+                print(f"✅ {message} ({format_bytes(size)})")
+            print(f"\n📁 File saved to: {SERVER_EXECUTABLES_DIR / f'forge-{mc_version}-{forge_version}-installer.jar'}")
+            print(f"\n💡 To install the server, run:")
+            print(f"   java -jar forge-{mc_version}-{forge_version}-installer.jar --installServer")
+        if json_output:
+            return {
+                "success": True,
+                "mode": "single",
+                "mc_version": mc_version,
+                "forge_version": forge_version,
+                "message": message,
+                "size": size,
+                "path": str(SERVER_EXECUTABLES_DIR / f'forge-{mc_version}-{forge_version}-installer.jar')
+            }
         return True
     else:
-        print(f"❌ {message}")
+        if not json_output:
+            print(f"❌ {message}")
+        if json_output:
+            return {"success": False, "error": message}
         return False
 
 
@@ -405,6 +479,7 @@ Options:
   --force             Re-download even if file exists
   --quiet, -q         Suppress progress output during URL fetching
   --verify            Verify URLs exist before listing (slower)
+  --json              Output results as JSON (for programmatic use)
 
 Examples:
   python get_forge_jars.py --list
@@ -413,27 +488,32 @@ Examples:
   python get_forge_jars.py --version=1.21.4
   python get_forge_jars.py --download --recommended
   python get_forge_jars.py --list-downloaded
+  python get_forge_jars.py --list --json
 
 Note: Forge provides installer JARs. After downloading, run:
       java -jar forge-X.X.X-X.X.X-installer.jar --installServer
-      
+
 Legend: ⭐ = Recommended (stable), 🔄 = Latest (may be unstable)
 """)
 
 
 def main():
-    print("=" * 60)
-    print("🔧 Forge Server JAR Fetcher & Downloader")
-    print("=" * 60)
-    
     # Parse arguments
     args = sys.argv[1:]
-    
+
+    # Check for JSON output mode first
+    json_output = '--json' in args
+
+    if not json_output:
+        print("=" * 60)
+        print("🔧 Forge Server JAR Fetcher & Downloader")
+        print("=" * 60)
+
     mode = 'list'  # default
     limit = None
     specific_version = None
     force_download = '--force' in args
-    quiet = '--quiet' in args or '-q' in args
+    quiet = '--quiet' in args or '-q' in args or json_output
     recommended_only = '--recommended' in args
     verify = '--verify' in args
     
@@ -465,76 +545,115 @@ def main():
     
     # Execute based on mode
     if mode == 'list-downloaded':
-        list_downloaded()
+        files = list_downloaded_silent() if json_output else None
+        if json_output:
+            result = {"success": True, "mode": "list-downloaded", "files": files or []}
+            print(json.dumps(result))
+        else:
+            list_downloaded()
         return
-    
+
     if mode == 'single':
         if not specific_version:
-            print("❌ No version specified. Use --version=X.X.X")
+            if json_output:
+                print(json.dumps({"success": False, "error": "No version specified"}))
+            else:
+                print("❌ No version specified. Use --version=X.X.X")
             return
-        download_single_version(specific_version, force=force_download)
+        result = download_single_version(specific_version, force=force_download, json_output=json_output)
+        if json_output:
+            print(json.dumps(result))
         return
-    
+
     # Fetch versions for list or download modes
-    promos = fetch_forge_versions()
+    promos = fetch_forge_versions(quiet=json_output)
     if not promos:
-        print("\n❌ Could not fetch Forge versions. Exiting.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "Could not fetch Forge versions"}))
+        else:
+            print("\n❌ Could not fetch Forge versions. Exiting.")
         return
-    
+
     # Parse into structured format
     versions = parse_versions(promos, recommended_only=recommended_only)
-    
+
     if not versions:
-        print("\n❌ No Forge versions found.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "No Forge versions found"}))
+        else:
+            print("\n❌ No Forge versions found.")
         return
-    
-    print(f"✅ Found {len(versions)} Forge versions")
-    if recommended_only:
-        print("   (showing recommended versions only)")
-    print(f"   Latest: MC {versions[0]['mc_version']} with Forge {versions[0]['forge_version']}")
-    
+
+    if not json_output:
+        print(f"✅ Found {len(versions)} Forge versions")
+        if recommended_only:
+            print("   (showing recommended versions only)")
+        print(f"   Latest: MC {versions[0]['mc_version']} with Forge {versions[0]['forge_version']}")
+
     # Get server info
     server_info = get_server_info(
-        versions, 
+        versions,
         limit=limit,
         quiet=quiet,
         verify=verify
     )
-    
+
     if not server_info:
-        print("\n❌ No Forge installers found.")
+        if json_output:
+            print(json.dumps({"success": False, "error": "No Forge installers found"}))
+        else:
+            print("\n❌ No Forge installers found.")
         return
-    
+
     if mode == 'list':
-        # Format and display output
-        print("\n" + "=" * 60)
-        print("📋 FORGE INSTALLER JARS (forge:<mc>-<forge>=URL)")
-        print("=" * 60 + "\n")
-        
-        output_lines = format_output(server_info)
-        for line in output_lines:
-            print(line)
-        
-        # Save to file
-        output_file = BASE_DIR / "forge_server_urls.txt"
-        with open(output_file, 'w') as f:
-            f.write("# Forge Server Installer JAR URLs\n")
-            f.write(f"# Generated from {FORGE_PROMOTIONS_URL}\n")
-            f.write(f"# Total: {len(output_lines)} versions\n")
-            f.write("# Format: forge:<mc_version>-<forge_version>=URL\n")
-            f.write("# Note: Run installer with: java -jar <file> --installServer\n\n")
+        if json_output:
+            # JSON output format
+            result = {
+                "success": True,
+                "mode": "list",
+                "count": len(server_info),
+                "versions": [{
+                    "mc_version": item['mc_version'],
+                    "forge_version": item['forge_version'],
+                    "type": item['type'],
+                    "url": item['url']
+                } for item in server_info]
+            }
+            print(json.dumps(result))
+        else:
+            # Format and display output
+            print("\n" + "=" * 60)
+            print("📋 FORGE INSTALLER JARS (forge:<mc>-<forge>=URL)")
+            print("=" * 60 + "\n")
+
+            output_lines = format_output(server_info)
             for line in output_lines:
-                f.write(line + "\n")
-        
-        print(f"\n💾 Saved to: {output_file}")
-        
+                print(line)
+
+            # Save to file
+            output_file = BASE_DIR / "forge_server_urls.txt"
+            with open(output_file, 'w') as f:
+                f.write("# Forge Server Installer JAR URLs\n")
+                f.write(f"# Generated from {FORGE_PROMOTIONS_URL}\n")
+                f.write(f"# Total: {len(output_lines)} versions\n")
+                f.write("# Format: forge:<mc_version>-<forge_version>=URL\n")
+                f.write("# Note: Run installer with: java -jar <file> --installServer\n\n")
+                for line in output_lines:
+                    f.write(line + "\n")
+
+            print(f"\n💾 Saved to: {output_file}")
+
     elif mode == 'download':
         # Bulk download
-        bulk_download(server_info, skip_existing=not force_download)
-    
-    print("\n✅ Done!")
+        results = bulk_download(server_info, skip_existing=not force_download, json_output=json_output)
+        if json_output:
+            print(json.dumps(results))
+
+    if not json_output:
+        print("\n✅ Done!")
 
 
 if __name__ == "__main__":
-    print_usage()
+    if '--json' not in sys.argv:
+        print_usage()
     main()
