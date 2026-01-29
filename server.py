@@ -31,8 +31,6 @@ from functools import wraps
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from server_core import PayloadEncryption
-
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 from flask_limiter import Limiter
@@ -75,8 +73,6 @@ SETTINGS_PATH = BASE_DIR / 'settings.json'
 SCHEDULES_PATH = BASE_DIR / 'schedules.json'
 TASKS_PATH = BASE_DIR / 'tasks.json'
 STATS_PATH = BASE_DIR / 'stats.json'
-CLIENTS_PATH = BASE_DIR / 'clients.json'
-COMMANDS_PATH = BASE_DIR / 'commands.json'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
@@ -1622,332 +1618,10 @@ An emergency admin account has been created:
         return self.ROLES.get(role, 0)
 
 
-# ==================== Client Manager ====================
-
-class ClientManager:
-    """Manages connected client nodes"""
-
-    def __init__(self, encryption_key=None):
-        self.clients = self._load_clients()
-        self.commands = self._load_commands()
-        self.lock = threading.Lock()
-        self.monitor_running = True
-
-        # Use shared encryption utility from server_core
-        self.encryptor = PayloadEncryption(encryption_key)
-        if self.encryptor.is_enabled:
-            print('[Controller] Payload encryption enabled for client communication')
-
-        # Start background heartbeat monitor
-        self.monitor_thread = threading.Thread(target=self._monitor_client_heartbeats, daemon=True)
-        self.monitor_thread.start()
-        print('[Controller] Client heartbeat monitor started')
-
-    def _load_clients(self):
-        """Load clients from file"""
-        if CLIENTS_PATH.exists():
-            with open(CLIENTS_PATH, 'r') as f:
-                return json.load(f)
-        return {'clients': {}}
-
-    def _save_clients(self):
-        """Save clients to file"""
-        with open(CLIENTS_PATH, 'w') as f:
-            json.dump(self.clients, f, indent=2)
-
-    def _load_commands(self):
-        """Load command queue from file"""
-        if COMMANDS_PATH.exists():
-            with open(COMMANDS_PATH, 'r') as f:
-                return json.load(f)
-        return {'commands': {}}
-
-    def _save_commands(self):
-        """Save command queue to file"""
-        with open(COMMANDS_PATH, 'w') as f:
-            json.dump(self.commands, f, indent=2)
-
-    def _encrypt_payload(self, data):
-        """Encrypt payload data if encryption is enabled"""
-        return self.encryptor.encrypt(data)
-
-    def _decrypt_payload(self, data):
-        """Decrypt payload data if encryption is enabled"""
-        return self.encryptor.decrypt(data)
-    
-    def register_client(self, node_id, system_info):
-        """Register a new client node"""
-        with self.lock:
-            api_key = secrets.token_hex(32)
-            
-            self.clients['clients'][node_id] = {
-                'node_id': node_id,
-                'api_key': api_key,
-                'system_info': system_info,
-                'status': 'online',
-                'registered_at': datetime.now().isoformat(),
-                'last_heartbeat': datetime.now().isoformat(),
-                'servers': [],
-                'stats': {}
-            }
-            self._save_clients()
-            
-            # Initialize command queue for this client
-            if 'commands' not in self.commands:
-                self.commands['commands'] = {}
-            if node_id not in self.commands['commands']:
-                self.commands['commands'][node_id] = []
-                self._save_commands()
-            
-            return api_key
-    
-    def update_heartbeat(self, node_id, stats, servers):
-        """Update client heartbeat"""
-        with self.lock:
-            if node_id in self.clients.get('clients', {}):
-                self.clients['clients'][node_id]['last_heartbeat'] = datetime.now().isoformat()
-                self.clients['clients'][node_id]['status'] = 'online'
-                self.clients['clients'][node_id]['stats'] = stats
-                self.clients['clients'][node_id]['servers'] = servers
-                self._save_clients()
-                return True
-            return False
-    
-    def get_client(self, node_id):
-        """Get client info"""
-        return self.clients.get('clients', {}).get(node_id)
-    
-    def get_all_clients(self):
-        """Get all clients"""
-        return list(self.clients.get('clients', {}).values())
-    
-    def verify_api_key(self, node_id, api_key):
-        """Verify client API key"""
-        client = self.get_client(node_id)
-        return client and client.get('api_key') == api_key
-    
-    def is_client_online(self, node_id, timeout_seconds=10):
-        """Check if a client is online based on heartbeat timeout (default: 10 seconds)"""
-        client = self.get_client(node_id)
-        if not client:
-            return False
-
-        last_heartbeat = client.get('last_heartbeat')
-        if not last_heartbeat:
-            return False
-
-        try:
-            last_seen = datetime.fromisoformat(last_heartbeat)
-            time_since_heartbeat = (datetime.now() - last_seen).total_seconds()
-            is_online = time_since_heartbeat < timeout_seconds
-            return is_online
-        except Exception as e:
-            print(f"[Controller] Error checking client status: {e}")
-            return False
-
-    def _monitor_client_heartbeats(self):
-        """Background task to monitor client heartbeats and update statuses"""
-        import time
-
-        while self.monitor_running:
-            try:
-                time.sleep(5)  # Check every 5 seconds
-
-                with self.lock:
-                    for node_id, client in self.clients.get('clients', {}).items():
-                        last_heartbeat = client.get('last_heartbeat')
-                        current_status = client.get('status', 'offline')
-
-                        if not last_heartbeat:
-                            continue
-
-                        try:
-                            last_seen = datetime.fromisoformat(last_heartbeat)
-                            time_since_heartbeat = (datetime.now() - last_seen).total_seconds()
-
-                            # Check if client has timed out (10 second timeout)
-                            if time_since_heartbeat >= 10:
-                                if current_status == 'online':
-                                    # Client has gone offline
-                                    client['status'] = 'offline'
-                                    print(f"[Controller] Client {node_id} marked offline (no heartbeat for {time_since_heartbeat:.1f}s)")
-
-                                    # Mark all servers on this client as unknown
-                                    for server in client.get('servers', []):
-                                        if server.get('status') not in ['unknown', 'stopped', 'stopping']:
-                                            server['status'] = 'unknown'
-
-                                    self._save_clients()
-                                    
-                                    # Emit node status change via Socket.IO
-                                    try:
-                                        socketio.emit('node_status_update', {
-                                            'node_id': node_id,
-                                            'status': 'offline',
-                                            'last_heartbeat': last_heartbeat,
-                                            'time_since_heartbeat': time_since_heartbeat
-                                        })
-                                    except Exception as emit_err:
-                                        print(f"[Controller] Failed to emit node status update: {emit_err}")
-                            else:
-                                # Client is within timeout window
-                                if current_status != 'online':
-                                    # Client has come back online (or status was stale)
-                                    client['status'] = 'online'
-                                    self._save_clients()
-                                    
-                                    # Emit node status change via Socket.IO
-                                    try:
-                                        socketio.emit('node_status_update', {
-                                            'node_id': node_id,
-                                            'status': 'online',
-                                            'last_heartbeat': last_heartbeat,
-                                            'time_since_heartbeat': time_since_heartbeat
-                                        })
-                                    except Exception as emit_err:
-                                        print(f"[Controller] Failed to emit node status update: {emit_err}")
-
-                        except Exception as e:
-                            print(f"[Controller] Error monitoring client {node_id}: {e}")
-
-            except Exception as e:
-                print(f"[Controller] Error in heartbeat monitor: {e}")
-
-    def add_command(self, node_id, action, server_id, params=None):
-        """Add a command to the client's queue"""
-        with self.lock:
-            if node_id not in self.commands.get('commands', {}):
-                if 'commands' not in self.commands:
-                    self.commands['commands'] = {}
-                self.commands['commands'][node_id] = []
-            
-            command = {
-                'id': str(uuid.uuid4())[:8],
-                'action': action,
-                'server_id': server_id,
-                'params': params or {},
-                'created_at': datetime.now().isoformat(),
-                'status': 'pending'
-            }
-            
-            self.commands['commands'][node_id].append(command)
-            self._save_commands()
-            return command['id']
-    
-    def get_pending_commands(self, node_id):
-        """Get pending commands for a client"""
-        with self.lock:
-            commands = self.commands.get('commands', {}).get(node_id, [])
-            pending = [cmd for cmd in commands if cmd.get('status') == 'pending']
-            
-            # Mark as delivered
-            for cmd in pending:
-                cmd['status'] = 'delivered'
-                cmd['delivered_at'] = datetime.now().isoformat()
-            
-            if pending:
-                self._save_commands()
-            
-            return pending
-    
-    def update_command_result(self, node_id, command_id, result):
-        """Update command with execution result"""
-        with self.lock:
-            commands = self.commands.get('commands', {}).get(node_id, [])
-            for cmd in commands:
-                if cmd['id'] == command_id:
-                    cmd['status'] = 'completed' if result.get('success') else 'failed'
-                    cmd['result'] = result
-                    cmd['completed_at'] = datetime.now().isoformat()
-                    self._save_commands()
-                    return True
-            return False
-    
-    def disconnect_client(self, node_id):
-        """Mark client as disconnected"""
-        with self.lock:
-            if node_id in self.clients.get('clients', {}):
-                self.clients['clients'][node_id]['status'] = 'offline'
-                self._save_clients()
-                return True
-            return False
-    
-    def get_available_nodes(self):
-        """Get list of available nodes (central + online clients)"""
-        nodes = [{
-            'node_id': 'central',
-            'node_type': 'central',
-            'name': 'Central Controller',
-            'status': 'online',
-            'servers': len(server_manager.get_servers_list()),
-            'stats': stats_manager.get_current_stats()
-        }]
-        
-        # Add online clients (using 10-second heartbeat timeout)
-        for client in self.get_all_clients():
-            is_online = self.is_client_online(client['node_id'], timeout_seconds=10)
-            nodes.append({
-                'node_id': client['node_id'],
-                'node_type': 'client',
-                'name': client.get('system_info', {}).get('hostname', client['node_id']),
-                'status': 'online' if is_online else 'offline',
-                'servers': len(client.get('servers', [])),
-                'stats': client.get('stats', {}),
-                'system_info': client.get('system_info', {})
-            })
-        
-        return nodes
-    
-    def calculate_node_load(self, node):
-        """Calculate load score for a node (lower is better)"""
-        stats = node.get('stats', {})
-        
-        # Calculate load score based on CPU, memory, and server count
-        cpu_load = stats.get('cpu_percent', 0) / 100
-        memory_load = stats.get('memory_percent', 0) / 100
-        server_count = node.get('servers', 0)
-        
-        # Weighted score (lower is better)
-        load_score = (cpu_load * 0.4) + (memory_load * 0.4) + (server_count * 0.2)
-        
-        return load_score
-    
-    def get_best_node_for_deployment(self):
-        """Get the best node for deploying a new server based on load"""
-        nodes = self.get_available_nodes()
-        
-        if not nodes:
-            return None
-        
-        # Calculate load for each node and find the best one
-        node_loads = [(node, self.calculate_node_load(node)) for node in nodes]
-        node_loads.sort(key=lambda x: x[1])  # Sort by load score (ascending)
-        
-        best_node = node_loads[0][0]
-        return best_node['node_id']
-    
-    def create_server_on_node(self, node_id, server_config):
-        """Create a server on a specific node (central or client)"""
-        if node_id == 'central':
-            # Create locally on central controller
-            return server_manager.create_server(**server_config), None
-        else:
-            # Create on remote client via command
-            command_id = self.add_command(
-                node_id=node_id,
-                action='CREATE_SERVER',
-                server_id='pending',  # Will be assigned by client
-                params=server_config
-            )
-            return None, command_id  # Returns command_id for tracking
-
-
 # Initialize managers (settings_manager must be first as UserManager uses it)
 settings_manager = SettingsManager()
 user_manager = UserManager()
 stats_manager = StatsManager()
-# ClientManager will load encryption key from environment variable if set
-client_manager = ClientManager(encryption_key=os.environ.get('ENCRYPTION_KEY'))
 
 
 # ==================== Authentication Decorators ====================
@@ -4037,201 +3711,6 @@ def api_public_servers():
     return jsonify({'servers': public_servers})
 
 
-# ==================== Client Management API ====================
-
-@app.route('/api/client/register', methods=['POST'])
-def api_client_register():
-    """Register a new client node"""
-    try:
-        data = request.get_json()
-        # Decrypt payload if encrypted
-        data = client_manager._decrypt_payload(data)
-        
-        node_id = data.get('node_id')
-        system_info = data.get('system_info', {})
-        
-        if not node_id:
-            return jsonify({'error': 'node_id is required'}), 400
-        
-        # Check if client already exists
-        existing = client_manager.get_client(node_id)
-        if existing:
-            print(f"[Controller] Client {node_id} re-registering")
-            api_key = existing.get('api_key')
-        else:
-            print(f"[Controller] New client registered: {node_id}")
-            api_key = client_manager.register_client(node_id, system_info)
-        
-        response_data = {
-            'success': True,
-            'api_key': api_key,
-            'message': 'Registration successful'
-        }
-        
-        # Encrypt response if client supports encryption
-        if data.get('encryption_enabled'):
-            response_data = client_manager._encrypt_payload(response_data)
-        
-        return jsonify(response_data)
-    except Exception as e:
-        print(f"[Controller] Client registration error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/client/heartbeat', methods=['POST'])
-def api_client_heartbeat():
-    """Receive heartbeat from client"""
-    try:
-        data = request.get_json()
-        # Decrypt payload if encrypted
-        data = client_manager._decrypt_payload(data)
-        
-        node_id = data.get('node_id')
-        stats = data.get('stats', {})
-        servers = data.get('servers', [])
-        
-        if not node_id:
-            return jsonify({'error': 'node_id is required'}), 400
-        
-        # Verify API key
-        api_key = request.headers.get('X-Client-API-Key')
-        if not client_manager.verify_api_key(node_id, api_key):
-            return jsonify({'error': 'Invalid API key'}), 401
-        
-        client_manager.update_heartbeat(node_id, stats, servers)
-        return jsonify({'success': True})
-    except Exception as e:
-        print(f"[Controller] Heartbeat error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/client/commands/<node_id>', methods=['GET'])
-def api_client_get_commands(node_id):
-    """Get pending commands for a client"""
-    try:
-        # Verify API key
-        api_key = request.headers.get('X-Client-API-Key')
-        if not client_manager.verify_api_key(node_id, api_key):
-            return jsonify({'error': 'Invalid API key'}), 401
-        
-        commands = client_manager.get_pending_commands(node_id)
-        response_data = {'commands': commands}
-        
-        # Encrypt response if encryption is enabled
-        response_data = client_manager._encrypt_payload(response_data)
-        
-        return jsonify(response_data)
-    except Exception as e:
-        print(f"[Controller] Get commands error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/client/command-result', methods=['POST'])
-def api_client_command_result():
-    """Receive command execution result from client"""
-    try:
-        data = request.get_json()
-        # Decrypt payload if encrypted
-        data = client_manager._decrypt_payload(data)
-        
-        node_id = data.get('node_id')
-        command_id = data.get('command_id')
-        result = data.get('result', {})
-        
-        if not node_id or not command_id:
-            return jsonify({'error': 'node_id and command_id are required'}), 400
-        
-        # Verify API key
-        api_key = request.headers.get('X-Client-API-Key')
-        if not client_manager.verify_api_key(node_id, api_key):
-            return jsonify({'error': 'Invalid API key'}), 401
-        
-        client_manager.update_command_result(node_id, command_id, result)
-        return jsonify({'success': True})
-    except Exception as e:
-        print(f"[Controller] Command result error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/client/disconnect', methods=['POST'])
-def api_client_disconnect():
-    """Mark client as disconnected"""
-    try:
-        data = request.get_json()
-        node_id = data.get('node_id')
-        
-        if not node_id:
-            return jsonify({'error': 'node_id is required'}), 400
-        
-        client_manager.disconnect_client(node_id)
-        print(f"[Controller] Client {node_id} disconnected")
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/clients', methods=['GET'])
-@admin_required
-def api_get_clients():
-    """Get all connected clients (admin only)"""
-    clients = client_manager.get_all_clients()
-    return jsonify({'clients': clients})
-
-@app.route('/api/nodes/encryption', methods=['GET'])
-@admin_required
-def api_get_encryption_info():
-    """Get encryption configuration info (admin only)"""
-    encryption_key = os.environ.get('ENCRYPTION_KEY')
-    enabled = encryption_key is not None and encryption_key != ''
-    
-    return jsonify({
-        'enabled': enabled,
-        'key': encryption_key if enabled else None
-    })
-
-@app.route('/api/nodes/available', methods=['GET'])
-@login_required
-def get_available_nodes():
-    """Get list of available nodes for server deployment with load info"""
-    nodes = client_manager.get_available_nodes()
-    
-    # Add load scores and recommendations
-    for node in nodes:
-        node['load_score'] = client_manager.calculate_node_load(node)
-        node['recommended'] = False
-    
-    # Mark best node as recommended
-    if nodes:
-        best_node_id = client_manager.get_best_node_for_deployment()
-        for node in nodes:
-            if node['node_id'] == best_node_id:
-                node['recommended'] = True
-                break
-    
-    return jsonify({'nodes': nodes})
-
-@app.route('/api/clients/<node_id>/command', methods=['POST'])
-@admin_required
-def api_send_command_to_client(node_id):
-    """Send a command to a specific client (admin only)"""
-    try:
-        data = request.get_json()
-        action = data.get('action')
-        server_id = data.get('server_id')
-        params = data.get('params', {})
-        
-        if not action or not server_id:
-            return jsonify({'error': 'action and server_id are required'}), 400
-        
-        # Verify client exists
-        client = client_manager.get_client(node_id)
-        if not client:
-            return jsonify({'error': 'Client not found'}), 404
-        
-        command_id = client_manager.add_command(node_id, action, server_id, params)
-        return jsonify({
-            'success': True,
-            'command_id': command_id
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 # ==================== JAR/Version API ====================
 
 @app.route('/api/server-types', methods=['GET'])
@@ -4288,7 +3767,7 @@ def get_servers():
 @app.route('/api/servers', methods=['POST'])
 @login_required
 def create_server():
-    """Create a new server on central or client node"""
+    """Create a new server"""
     user_id, user = get_current_user()
     
     data = request.get_json()
@@ -4302,48 +3781,23 @@ def create_server():
     version = data.get('version')
     download_jar = data.get('downloadJar', False)
     
-    # NEW: Node selection for distributed deployment
-    target_node = data.get('targetNode', 'central')  # 'central', 'auto', or specific node_id
-    
     # Check if server approval is required (admins are always auto-approved)
     is_admin = user.get('role') == 'admin'
     require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
     approved = is_admin or not require_approval
     
-    # Auto-select best node if requested
-    if target_node == 'auto':
-        target_node = client_manager.get_best_node_for_deployment()
-        if not target_node:
-            return jsonify({'error': 'No available nodes for deployment'}), 503
-    
-    # Prepare server configuration
-    server_config = {
-        'name': name,
-        'server_path': server_path,
-        'executable': executable,
-        'java_args': java_args,
-        'server_type': server_type,
-        'version': version,
-        'owner': user_id,
-        'approved': approved,
-        'category': category,
-        'download_jar': download_jar
-    }
-    
-    # Create server on selected node
-    if target_node == 'central':
-        # Create locally on central controller
-        server_id = server_manager.create_server(
-            name=name,
-            server_path=server_path,
-            executable=executable,
-            java_args=java_args,
-            server_type=server_type,
-            version=version,
-            owner=user_id,
-            approved=approved,
-            category=category
-        )
+    # Create server locally
+    server_id = server_manager.create_server(
+        name=name,
+        server_path=server_path,
+        executable=executable,
+        java_args=java_args,
+        server_type=server_type,
+        version=version,
+        owner=user_id,
+        approved=approved,
+        category=category
+    )
     
     # Copy JAR from serverexecutables if requested
     if download_jar and server_type and version:
@@ -4364,35 +3818,10 @@ def create_server():
         eula_path = server_dir / 'eula.txt'
         eula_path.write_text('# By setting this to TRUE, you agree to the Minecraft EULA\neula=false\n')
     
-        response = {'success': True, 'serverId': server_id, 'node': 'central'}
-        if not approved:
-            response['pendingApproval'] = True
-            response['message'] = 'Server created and pending admin approval'
-    else:
-        # Create on remote client node
-        client = client_manager.get_client(target_node)
-        if not client:
-            return jsonify({'error': f'Client node {target_node} not found'}), 404
-        
-        if client.get('status') != 'online':
-            return jsonify({'error': f'Client node {target_node} is offline'}), 503
-        
-        # Queue server creation command for client
-        command_id = client_manager.add_command(
-            node_id=target_node,
-            action='CREATE_SERVER',
-            server_id='pending',
-            params=server_config
-        )
-        
-        response = {
-            'success': True,
-            'serverId': 'pending',
-            'node': target_node,
-            'commandId': command_id,
-            'message': f'Server creation queued on node {target_node}',
-            'pending': True
-        }
+    response = {'success': True, 'serverId': server_id}
+    if not approved:
+        response['pendingApproval'] = True
+        response['message'] = 'Server created and pending admin approval'
     
     return jsonify(response)
 
@@ -6132,7 +5561,7 @@ def get_stats_history():
     return jsonify({'history': history})
 
 
-# ==================== System Updates API ====================
+# ==================== System Info API ====================
 
 @app.route('/api/system/version', methods=['GET'])
 @login_required
@@ -6156,172 +5585,14 @@ def api_get_current_version():
         except:
             pass
 
-        # Get deployment mode
-        deployment_mode = "unknown"
-        if deployment_config.get('DEPLOYMENT_MODE'):
-            deployment_mode = deployment_config['DEPLOYMENT_MODE']
-
         return jsonify({
             'version': version,
             'version_source': source,
             'commit_date': commit_date,
-            'deployment_mode': deployment_mode,
             'installed_at': str(BASE_DIR)
         })
     except Exception as e:
         print(f"[API] Error getting version: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/system/updates/check', methods=['GET'])
-@admin_required
-def check_for_updates():
-    """Check GitHub for new version using version file"""
-    try:
-        # Get current version from file
-        current_version, source = get_current_version()
-        if not current_version or current_version == 'unknown':
-            return jsonify({'error': 'Could not determine current version'}), 500
-
-        # Get remote version from version file
-        latest_version = get_remote_version_file()
-        if not latest_version:
-            return jsonify({'error': 'Could not fetch remote version file'}), 500
-
-        # Check if update is available (simple version comparison)
-        update_available = current_version != latest_version
-
-        # Get current commit for changelog
-        try:
-            result = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
-                cwd=BASE_DIR,
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            current_commit = result.stdout.strip() if result.returncode == 0 else 'unknown'
-        except:
-            current_commit = 'unknown'
-
-        # Get latest remote commit
-        try:
-            result = subprocess.run(
-                ['git', 'rev-parse', 'origin/main'],
-                cwd=BASE_DIR,
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            latest_commit = result.stdout.strip() if result.returncode == 0 else 'unknown'
-        except:
-            latest_commit = 'unknown'
-
-        # Get changelog (commits since current)
-        changelog = []
-        try:
-            if current_commit != 'unknown' and latest_commit != 'unknown':
-                result = subprocess.run(
-                    ['git', 'log', '--oneline', f'{current_commit}..origin/main'],
-                    cwd=BASE_DIR,
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    changelog = result.stdout.strip().split('\n')[:10]  # Last 10 commits
-        except:
-            pass
-
-        return jsonify({
-            'update_available': update_available,
-            'current_version': current_version,
-            'latest_version': latest_version,
-            'current_commit': current_commit[:7] if current_commit != 'unknown' else 'unknown',
-            'latest_commit': latest_commit[:7] if latest_commit != 'unknown' else 'unknown',
-            'changelog': changelog,
-            'version_source': source
-        })
-    except Exception as e:
-        print(f"[API] Error checking for updates: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/system/updates/install', methods=['POST'])
-@admin_required
-def install_updates():
-    """Trigger update installation on this node"""
-    import subprocess
-    
-    try:
-        # Determine deployment mode
-        deployment_mode = deployment_config.get('DEPLOYMENT_MODE', 'master')
-        
-        print(f"[API] Update requested for {deployment_mode} node")
-        
-        # For Master: use full update
-        # For Slave: would use slave update, but we'll use the same installer
-        
-        if deployment_mode == 'master':
-            # Master runs full update
-            update_command = [
-                'sudo',
-                f'{BASE_DIR}/install.sh',
-                'quick-update',
-                '--non-interactive'
-            ]
-
-            # Send update command to all connected slaves
-            print("[API] Notifying Slave nodes about update...")
-            for node_id, client in client_manager.get_all_clients().items():
-                if client.get('status') == 'online':
-                    cmd_id = client_manager.add_command(
-                        node_id=node_id,
-                        action='UPDATE',
-                        server_id='system',
-                        params={'type': 'full'}
-                    )
-                    print(f"[API] Sent update command to {node_id}: {cmd_id}")
-
-        else:
-            # Slave runs update via quick-update with non-interactive flag
-            update_command = [
-                'sudo',
-                f'{BASE_DIR}/install.sh',
-                'quick-update',
-                '--non-interactive'
-            ]
-
-        # Start update in background thread
-        def run_update():
-            try:
-                print(f"[API] Starting {deployment_mode} node update...")
-                result = subprocess.run(
-                    update_command,
-                    cwd=BASE_DIR,
-                    capture_output=True,
-                    text=True,
-                    timeout=600  # 10 minute timeout
-                )
-                
-                if result.returncode == 0:
-                    print(f"[API] Update completed successfully")
-                else:
-                    print(f"[API] Update failed: {result.stderr}")
-            except Exception as e:
-                print(f"[API] Error during update: {e}")
-        
-        import threading
-        update_thread = threading.Thread(target=run_update, daemon=True)
-        update_thread.start()
-        
-        return jsonify({
-            'status': 'update_started',
-            'deployment_mode': deployment_mode,
-            'message': f'Update started for {deployment_mode} node'
-        })
-    except Exception as e:
-        print(f"[API] Error starting update: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -6700,34 +5971,15 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  # Run in central mode (default - with UI)
-  python server.py --mode central
+  # Run the server (default)
+  python server.py
   
-  # Run in client mode (headless - connects to central controller)
-  python server.py --mode client --controller http://192.168.1.100:3000 --node-id node-1
+  # Run on a custom port
+  python server.py --port 8080
   
-  # Run in central mode on custom port
-  python server.py --mode central --port 8080
+  # Run with SSL/HTTPS
+  python server.py --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem
         '''
-    )
-    
-    parser.add_argument(
-        '--mode',
-        choices=['central', 'client'],
-        default='central',
-        help='Operation mode: "central" for full UI controller, "client" for headless managed node'
-    )
-    
-    parser.add_argument(
-        '--controller',
-        type=str,
-        help='Central controller URL (required for client mode). Example: http://192.168.1.100:3000'
-    )
-    
-    parser.add_argument(
-        '--node-id',
-        type=str,
-        help='Unique identifier for this client node (required for client mode)'
     )
     
     parser.add_argument(
@@ -6747,34 +5999,22 @@ Examples:
     parser.add_argument(
         '--ssl-cert',
         type=str,
-        help='Path to SSL certificate file for HTTPS (Master mode)'
+        help='Path to SSL certificate file for HTTPS'
     )
     
     parser.add_argument(
         '--ssl-key',
         type=str,
-        help='Path to SSL private key file for HTTPS (Master mode)'
-    )
-    
-    parser.add_argument(
-        '--no-verify-ssl',
-        action='store_true',
-        help='Disable SSL certificate verification for Slave nodes (insecure)'
-    )
-    
-    parser.add_argument(
-        '--encryption-key',
-        type=str,
-        help='32-byte base64 encryption key for payload encryption (Master-Slave communication)'
+        help='Path to SSL private key file for HTTPS'
     )
     
     return parser.parse_args()
 
 
-def run_central_mode(host='0.0.0.0', port=3000, ssl_cert=None, ssl_key=None):
-    """Run in central mode (full UI controller)"""
+def run_server(host='0.0.0.0', port=3000, ssl_cert=None, ssl_key=None):
+    """Run the MServerController server"""
     print('=' * 60)
-    print('MServerController - MASTER MODE')
+    print('MServerController')
     print('=' * 60)
     
     # Determine protocol
@@ -6802,98 +6042,22 @@ def run_central_mode(host='0.0.0.0', port=3000, ssl_cert=None, ssl_key=None):
         socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 
-def run_client_mode(controller_url, node_id, host='0.0.0.0', port=3000, verify_ssl=True, encryption_key=None):
-    """Run in client mode (headless managed node)"""
-    from server_client import ClientController
-    
-    print('=' * 60)
-    print('MServerController - SLAVE MODE')
-    print('=' * 60)
-    print(f'Node ID: {node_id}')
-    print(f'Controller: {controller_url}')
-    print(f'Local API: {host}:{port}')
-    
-    if controller_url.startswith('https'):
-        print('✓ Connecting via HTTPS')
-        if verify_ssl:
-            print('  SSL verification: Enabled')
-        else:
-            print('  ⚠️  SSL verification: DISABLED (insecure)')
-    else:
-        print('⚠️  WARNING: Connecting via HTTP (unencrypted)')
-    
-    if encryption_key:
-        print('✓ Payload encryption: Enabled')
-    else:
-        print('  Payload encryption: Disabled')
-    
-    print('=' * 60)
-    
-    # Initialize client controller with SSL and encryption settings
-    client_controller = ClientController(
-        controller_url, 
-        node_id, 
-        server_manager,
-        verify_ssl=verify_ssl,
-        encryption_key=encryption_key
-    )
-    
-    # Start client controller (registration, heartbeat, command polling)
-    if not client_controller.start():
-        print('[Client] Failed to start - exiting')
-        sys.exit(1)
-    
-    print('[Client] Client controller running...')
-    print('[Client] Press Ctrl+C to stop\n')
-    
-    try:
-        # Keep the main thread alive
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print('\n[Client] Shutting down...')
-        client_controller.shutdown()
-        print('[Client] Goodbye!')
-
-
 if __name__ == '__main__':
     args = parse_arguments()
     
-    # Validate client mode requirements
-    if args.mode == 'client':
-        if not args.controller:
-            print('ERROR: --controller is required for client mode')
-            print('Example: --controller https://192.168.1.100:3000')
-            sys.exit(1)
-        if not args.node_id:
-            print('ERROR: --node-id is required for client mode')
-            print('Example: --node-id node-1')
-            sys.exit(1)
-    
-    # Validate SSL arguments for central mode
-    if args.mode == 'central':
-        if (args.ssl_cert and not args.ssl_key) or (args.ssl_key and not args.ssl_cert):
-            print('ERROR: Both --ssl-cert and --ssl-key are required for SSL')
-            sys.exit(1)
+    # Validate SSL arguments
+    if (args.ssl_cert and not args.ssl_key) or (args.ssl_key and not args.ssl_cert):
+        print('ERROR: Both --ssl-cert and --ssl-key are required for SSL')
+        sys.exit(1)
     
     # Update PORT global if custom port specified
     if args.port != PORT:
         globals()['PORT'] = args.port
     
-    # Run in appropriate mode
-    if args.mode == 'central':
-        run_central_mode(
-            host=args.host, 
-            port=args.port,
-            ssl_cert=args.ssl_cert,
-            ssl_key=args.ssl_key
-        )
-    else:
-        run_client_mode(
-            controller_url=args.controller,
-            node_id=args.node_id,
-            host=args.host,
-            port=args.port,
-            verify_ssl=not args.no_verify_ssl,
-            encryption_key=args.encryption_key
-        )
+    # Run the server
+    run_server(
+        host=args.host, 
+        port=args.port,
+        ssl_cert=args.ssl_cert,
+        ssl_key=args.ssl_key
+    )

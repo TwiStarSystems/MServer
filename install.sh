@@ -9,18 +9,10 @@ set -e
 INSTALL_DIR="/opt/mservercontroller"
 REPO_URL="https://github.com/TwiStarSystems/MServerController.git"
 SERVICE_NAME="mservercontroller"
-DEPLOYMENT_CONFIG="$INSTALL_DIR/deployment.conf"
 SSL_DIR="$INSTALL_DIR/ssl"
-ENCRYPTION_KEY_FILE="$INSTALL_DIR/encryption.key"
 
-# Deployment mode variables
-DEPLOYMENT_MODE=""
-CONTROLLER_URL=""
-NODE_ID=""
+# SSL configuration
 USE_SSL="false"
-USE_ENCRYPTION="false"
-ENCRYPTION_KEY=""
-INTERACTIVE="true"  # Set to "false" for API-driven updates
 
 # Colors for output
 RED='\033[0;31m'
@@ -85,165 +77,26 @@ check_debian() {
     fi
 }
 
-# Prompt for deployment mode
-prompt_deployment_mode() {
-    # If non-interactive, load from deployment.conf instead of prompting
-    if [ "$INTERACTIVE" == "false" ]; then
-        if [ ! -f "$DEPLOYMENT_CONFIG" ]; then
-            print_error "Non-interactive mode requires existing deployment.conf"
-            exit 1
-        fi
-        print_info "Loading deployment configuration from deployment.conf..."
-        load_deployment_config
-        return
-    fi
+# Prompt for SSL configuration
+prompt_ssl_config() {
+    print_header "SSL/TLS Configuration"
     
-    print_header "Deployment Configuration"
-    
-    echo "Select deployment mode:"
+    echo "Would you like to enable SSL/TLS encryption (HTTPS)?"
     echo ""
-    echo "  1) Master Node    - Full controller with Web UI (default)"
-    echo "  2) Slave Node     - Headless worker node managed by Master"
-    echo ""
-    read -p "Enter your choice [1-2] (default: 1): " mode_choice
-    
-    mode_choice=${mode_choice:-1}
-    
-    case $mode_choice in
-        1)
-            DEPLOYMENT_MODE="master"
-            print_success "Deployment mode: Master Node (Central Controller)"
-            
-            # Prompt for SSL/TLS
-            echo ""
-            read -p "Enable SSL/TLS encryption (HTTPS)? (y/n) (default: n): " use_ssl_choice
-            use_ssl_choice=${use_ssl_choice:-n}
-            if [[ $use_ssl_choice =~ ^[Yy]$ ]]; then
-                USE_SSL="true"
-                print_info "SSL/TLS will be enabled with self-signed certificate"
-            else
-                USE_SSL="false"
-            fi
-            
-            # Prompt for payload encryption
-            echo ""
-            read -p "Enable payload encryption for Master-Slave communication? (y/n) (default: n): " use_enc_choice
-            use_enc_choice=${use_enc_choice:-n}
-            if [[ $use_enc_choice =~ ^[Yy]$ ]]; then
-                USE_ENCRYPTION="true"
-                print_info "Payload encryption will be enabled"
-            else
-                USE_ENCRYPTION="false"
-            fi
-            ;;
-        2)
-            DEPLOYMENT_MODE="slave"
-            print_success "Deployment mode: Slave Node (Client Worker)"
-            
-            # Prompt for controller URL
-            echo ""
-            echo "Enter the Master Node controller URL:"
-            echo "Example: https://192.168.1.100:3000 (with SSL) or http://192.168.1.100:3000 (without SSL)"
-            read -p "Controller URL: " CONTROLLER_URL
-            
-            if [ -z "$CONTROLLER_URL" ]; then
-                print_error "Controller URL is required for Slave nodes"
-                exit 1
-            fi
-            
-            # Check if using HTTPS
-            if [[ $CONTROLLER_URL == https://* ]]; then
-                USE_SSL="true"
-                echo ""
-                read -p "Verify SSL certificate? (y/n) (default: y): " verify_ssl_choice
-                verify_ssl_choice=${verify_ssl_choice:-y}
-                if [[ ! $verify_ssl_choice =~ ^[Yy]$ ]]; then
-                    print_warning "SSL verification will be disabled (insecure)"
-                fi
-            else
-                USE_SSL="false"
-            fi
-            
-            # Prompt for payload encryption
-            echo ""
-            read -p "Enable payload encryption (if Master has it enabled)? (y/n) (default: n): " use_enc_choice
-            use_enc_choice=${use_enc_choice:-n}
-            if [[ $use_enc_choice =~ ^[Yy]$ ]]; then
-                USE_ENCRYPTION="true"
-                echo "Enter the encryption key (copy from Master node's $ENCRYPTION_KEY_FILE):"
-                read -p "Encryption Key: " ENCRYPTION_KEY
-                if [ -z "$ENCRYPTION_KEY" ]; then
-                    print_error "Encryption key is required when encryption is enabled"
-                    exit 1
-                fi
-            else
-                USE_ENCRYPTION="false"
-            fi
-            
-            # Prompt for node ID
-            echo ""
-            echo "Enter a unique Node ID for this Slave:"
-            echo "Example: worker-01, production-node-1, etc."
-            read -p "Node ID: " NODE_ID
-            
-            if [ -z "$NODE_ID" ]; then
-                # Generate a default node ID
-                NODE_ID="slave-$(hostname)-$(date +%s | tail -c 5)"
-                print_warning "No Node ID provided, using: $NODE_ID"
-            fi
-            
-            # Validate controller connectivity
-            print_info "Validating connection to Master Node..."
-            if curl -s --connect-timeout 5 "$CONTROLLER_URL/api/health" >/dev/null 2>&1; then
-                print_success "Master Node is reachable"
-            else
-                print_warning "Cannot reach Master Node at $CONTROLLER_URL"
-                read -p "Continue anyway? (y/n) " -n 1 -r
-                echo
-                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                    exit 1
-                fi
-            fi
-            ;;
-        *)
-            print_error "Invalid option"
-            exit 1
-            ;;
-    esac
-    
-    echo ""
-}
-
-# Generate encryption key
-generate_encryption_key() {
-    # Only generate encryption key for MASTER nodes
-    if [ "$DEPLOYMENT_MODE" != "master" ]; then
-        print_info "Skipping encryption key generation (Slave node receives key from Master)"
-        return 0
+    read -p "Enable SSL/TLS? (y/n) (default: n): " use_ssl_choice
+    use_ssl_choice=${use_ssl_choice:-n}
+    if [[ $use_ssl_choice =~ ^[Yy]$ ]]; then
+        USE_SSL="true"
+        print_info "SSL/TLS will be enabled with self-signed certificate"
+    else
+        USE_SSL="false"
     fi
-    
-    if [ "$USE_ENCRYPTION" = "true" ]; then
-        print_info "Generating encryption key..."
-        
-        # Generate a Fernet-compatible key using Python from virtual environment
-        ENCRYPTION_KEY=$("$INSTALL_DIR/venv/bin/python3" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-        
-        # Save to file
-        echo "$ENCRYPTION_KEY" > "$ENCRYPTION_KEY_FILE"
-        chmod 600 "$ENCRYPTION_KEY_FILE"
-        
-        print_success "Encryption key generated and saved to $ENCRYPTION_KEY_FILE"
-        echo ""
-        print_warning "IMPORTANT: Copy this encryption key to your Slave nodes!"
-        echo "Encryption Key: $ENCRYPTION_KEY"
-        echo ""
-        read -p "Press Enter to continue..."
-    fi
+    echo ""
 }
 
 # Generate SSL certificates
 generate_ssl_certs() {
-    if [ "$USE_SSL" = "true" ] && [ "$DEPLOYMENT_MODE" = "master" ]; then
+    if [ "$USE_SSL" = "true" ]; then
         print_info "Generating self-signed SSL certificate..."
         
         mkdir -p "$SSL_DIR"
@@ -302,44 +155,6 @@ EOF
     fi
 }
 
-# Save deployment configuration
-save_deployment_config() {
-    print_info "Saving deployment configuration..."
-    
-    cat > "$DEPLOYMENT_CONFIG" <<EOF
-# MServerController Deployment Configuration
-# This file is automatically generated during installation
-
-DEPLOYMENT_MODE=$DEPLOYMENT_MODE
-CONTROLLER_URL=$CONTROLLER_URL
-NODE_ID=$NODE_ID
-USE_SSL=$USE_SSL
-USE_ENCRYPTION=$USE_ENCRYPTION
-EOF
-    
-    # Add encryption key reference for slave nodes
-    if [ "$DEPLOYMENT_MODE" = "slave" ] && [ "$USE_ENCRYPTION" = "true" ]; then
-        echo "ENCRYPTION_KEY=$ENCRYPTION_KEY" >> "$DEPLOYMENT_CONFIG"
-        # Also save to encryption.key file for systemd service
-        echo "$ENCRYPTION_KEY" > "$ENCRYPTION_KEY_FILE"
-        chmod 600 "$ENCRYPTION_KEY_FILE"
-    elif [ "$DEPLOYMENT_MODE" = "master" ] && [ "$USE_ENCRYPTION" = "true" ]; then
-        echo "ENCRYPTION_KEY_FILE=$ENCRYPTION_KEY_FILE" >> "$DEPLOYMENT_CONFIG"
-    fi
-    
-    chmod 600 "$DEPLOYMENT_CONFIG"
-    print_success "Configuration saved to $DEPLOYMENT_CONFIG"
-}
-
-# Load deployment configuration
-load_deployment_config() {
-    if [ -f "$DEPLOYMENT_CONFIG" ]; then
-        source "$DEPLOYMENT_CONFIG"
-        return 0
-    fi
-    return 1
-}
-
 # Install system dependencies
 install_dependencies() {
     print_info "Updating system packages..."
@@ -347,24 +162,14 @@ install_dependencies() {
     apt-get upgrade -y
 
     print_info "Installing required packages..."
-    
-    # Base packages for all nodes
-    apt-get install -y curl wget git openjdk-21-jre-headless python3 python3-pip python3-venv
-    
-    # Install Nginx only for Master nodes
-    if [ "$DEPLOYMENT_MODE" = "master" ]; then
-        apt-get install -y nginx
-    fi
+    apt-get install -y curl wget git openjdk-21-jre-headless python3 python3-pip python3-venv nginx
 
     echo ""
     print_success "Dependencies installed"
     echo "  Python version: $(python3 --version)"
     echo "  pip version: $(pip3 --version)"
     echo "  Java version: $(java -version 2>&1 | head -n 1)"
-    
-    if [ "$DEPLOYMENT_MODE" = "master" ]; then
-        echo "  Nginx version: $(nginx -v 2>&1)"
-    fi
+    echo "  Nginx version: $(nginx -v 2>&1)"
 }
 
 # Setup Python virtual environment and install packages
@@ -406,11 +211,6 @@ set_permissions() {
 
 # Configure Nginx
 configure_nginx() {
-    if [ "$DEPLOYMENT_MODE" != "master" ]; then
-        print_info "Skipping Nginx configuration (Slave node)"
-        return 0
-    fi
-    
     print_info "Skipping Nginx configuration (app listens directly on HTTP/HTTPS ports)"
     # Disable nginx if it's running
     if systemctl is-active --quiet nginx 2>/dev/null; then
@@ -425,109 +225,41 @@ configure_nginx() {
 create_service() {
     print_info "Creating systemd service..."
     
-    # Determine ExecStart command based on deployment mode
     local exec_start
-    local description
-    local service_port="3000"  # Default port
-    local encryption_env=""
+    local service_port="3000"
     
-    if [ "$DEPLOYMENT_MODE" = "slave" ]; then
-        description="MServerController - Minecraft Server Manager (Slave Node)"
-        exec_start="$INSTALL_DIR/venv/bin/python server.py --mode client --controller $CONTROLLER_URL --node-id $NODE_ID"
-        
-        # Add SSL verification flag if disabled
-        if [ "$USE_SSL" = "true" ] && [[ ! $verify_ssl_choice =~ ^[Yy]$ ]]; then
-            exec_start="$exec_start --no-verify-ssl"
-        fi
-        
-        # Set encryption environment variable if enabled
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            encryption_env="Environment=ENCRYPTION_KEY=$ENCRYPTION_KEY"
-        fi
-        
-        # Create service file
-        cat > /etc/systemd/system/mservercontroller.service <<EOF
-[Unit]
-Description=$description
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$exec_start
-Restart=always
-RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=mservercontroller
-Environment=PORT=3000
-$encryption_env
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    # Determine port based on SSL
+    if [ "$USE_SSL" = "true" ]; then
+        service_port="443"
+        exec_start="$INSTALL_DIR/venv/bin/python server.py --port 443 --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
     else
-        description="MServerController - Minecraft Server Manager (Master Node)"
-        
-        # Determine port based on SSL
-        if [ "$USE_SSL" = "true" ]; then
-            service_port="443"
-            exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central --port 443 --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
-        else
-            service_port="3000"
-            exec_start="$INSTALL_DIR/venv/bin/python server.py --mode central --port 3000"
-        fi
-        
-        # Create service file with encryption key in environment if enabled
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            cat > /etc/systemd/system/mservercontroller.service <<EOF
-[Unit]
-Description=$description
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$exec_start
-Restart=always
-RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=mservercontroller
-Environment=PORT=$service_port
-Environment=ENCRYPTION_KEY=$(cat $ENCRYPTION_KEY_FILE)
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        else
-            cat > /etc/systemd/system/mservercontroller.service <<EOF
-[Unit]
-Description=$description
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$exec_start
-Restart=always
-RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=mservercontroller
-Environment=PORT=$service_port
-
-[Install]
-WantedBy=multi-user.target
-EOF
-        fi
+        service_port="3000"
+        exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
     fi
+    
+    cat > /etc/systemd/system/mservercontroller.service <<EOF
+[Unit]
+Description=MServerController - Minecraft Server Manager
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$exec_start
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=mservercontroller
+Environment=PORT=$service_port
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
     systemctl daemon-reload
-    print_success "Systemd service created for $DEPLOYMENT_MODE mode"
+    print_success "Systemd service created"
 }
 
 # Start services
@@ -574,52 +306,33 @@ show_completion() {
     echo "MServerController is now running."
     echo ""
     
-    if [ "$DEPLOYMENT_MODE" = "master" ]; then
-        echo "Deployment Mode: Master Node (Central Controller)"
-        echo ""
-        
-        # Show configuration
-        echo "Configuration:"
-        if [ "$USE_SSL" = "true" ]; then
-            echo "  Transport Security: HTTPS (SSL/TLS Enabled) on port 443"
-        else
-            echo "  Transport Security: HTTP on port 3000"
-        fi
-        
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            echo "  Payload Encryption: Enabled (Fernet)"
-        else
-            echo "  Payload Encryption: Disabled"
-        fi
-        echo ""
-        
-        # Show access URL
-        if [ "$USE_SSL" = "true" ]; then
-            echo "Access the web interface at:"
-            echo "  https://$(hostname -I | awk '{print $1}'):443"
-            echo "  or"
-            echo "  https://$(hostname -I | awk '{print $1}')"
-            echo "  or"
-            echo "  https://localhost"
-            echo ""
-            print_warning "Using self-signed certificate - browsers will show security warning"
-            echo "Accept the certificate warning to proceed."
-        else
-            echo "Access the web interface at:"
-            echo "  http://$(hostname -I | awk '{print $1}'):3000"
-            echo "  or"
-            echo "  http://localhost:3000"
-        fi
-        echo ""
+    # Show configuration
+    echo "Configuration:"
+    if [ "$USE_SSL" = "true" ]; then
+        echo "  Transport Security: HTTPS (SSL/TLS Enabled) on port 443"
     else
-        echo "Deployment Mode: Slave Node (Client Worker)"
-        echo "Controller: $CONTROLLER_URL"
-        echo "Node ID: $NODE_ID"
-        echo ""
-        echo "This node will register with the Master controller."
-        echo "Check the Master's web UI to verify connection."
-        echo ""
+        echo "  Transport Security: HTTP on port 3000"
     fi
+    echo ""
+    
+    # Show access URL
+    if [ "$USE_SSL" = "true" ]; then
+        echo "Access the web interface at:"
+        echo "  https://$(hostname -I | awk '{print $1}'):443"
+        echo "  or"
+        echo "  https://$(hostname -I | awk '{print $1}')"
+        echo "  or"
+        echo "  https://localhost"
+        echo ""
+        print_warning "Using self-signed certificate - browsers will show security warning"
+        echo "Accept the certificate warning to proceed."
+    else
+        echo "Access the web interface at:"
+        echo "  http://$(hostname -I | awk '{print $1}'):3000"
+        echo "  or"
+        echo "  http://localhost:3000"
+    fi
+    echo ""
     
     echo "Service management commands:"
     echo "  Start:   sudo systemctl start mservercontroller"
@@ -628,12 +341,7 @@ show_completion() {
     echo "  Status:  sudo systemctl status mservercontroller"
     echo ""
     echo "Logs:"
-    echo "  App logs:   sudo journalctl -u mservercontroller -f"
-    
-    if [ "$DEPLOYMENT_MODE" = "master" ]; then
-        echo "  Nginx logs: sudo tail -f /var/log/nginx/access.log"
-    fi
-    
+    echo "  App logs: sudo journalctl -u mservercontroller -f"
     echo ""
 }
 
@@ -643,8 +351,8 @@ do_install() {
     
     check_debian
     
-    # Prompt for deployment mode
-    prompt_deployment_mode
+    # Prompt for SSL configuration
+    prompt_ssl_config
     
     install_dependencies
     
@@ -685,8 +393,6 @@ do_install() {
     setup_python_env
     create_directories
     generate_ssl_certs
-    generate_encryption_key
-    save_deployment_config
     set_permissions
     configure_nginx
     create_service
@@ -700,7 +406,7 @@ do_install() {
     fi
 }
 
-# Update existing installation (preserves all configs and encryption keys)
+# Update existing installation (preserves all configs)
 do_update() {
     print_header "Update Installation"
     
@@ -711,19 +417,10 @@ do_update() {
         exit 1
     fi
     
-    # Load existing deployment configuration
-    if load_deployment_config; then
-        print_success "Loaded deployment configuration: $DEPLOYMENT_MODE mode"
-        if [ "$DEPLOYMENT_MODE" = "slave" ]; then
-            echo "  Controller: $CONTROLLER_URL"
-            echo "  Node ID: $NODE_ID"
-        fi
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            echo "  Encryption: Enabled"
-        fi
-    else
-        print_warning "No deployment configuration found, assuming Master mode"
-        DEPLOYMENT_MODE="master"
+    # Check if SSL was previously enabled
+    if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
+        USE_SSL="true"
+        print_info "SSL configuration detected and will be preserved"
     fi
     
     # Display what will be preserved
@@ -732,15 +429,9 @@ do_update() {
     echo "  • users.json (user accounts)"
     echo "  • settings.json (app settings)"
     echo "  • stats.json (performance metrics)"
-    echo "  • clients.json (registered nodes)"
-    echo "  • commands.json (command queue)"
-    echo "  • backup_schedules.json (backup schedules)"
-    echo "  • task_schedules.json (task schedules)"
-    echo "  • encryption.key (encryption key - CRITICAL)"
-    echo "  • deployment.conf (deployment configuration)"
     echo "  • servers/* (all game server data)"
     echo "  • backups/* (all backups)"
-    echo "  • ssl/* (SSL certificates if Master)"
+    echo "  • ssl/* (SSL certificates if present)"
     echo ""
     
     # Stop the service
@@ -754,12 +445,8 @@ do_update() {
         "users.json"
         "settings.json"
         "stats.json"
-        "clients.json"
-        "commands.json"
-        "backup_schedules.json"
-        "task_schedules.json"
-        "encryption.key"
-        "deployment.conf"
+        "schedules.json"
+        "tasks.json"
     )
     
     # Create temporary backup directory
@@ -774,8 +461,8 @@ do_update() {
         fi
     done
     
-    # Also backup SSL directory for Master nodes
-    if [ "$DEPLOYMENT_MODE" = "master" ] && [ -d "$INSTALL_DIR/ssl" ]; then
+    # Also backup SSL directory if it exists
+    if [ -d "$INSTALL_DIR/ssl" ]; then
         cp -r "$INSTALL_DIR/ssl" "$backup_dir/"
         print_success "  Backed up: ssl/ (certificates)"
     fi
@@ -786,7 +473,6 @@ do_update() {
         
         # Copy core application files
         cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/server_client.py" "$INSTALL_DIR/"
         cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
         cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
         cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
@@ -840,14 +526,13 @@ do_update() {
     done
     
     # Restore SSL certificates if present
-    if [ -d "$backup_dir/ssl" ] && [ "$DEPLOYMENT_MODE" = "master" ]; then
+    if [ -d "$backup_dir/ssl" ]; then
         rm -rf "$INSTALL_DIR/ssl"
         cp -r "$backup_dir/ssl" "$INSTALL_DIR/"
         print_success "  Restored: ssl/ (certificates)"
     fi
     
     rm -rf "$backup_dir"
-    
     
     cd "$INSTALL_DIR"
     
@@ -861,11 +546,11 @@ do_update() {
     # Fix permissions
     set_permissions
     
-    # Update Nginx configuration (for Master nodes)
+    # Update Nginx configuration
     configure_nginx
     
-    # Update systemd service (regenerate based on current deployment mode)
-    print_info "Updating systemd service for $DEPLOYMENT_MODE mode..."
+    # Update systemd service
+    print_info "Updating systemd service..."
     create_service
     
     # Restart services with new code
@@ -878,10 +563,7 @@ do_update() {
         echo "  ✓ Python dependencies updated"
         echo "  ✓ All configurations preserved"
         echo "  ✓ All user data preserved"
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            echo "  ✓ Encryption key preserved"
-        fi
-        echo "  ✓ Service restarted ($DEPLOYMENT_MODE mode)"
+        echo "  ✓ Service restarted"
         echo ""
         show_completion "Update"
     else
@@ -892,9 +574,9 @@ do_update() {
     fi
 }
 
-# Quick update (files only, no dependency reinstall - preserves configs and encryption)
+# Quick update (files only, no dependency reinstall - preserves configs)
 do_quick_update() {
-    print_header "Quick Update (Files Only - Fast Development Mode)"
+    print_header "Quick Update (Files Only)"
     
     # Check if installation exists
     if [ ! -d "$INSTALL_DIR" ]; then
@@ -903,23 +585,16 @@ do_quick_update() {
         exit 1
     fi
     
-    # Load existing deployment configuration
-    if load_deployment_config; then
-        print_success "Loaded deployment configuration: $DEPLOYMENT_MODE mode"
-        if [ "$DEPLOYMENT_MODE" = "slave" ]; then
-            echo "  Controller: $CONTROLLER_URL"
-            echo "  Node ID: $NODE_ID"
-        fi
-    else
-        print_warning "No deployment configuration found, assuming Master mode"
-        DEPLOYMENT_MODE="master"
+    # Check if SSL was previously enabled
+    if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
+        USE_SSL="true"
+        print_info "SSL configuration detected"
     fi
     
     print_info "This quick update will:"
     echo "  • Update application files ONLY"
     echo "  • NOT reinstall Python dependencies"
     echo "  • PRESERVE all configurations"
-    echo "  • PRESERVE encryption keys"
     echo "  • PRESERVE user data and logs"
     echo ""
     
@@ -934,7 +609,6 @@ do_quick_update() {
         
         # Core application files
         cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/server_client.py" "$INSTALL_DIR/"
         cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
         cp "$(dirname "$0")/version" "$INSTALL_DIR/" 2>/dev/null || true
         print_success "  Updated: version file"
@@ -988,10 +662,7 @@ do_quick_update() {
         echo "  ✓ Application files updated"
         echo "  ✓ All configurations preserved"
         echo "  ✓ All user data preserved"
-        if [ "$USE_ENCRYPTION" = "true" ]; then
-            echo "  ✓ Encryption key preserved"
-        fi
-        echo "  ✓ Service restarted ($DEPLOYMENT_MODE mode)"
+        echo "  ✓ Service restarted"
         echo ""
         echo "Note: Python dependencies were NOT updated in quick mode."
         echo "Run 'sudo $0 update' for a full update with dependency refresh."
@@ -1094,15 +765,11 @@ do_status() {
     if [ -d "$INSTALL_DIR" ]; then
         print_success "Installation found at $INSTALL_DIR"
         
-        # Load and display deployment configuration
-        if load_deployment_config; then
-            echo ""
-            echo "Deployment Configuration:"
-            echo "  Mode: $DEPLOYMENT_MODE"
-            if [ "$DEPLOYMENT_MODE" = "slave" ]; then
-                echo "  Controller: $CONTROLLER_URL"
-                echo "  Node ID: $NODE_ID"
-            fi
+        # Check for SSL
+        if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
+            echo "  SSL: Enabled"
+        else
+            echo "  SSL: Disabled"
         fi
     else
         print_warning "No installation found at $INSTALL_DIR"
@@ -1184,20 +851,12 @@ show_menu() {
     # Check if already installed
     if [ -d "$INSTALL_DIR" ]; then
         echo "Existing installation detected at $INSTALL_DIR"
-        
-        # Show current deployment mode if available
-        if load_deployment_config; then
-            echo "Current mode: $DEPLOYMENT_MODE"
-            if [ "$DEPLOYMENT_MODE" = "slave" ]; then
-                echo "Connected to: $CONTROLLER_URL"
-            fi
-        fi
         echo ""
     fi
     
     echo "Please select an option:"
     echo ""
-    echo "  1) Fresh Install      - Complete new installation (Master or Slave)"
+    echo "  1) Fresh Install      - Complete new installation"
     echo "  2) Update             - Update existing installation (preserves data)"
     echo "  3) Quick Update       - Update files only (fast, for dev testing)"
     echo "  4) Development Mode   - Run locally without installing"
@@ -1221,11 +880,6 @@ show_menu() {
 
 # Main entry point
 main() {
-    # Check for --non-interactive flag
-    if [[ "$2" == "--non-interactive" ]] || [[ "$2" == "--no-interactive" ]] || [[ "$1" == "--non-interactive" ]] || [[ "$1" == "--no-interactive" ]]; then
-        INTERACTIVE="false"
-    fi
-    
     case "${1:-}" in
         install)
             check_root
@@ -1252,22 +906,8 @@ main() {
         help|-h|--help)
             show_usage
             ;;
-        --non-interactive|--no-interactive)
-            check_root
-            if [ -z "${2:-}" ]; then
-                print_error "Action required with --non-interactive flag"
-                show_usage
-                exit 1
-            fi
-            # Re-call main with the actual command
-            main "$2"
-            ;;
         "")
-            # No argument - show interactive menu or error if non-interactive
-            if [ "$INTERACTIVE" == "false" ]; then
-                print_error "Non-interactive mode requires an action (install, update, quick-update, status, etc)"
-                exit 1
-            fi
+            # No argument - show interactive menu
             show_menu
             ;;
         *)

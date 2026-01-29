@@ -294,11 +294,11 @@
         
         <!-- Tools Section -->
         <section id="tools-section" class="settings-section">
-          <!-- Auto-Update Tool -->
+          <!-- Version Info -->
           <div class="tool-panel">
             <div class="tool-panel-header">
-              <h3>🔄 Auto-Update</h3>
-              <span class="tool-description">Check and install the latest MServerController updates</span>
+              <h3>ℹ️ Version Info</h3>
+              <span class="tool-description">Current MServerController version information</span>
             </div>
             <div class="tool-panel-body">
               <div class="update-tool-container">
@@ -309,60 +309,6 @@
                     <div id="current-version" class="version-display">Loading...</div>
                     <small id="current-date" class="version-date">--</small>
                   </div>
-                  <div class="info-card">
-                    <label>Deployment Mode</label>
-                    <div id="deployment-mode" class="mode-display">Loading...</div>
-                  </div>
-                </div>
-                
-                <!-- Check for Updates -->
-                <div class="update-check-section" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
-                  <div class="form-group">
-                    <button id="check-updates-btn" class="btn btn-primary" onclick="checkForUpdates()" style="width: 100%;">
-                      🔍 Check For Updates
-                    </button>
-                  </div>
-                  
-                  <!-- Update Available Alert -->
-                  <div id="update-available-alert" class="alert alert-info" style="display: none; margin-top: 15px;">
-                    <strong>✨ Update Available!</strong>
-                    <div id="available-version-info" style="margin-top: 10px;"></div>
-                  </div>
-                  
-                  <!-- No Update Alert -->
-                  <div id="no-update-alert" class="alert alert-success" style="display: none; margin-top: 15px;">
-                    ✓ You're running the latest version!
-                  </div>
-                  
-                  <!-- Changelog -->
-                  <div id="changelog-container" style="display: none; margin-top: 20px;">
-                    <h4>📝 Changelog (New Commits)</h4>
-                    <div id="changelog-list" class="changelog-list"></div>
-                  </div>
-                  
-                  <!-- Update Action -->
-                  <div id="update-action-section" style="display: none; margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd;">
-                    <div class="form-group">
-                      <button id="update-btn" class="btn btn-success" onclick="triggerUpdate()" style="width: 100%;">
-                        📥 Install Update
-                      </button>
-                    </div>
-                    <small style="color: #666;">
-                      ⚠️ The application will restart during the update process. Game servers will continue running.
-                    </small>
-                  </div>
-                  
-                  <!-- Update Progress -->
-                  <div id="update-progress-section" style="display: none; margin-top: 20px;">
-                    <div class="progress-indicator">
-                      <div class="progress-spinner" id="update-spinner"></div>
-                      <span id="update-status-text">Update in progress...</span>
-                    </div>
-                    <div id="update-logs" class="update-logs" style="display: none; margin-top: 15px; max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px;"></div>
-                  </div>
-                  
-                  <!-- Update Status Messages -->
-                  <div id="update-status-msg" style="margin-top: 15px;"></div>
                 </div>
               </div>
             </div>
