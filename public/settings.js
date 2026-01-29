@@ -37,9 +37,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab === 'approvals') {
         loadPendingApprovals();
       }
-      // Load nodes when Node Manager tab is clicked
-      if (tab === 'nodes') {
-        loadNodeManager();
+      // Load API manager when API Manager tab is clicked
+      if (tab === 'api') {
+        loadApiManager();
       }
       // Load app settings when Server Settings tab is clicked
       if (tab === 'appsettings') {
@@ -79,16 +79,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     socket = io();
     socket.on('stats_update', updateCurrentStats);
-    
-    // Listen for node status updates
-    socket.on('node_status_update', (data) => {
-      console.log('[Socket.IO] Node status update received:', data);
-      // Check if the nodes tab is currently active
-      const nodesSection = document.getElementById('nodes-section');
-      if (nodesSection && nodesSection.classList.contains('active')) {
-        loadNodes(); // Refresh nodes list
-      }
-    });
   } catch (err) {
     console.error('Socket.IO error:', err);
   }
@@ -1165,292 +1155,247 @@ async function saveAppSettings() {
   }
 }
 
-// ==================== Node Manager Functions ====================
+// ==================== API Manager Functions ====================
 
-let encryptionKeyVisible = false;
-let actualEncryptionKey = null;
-let nodesRefreshInterval = null;
+let apiKeysCache = [];
 
-async function loadNodeManager() {
-  await loadEncryptionStatus();
-  await loadNodes();
-  
-  // Start auto-refresh for nodes (every 5 seconds)
-  startNodesAutoRefresh();
+async function loadApiManager() {
+  await loadApiKeys();
+  await loadApiStats();
+  updateApiEndpoint();
 }
 
-function startNodesAutoRefresh() {
-  // Clear any existing interval
-  if (nodesRefreshInterval) {
-    clearInterval(nodesRefreshInterval);
-  }
-  
-  // Only refresh if nodes tab is active
-  nodesRefreshInterval = setInterval(() => {
-    const nodesSection = document.getElementById('nodes-section');
-    if (nodesSection && nodesSection.classList.contains('active')) {
-      loadNodes();
-    }
-  }, 5000); // Refresh every 5 seconds
-}
-
-function stopNodesAutoRefresh() {
-  if (nodesRefreshInterval) {
-    clearInterval(nodesRefreshInterval);
-    nodesRefreshInterval = null;
+function updateApiEndpoint() {
+  const endpoint = document.getElementById('api-endpoint');
+  if (endpoint) {
+    const baseUrl = window.location.origin;
+    endpoint.textContent = `${baseUrl}/api/v1/`;
   }
 }
 
-async function loadEncryptionStatus() {
+async function loadApiKeys() {
+  const listEl = document.getElementById('api-keys-list');
+  
   try {
-    const response = await fetch('/api/nodes/encryption');
-    if (!response.ok) throw new Error('Failed to load encryption status');
+    const response = await fetch('/api/v1/keys');
     
-    const data = await response.json();
-    const statusEl = document.getElementById('encryption-status');
-    const keyContainer = document.getElementById('encryption-key-container');
-    
-    if (data.enabled) {
-      statusEl.innerHTML = `
-        <span class="status-indicator online"></span>
-        <span class="status-text">Encryption Enabled (Fernet)</span>
-      `;
-      keyContainer.style.display = 'block';
-      actualEncryptionKey = data.key;
-    } else {
-      statusEl.innerHTML = `
-        <span class="status-indicator offline"></span>
-        <span class="status-text">Encryption Disabled</span>
-      `;
-      keyContainer.style.display = 'none';
-    }
-  } catch (err) {
-    console.error('Failed to load encryption status:', err);
-    document.getElementById('encryption-status').innerHTML = `
-      <span class="status-indicator"></span>
-      <span class="status-text">Error loading encryption status</span>
-    `;
-  }
-}
-
-function toggleEncryptionKey() {
-  const keyEl = document.getElementById('encryption-key');
-  const btnEl = document.getElementById('toggle-key-btn');
-  
-  encryptionKeyVisible = !encryptionKeyVisible;
-  
-  if (encryptionKeyVisible) {
-    keyEl.textContent = actualEncryptionKey;
-    btnEl.innerHTML = '🙈 Hide';
-  } else {
-    keyEl.textContent = '••••••••••••••••••••';
-    btnEl.innerHTML = '👁️ Show';
-  }
-}
-
-function copyEncryptionKey() {
-  if (!actualEncryptionKey) return;
-  
-  navigator.clipboard.writeText(actualEncryptionKey).then(() => {
-    const originalText = event.target.textContent;
-    event.target.textContent = '✓ Copied!';
-    setTimeout(() => {
-      event.target.textContent = originalText;
-    }, 2000);
-  }).catch(err => {
-    console.error('Failed to copy:', err);
-    alert('Failed to copy to clipboard');
-  });
-}
-
-async function loadNodes() {
-  try {
-    const response = await fetch('/api/clients');
-    
-    // Check for authentication errors
     if (response.status === 401) {
-      console.error('Authentication failed: Not logged in');
       window.location.href = '/login.html';
       return;
     }
     
-    // Check for authorization errors
     if (response.status === 403) {
-      console.error('Authorization failed: Admin access required');
-      document.getElementById('nodes-list').innerHTML = '<div class="error-text">Admin access required to view nodes</div>';
+      listEl.innerHTML = '<div class="error-text">Admin access required to manage API keys</div>';
       return;
     }
     
     if (!response.ok) {
-      console.error(`HTTP Error: ${response.status} ${response.statusText}`);
-      const errorText = await response.text();
-      console.error('Server response:', errorText);
-      
-      document.getElementById('nodes-list').innerHTML = `<div class="error-text">Failed to load nodes (${response.status})</div>`;
+      listEl.innerHTML = '<div class="error-text">Failed to load API keys</div>';
       return;
     }
     
-    let data;
-    try {
-      data = await response.json();
-    } catch (parseErr) {
-      console.error('Failed to parse JSON response:', parseErr);
-      console.error('Response text:', await response.text());
-      document.getElementById('nodes-list').innerHTML = '<div class="error-text">Server returned invalid response</div>';
-      return;
-    }
+    const data = await response.json();
+    apiKeysCache = data.keys || [];
     
-    const nodes = data.clients || [];
-    
-    // Validate that nodes is an array
-    if (!Array.isArray(nodes)) {
-      console.error('Expected nodes to be an array, got:', typeof nodes, nodes);
-      document.getElementById('nodes-list').innerHTML = '<div class="error-text">Invalid node data format</div>';
-      return;
-    }
-    
-    updateNodesSummary(nodes);
-    displayNodesList(nodes);
+    displayApiKeys(apiKeysCache);
+    document.getElementById('api-active-keys').textContent = apiKeysCache.filter(k => k.active).length;
   } catch (err) {
-    console.error('Failed to load nodes - Unexpected error:', err);
-    console.error('Error stack:', err.stack);
-    document.getElementById('nodes-list').innerHTML = '<div class="error-text">Failed to load nodes: ' + escapeHtml(err.message) + '</div>';
+    console.error('Failed to load API keys:', err);
+    listEl.innerHTML = '<div class="error-text">Failed to load API keys: ' + escapeHtml(err.message) + '</div>';
   }
 }
 
-function updateNodesSummary(nodes) {
-  const now = new Date();
-  const onlineNodes = nodes.filter(node => {
-    if (!node.last_heartbeat) return false;
-    const lastSeen = new Date(node.last_heartbeat);
-    const diffSeconds = (now - lastSeen) / 1000;
-    return diffSeconds < 10; // Online if heartbeat within last 10 seconds
-  });
+function displayApiKeys(keys) {
+  const listEl = document.getElementById('api-keys-list');
   
-  const totalServers = nodes.reduce((sum, node) => sum + (node.servers?.length || 0), 0);
-  
-  document.getElementById('total-nodes').textContent = nodes.length;
-  document.getElementById('online-nodes').textContent = onlineNodes.length;
-  document.getElementById('offline-nodes').textContent = nodes.length - onlineNodes.length;
-  document.getElementById('total-servers').textContent = totalServers;
-}
-
-function displayNodesList(nodes) {
-  const listEl = document.getElementById('nodes-list');
-  
-  if (nodes.length === 0) {
-    listEl.innerHTML = '<div class="empty-state">No nodes connected. Install a Slave node to get started.</div>';
+  if (keys.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">No API keys created yet. Create one to allow external API access.</div>';
     return;
   }
   
-  const now = new Date();
-  
-  const nodeCards = nodes.map(node => {
-    const isOnline = node.last_heartbeat && ((now - new Date(node.last_heartbeat)) / 1000 < 10);
-    const statusClass = isOnline ? 'online' : 'offline';
-    const statusText = isOnline ? 'Online' : 'Offline';
+  const keyCards = keys.map(key => {
+    const statusClass = key.active ? 'online' : 'offline';
+    const statusText = key.active ? 'Active' : 'Inactive';
+    const createdAt = key.created_at ? new Date(key.created_at).toLocaleString() : 'Unknown';
+    const lastUsed = key.last_used ? new Date(key.last_used).toLocaleString() : 'Never';
+    const expiresAt = key.expires_at ? new Date(key.expires_at).toLocaleString() : 'Never';
     
-    const stats = node.stats || {};
-    const cpuUsage = stats.cpu_percent || 0;
-    const memUsage = stats.memory_percent || 0;
-    const diskUsage = stats.disk_percent || 0;
-    
-    const servers = node.servers || [];
-    const runningServers = servers.filter(s => s.status === 'running').length;
-    
-    // Health score calculation
-    let healthScore = 100;
-    if (cpuUsage > 80) healthScore -= 30;
-    else if (cpuUsage > 60) healthScore -= 15;
-    if (memUsage > 80) healthScore -= 30;
-    else if (memUsage > 60) healthScore -= 15;
-    if (diskUsage > 90) healthScore -= 20;
-    else if (diskUsage > 75) healthScore -= 10;
-    if (!isOnline) healthScore = 0;
-    
-    let healthClass = 'excellent';
-    if (healthScore < 30) healthClass = 'critical';
-    else if (healthScore < 50) healthClass = 'warning';
-    else if (healthScore < 80) healthClass = 'good';
-    
-    const registeredAt = node.registered_at ? new Date(node.registered_at).toLocaleString() : 'Unknown';
-    const lastSeen = node.last_heartbeat ? new Date(node.last_heartbeat).toLocaleString() : 'Never';
+    // Mask the key for display (show first 8 and last 4 characters)
+    const maskedKey = key.key ? `${key.key.substring(0, 8)}...${key.key.substring(key.key.length - 4)}` : '••••••••';
     
     return `
-      <div class="node-item">
-        <div class="node-header">
-          <div class="node-title">
-            <h4>🖥️ ${escapeHtml(node.node_id)}</h4>
-            <span class="node-status ${statusClass}">${statusText}</span>
+      <div class="api-key-item">
+        <div class="api-key-header">
+          <div class="api-key-title">
+            <h4>🔑 ${escapeHtml(key.name || 'Unnamed Key')}</h4>
+            <span class="api-key-status ${statusClass}">${statusText}</span>
           </div>
-          <div class="node-health health-${healthClass}">
-            Health: ${healthScore}%
+          <div class="api-key-actions">
+            <button class="btn btn-small" onclick="copyApiKey('${escapeHtml(key.id)}')" title="Copy Key">📋</button>
+            <button class="btn btn-small ${key.active ? 'btn-warning' : 'btn-success'}" onclick="toggleApiKey('${escapeHtml(key.id)}')" title="${key.active ? 'Disable' : 'Enable'}">
+              ${key.active ? '⏸️' : '▶️'}
+            </button>
+            <button class="btn btn-small btn-danger" onclick="deleteApiKey('${escapeHtml(key.id)}')" title="Delete">🗑️</button>
           </div>
         </div>
         
-        <div class="node-details">
-          <div class="node-info-grid">
+        <div class="api-key-details">
+          <div class="api-key-info-grid">
             <div class="info-item">
-              <span class="info-label">OS:</span>
-              <span class="info-value">${escapeHtml(node.system_info?.os || 'Unknown')}</span>
+              <span class="info-label">Key:</span>
+              <code class="info-value api-key-masked">${maskedKey}</code>
             </div>
             <div class="info-item">
-              <span class="info-label">Hostname:</span>
-              <span class="info-value">${escapeHtml(node.system_info?.hostname || 'Unknown')}</span>
+              <span class="info-label">Created:</span>
+              <span class="info-value">${createdAt}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">Registered:</span>
-              <span class="info-value">${registeredAt}</span>
+              <span class="info-label">Last Used:</span>
+              <span class="info-value">${lastUsed}</span>
             </div>
             <div class="info-item">
-              <span class="info-label">Last Seen:</span>
-              <span class="info-value">${lastSeen}</span>
+              <span class="info-label">Expires:</span>
+              <span class="info-value">${expiresAt}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Requests:</span>
+              <span class="info-value">${key.request_count || 0}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Rate Limit:</span>
+              <span class="info-value">${key.rate_limit || 'Default'}/min</span>
             </div>
           </div>
           
-          <div class="node-stats">
-            <div class="stat-bar-container">
-              <div class="stat-bar-label">
-                <span>CPU</span>
-                <span>${cpuUsage.toFixed(1)}%</span>
-              </div>
-              <div class="stat-bar">
-                <div class="stat-bar-fill cpu" style="width: ${cpuUsage}%"></div>
-              </div>
+          <div class="api-key-permissions">
+            <strong>Permissions:</strong>
+            <div class="permissions-list">
+              ${(key.permissions || ['read']).map(p => `<span class="permission-badge">${escapeHtml(p)}</span>`).join('')}
             </div>
-            
-            <div class="stat-bar-container">
-              <div class="stat-bar-label">
-                <span>Memory</span>
-                <span>${memUsage.toFixed(1)}%</span>
-              </div>
-              <div class="stat-bar">
-                <div class="stat-bar-fill memory" style="width: ${memUsage}%"></div>
-              </div>
-            </div>
-            
-            <div class="stat-bar-container">
-              <div class="stat-bar-label">
-                <span>Disk</span>
-                <span>${diskUsage.toFixed(1)}%</span>
-              </div>
-              <div class="stat-bar">
-                <div class="stat-bar-fill disk" style="width: ${diskUsage}%"></div>
-              </div>
-            </div>
-          </div>
-          
-          <div class="node-servers">
-            <strong>Servers:</strong> ${servers.length} total, ${runningServers} running
           </div>
         </div>
       </div>
     `;
   }).join('');
   
-  listEl.innerHTML = nodeCards;
+  listEl.innerHTML = keyCards;
 }
 
-function refreshNodes() {
-  loadNodes();
+async function loadApiStats() {
+  try {
+    const response = await fetch('/api/v1/stats');
+    
+    if (!response.ok) {
+      console.error('Failed to load API stats');
+      return;
+    }
+    
+    const data = await response.json();
+    
+    document.getElementById('api-total-requests').textContent = data.total_requests || 0;
+    document.getElementById('api-successful-requests').textContent = data.successful_requests || 0;
+    document.getElementById('api-failed-requests').textContent = data.failed_requests || 0;
+  } catch (err) {
+    console.error('Failed to load API stats:', err);
+  }
+}
+
+function refreshApiStats() {
+  loadApiStats();
+  loadApiKeys();
+}
+
+function openCreateApiKeyModal() {
+  // For now, use a simple prompt - can be enhanced with a proper modal later
+  const keyName = prompt('Enter a name for this API key:');
+  if (keyName && keyName.trim()) {
+    createApiKey(keyName.trim());
+  }
+}
+
+async function createApiKey(name) {
+  try {
+    const response = await fetch('/api/v1/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, permissions: ['read'] })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      alert('Failed to create API key: ' + (error.error || 'Unknown error'));
+      return;
+    }
+    
+    const data = await response.json();
+    
+    // Show the full key to the user (only shown once)
+    alert(`API Key created successfully!\n\nKey: ${data.key}\n\n⚠️ Copy this key now - it won't be shown again!`);
+    
+    loadApiKeys();
+  } catch (err) {
+    console.error('Failed to create API key:', err);
+    alert('Failed to create API key: ' + err.message);
+  }
+}
+
+async function copyApiKey(keyId) {
+  const key = apiKeysCache.find(k => k.id === keyId);
+  if (!key || !key.key) {
+    alert('Cannot copy key - key data not available. For security, full keys are only shown when created.');
+    return;
+  }
+  
+  try {
+    await navigator.clipboard.writeText(key.key);
+    alert('API key copied to clipboard!');
+  } catch (err) {
+    console.error('Failed to copy:', err);
+    alert('Failed to copy to clipboard');
+  }
+}
+
+async function toggleApiKey(keyId) {
+  const key = apiKeysCache.find(k => k.id === keyId);
+  if (!key) return;
+  
+  try {
+    const response = await fetch(`/api/v1/keys/${keyId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: !key.active })
+    });
+    
+    if (!response.ok) {
+      alert('Failed to update API key');
+      return;
+    }
+    
+    loadApiKeys();
+  } catch (err) {
+    console.error('Failed to toggle API key:', err);
+    alert('Failed to update API key: ' + err.message);
+  }
+}
+
+async function deleteApiKey(keyId) {
+  if (!confirm('Are you sure you want to delete this API key? This cannot be undone.')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/v1/keys/${keyId}`, {
+      method: 'DELETE'
+    });
+    
+    if (!response.ok) {
+      alert('Failed to delete API key');
+      return;
+    }
+    
+    loadApiKeys();
+  } catch (err) {
+    console.error('Failed to delete API key:', err);
+    alert('Failed to delete API key: ' + err.message);
+  }
 }

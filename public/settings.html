@@ -37,7 +37,7 @@
           <button type="button" class="settings-tab-btn" data-tab="branding">🎨 Branding</button>
           <button type="button" class="settings-tab-btn" data-tab="users">👥 User Management</button>
           <button type="button" class="settings-tab-btn" data-tab="approvals">✅ Approvals</button>
-          <button type="button" class="settings-tab-btn" data-tab="nodes">🖥️ Node Manager</button>
+          <button type="button" class="settings-tab-btn" data-tab="api">🔌 API Manager</button>
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
           <button type="button" class="settings-tab-btn" data-tab="tools">🛠️ Tools</button>
         </nav>
@@ -166,64 +166,74 @@
             </div>
           </div>
         </section>
-                <!-- Node Manager Section -->
-        <section id="nodes-section" class="settings-section">
-          <div class="nodes-header">
-            <h2>🖥️ Distributed Node Management</h2>
-            <p class="section-description">Manage Master-Slave distributed deployment nodes and encryption</p>
+                <!-- API Manager Section -->
+        <section id="api-section" class="settings-section">
+          <div class="api-header">
+            <h2>🔌 API Manager</h2>
+            <p class="section-description">Manage public API access keys and monitor API usage</p>
           </div>
           
-          <!-- Encryption Key Card -->
-          <div class="node-card encryption-card">
-            <h3>🔐 Encryption Configuration</h3>
-            <div class="encryption-info">
-              <div class="encryption-status" id="encryption-status">
-                <span class="status-indicator"></span>
-                <span class="status-text">Loading...</span>
+          <!-- API Status Card -->
+          <div class="api-card">
+            <h3>📡 API Status</h3>
+            <div class="api-status-info">
+              <div class="api-status" id="api-status">
+                <span class="status-indicator online"></span>
+                <span class="status-text">API Enabled</span>
               </div>
-              <div class="encryption-key-display" id="encryption-key-container" style="display: none;">
-                <label>Encryption Key:</label>
-                <div class="key-display-wrapper">
-                  <code id="encryption-key" class="encryption-key">••••••••••••••••••••</code>
-                  <button class="btn btn-small" id="toggle-key-btn" onclick="toggleEncryptionKey()">👁️ Show</button>
-                  <button class="btn btn-small" onclick="copyEncryptionKey()">📋 Copy</button>
-                </div>
-                <small class="help-text">⚠️ Keep this key secure! Required for Slave nodes to connect with encryption.</small>
+              <div class="api-endpoint-display">
+                <label>API Endpoint:</label>
+                <code id="api-endpoint" class="api-endpoint">/api/v1/</code>
               </div>
             </div>
           </div>
           
-          <!-- Connected Nodes Overview -->
-          <div class="node-card">
+          <!-- API Keys Management -->
+          <div class="api-card">
             <div class="card-header">
-              <h3>📡 Connected Nodes</h3>
-              <button class="btn btn-small" onclick="refreshNodes()">🔄 Refresh</button>
+              <h3>🔑 API Keys</h3>
+              <button class="btn btn-success btn-small" onclick="openCreateApiKeyModal()">+ Create Key</button>
             </div>
-            <div class="nodes-summary" id="nodes-summary">
+            <div class="api-keys-info">
+              <small class="help-text">API keys allow external applications to interact with MServerController. Each key can have specific permissions and rate limits.</small>
+            </div>
+            <div id="api-keys-list" class="api-keys-list">
+              <div class="loading-text">Loading API keys...</div>
+            </div>
+          </div>
+          
+          <!-- API Usage Stats -->
+          <div class="api-card">
+            <div class="card-header">
+              <h3>📊 API Usage</h3>
+              <button class="btn btn-small" onclick="refreshApiStats()">🔄 Refresh</button>
+            </div>
+            <div class="api-stats-summary" id="api-stats-summary">
               <div class="summary-stat">
-                <div class="stat-label">Total Nodes</div>
-                <div class="stat-value" id="total-nodes">0</div>
+                <div class="stat-label">Total Requests (24h)</div>
+                <div class="stat-value" id="api-total-requests">0</div>
               </div>
               <div class="summary-stat">
-                <div class="stat-label">Online</div>
-                <div class="stat-value online" id="online-nodes">0</div>
+                <div class="stat-label">Successful</div>
+                <div class="stat-value online" id="api-successful-requests">0</div>
               </div>
               <div class="summary-stat">
-                <div class="stat-label">Offline</div>
-                <div class="stat-value offline" id="offline-nodes">0</div>
+                <div class="stat-label">Failed</div>
+                <div class="stat-value offline" id="api-failed-requests">0</div>
               </div>
               <div class="summary-stat">
-                <div class="stat-label">Total Servers</div>
-                <div class="stat-value" id="total-servers">0</div>
+                <div class="stat-label">Active Keys</div>
+                <div class="stat-value" id="api-active-keys">0</div>
               </div>
             </div>
           </div>
           
-          <!-- Nodes List -->
-          <div class="node-card">
-            <h3>📋 Node Details</h3>
-            <div id="nodes-list" class="nodes-list">
-              <div class="loading-text">Loading nodes...</div>
+          <!-- API Documentation Link -->
+          <div class="api-card">
+            <h3>📚 API Documentation</h3>
+            <div class="api-docs-info">
+              <p>View the full API documentation to learn how to integrate with MServerController.</p>
+              <a href="/api/v1/docs" target="_blank" class="btn btn-primary">📖 View API Docs</a>
             </div>
           </div>
         </section>

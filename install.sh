@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# MServerController Installation Script for Debian 13+
-# This script installs, updates, and configures MServerController with Nginx (Python version)
+# MServerController Installation Script for Debian/Ubuntu
+# This script installs, updates, and configures MServerController (Python version)
 
 set -e
 
@@ -13,6 +13,7 @@ SSL_DIR="$INSTALL_DIR/ssl"
 
 # SSL configuration
 USE_SSL="false"
+USE_NGINX="false"
 
 # Colors for output
 RED='\033[0;31m'
@@ -54,21 +55,40 @@ check_root() {
     fi
 }
 
-# Check Debian version
-check_debian() {
-    if [ -f /etc/debian_version ]; then
-        DEBIAN_VERSION=$(cat /etc/debian_version | cut -d. -f1)
-        if [ "$DEBIAN_VERSION" -lt 13 ]; then
-            print_warning "This script is designed for Debian 13 or newer."
-            echo "Current version: $(cat /etc/debian_version)"
-            read -p "Continue anyway? (y/n) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
-        fi
+# Check Linux distribution
+check_distro() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        DISTRO="$ID"
+        VERSION_ID="${VERSION_ID:-unknown}"
+        
+        case "$DISTRO" in
+            debian)
+                DEBIAN_VERSION=$(echo "$VERSION_ID" | cut -d. -f1)
+                if [ "$DEBIAN_VERSION" != "unknown" ] && [ "$DEBIAN_VERSION" -lt 11 ]; then
+                    print_warning "This script is designed for Debian 11 or newer."
+                    echo "Current version: $VERSION_ID"
+                    read -p "Continue anyway? (y/n) " -n 1 -r
+                    echo
+                    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                        exit 1
+                    fi
+                fi
+                ;;
+            ubuntu)
+                print_info "Detected Ubuntu $VERSION_ID"
+                ;;
+            *)
+                print_warning "This system ($DISTRO) may not be fully supported."
+                read -p "Continue anyway? (y/n) " -n 1 -r
+                echo
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    exit 1
+                fi
+                ;;
+        esac
     else
-        print_warning "This system does not appear to be Debian."
+        print_warning "Cannot detect Linux distribution."
         read -p "Continue anyway? (y/n) " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -83,14 +103,36 @@ prompt_ssl_config() {
     
     echo "Would you like to enable SSL/TLS encryption (HTTPS)?"
     echo ""
-    read -p "Enable SSL/TLS? (y/n) (default: n): " use_ssl_choice
-    use_ssl_choice=${use_ssl_choice:-n}
-    if [[ $use_ssl_choice =~ ^[Yy]$ ]]; then
-        USE_SSL="true"
-        print_info "SSL/TLS will be enabled with self-signed certificate"
-    else
-        USE_SSL="false"
-    fi
+    echo "Options:"
+    echo "  1) HTTP only (port 3000) - No encryption, app serves directly"
+    echo "  2) HTTPS direct (port 443) - App handles SSL with self-signed certificate"
+    echo "  3) HTTPS with Nginx (port 443) - Nginx handles SSL as reverse proxy"
+    echo ""
+    read -p "Select option [1-3] (default: 1): " ssl_choice
+    ssl_choice=${ssl_choice:-1}
+    
+    case $ssl_choice in
+        1)
+            USE_SSL="false"
+            USE_NGINX="false"
+            print_info "HTTP mode selected - app will serve directly on port 3000"
+            ;;
+        2)
+            USE_SSL="true"
+            USE_NGINX="false"
+            print_info "HTTPS direct mode - app will handle SSL on port 443"
+            ;;
+        3)
+            USE_SSL="true"
+            USE_NGINX="true"
+            print_info "HTTPS with Nginx - Nginx will handle SSL as reverse proxy"
+            ;;
+        *)
+            print_warning "Invalid choice, defaulting to HTTP only"
+            USE_SSL="false"
+            USE_NGINX="false"
+            ;;
+    esac
     echo ""
 }
 
@@ -162,14 +204,22 @@ install_dependencies() {
     apt-get upgrade -y
 
     print_info "Installing required packages..."
-    apt-get install -y curl wget git openjdk-21-jre-headless python3 python3-pip python3-venv nginx
+    # Install Java - try different versions based on availability
+    if apt-cache show openjdk-21-jre-headless >/dev/null 2>&1; then
+        JAVA_PKG="openjdk-21-jre-headless"
+    elif apt-cache show openjdk-17-jre-headless >/dev/null 2>&1; then
+        JAVA_PKG="openjdk-17-jre-headless"
+    else
+        JAVA_PKG="default-jre-headless"
+    fi
+    
+    apt-get install -y curl wget git "$JAVA_PKG" python3 python3-pip python3-venv openssl
 
     echo ""
     print_success "Dependencies installed"
     echo "  Python version: $(python3 --version)"
-    echo "  pip version: $(pip3 --version)"
+    echo "  pip version: $(pip3 --version 2>/dev/null || echo 'pip installed via venv')"
     echo "  Java version: $(java -version 2>&1 | head -n 1)"
-    echo "  Nginx version: $(nginx -v 2>&1)"
 }
 
 # Setup Python virtual environment and install packages
@@ -211,12 +261,111 @@ set_permissions() {
 
 # Configure Nginx
 configure_nginx() {
-    print_info "Skipping Nginx configuration (app listens directly on HTTP/HTTPS ports)"
-    # Disable nginx if it's running
-    if systemctl is-active --quiet nginx 2>/dev/null; then
-        systemctl stop nginx 2>/dev/null || true
-        systemctl disable nginx 2>/dev/null || true
-        print_success "Nginx disabled"
+    if [ "$USE_NGINX" = "true" ]; then
+        print_info "Installing and configuring Nginx..."
+        
+        # Install nginx if not present
+        if ! command -v nginx &> /dev/null; then
+            apt-get install -y nginx
+        fi
+        
+        # Get IP address and hostname for nginx config
+        local ip_addr=$(hostname -I | awk '{print $1}')
+        local hostname=$(hostname)
+        
+        # Create nginx configuration for HTTPS reverse proxy
+        cat > /etc/nginx/sites-available/mservercontroller <<EOF
+# MServerController - Nginx HTTPS Reverse Proxy Configuration
+# SSL termination at Nginx, proxying to Flask app on localhost:3000
+
+server {
+    listen 80;
+    server_name $hostname $ip_addr localhost;
+    
+    # Redirect all HTTP traffic to HTTPS
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $hostname $ip_addr localhost;
+    
+    # SSL Certificate paths
+    ssl_certificate $SSL_DIR/cert.pem;
+    ssl_certificate_key $SSL_DIR/key.pem;
+    
+    # SSL Security Settings
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # Security headers
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    
+    # Increase max body size for file uploads
+    client_max_body_size 500M;
+    
+    # Proxy to MServerController app
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_read_timeout 86400;
+    }
+    
+    # WebSocket support for console/real-time features
+    location /socket.io {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+EOF
+        
+        # Enable the site
+        rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+        ln -sf /etc/nginx/sites-available/mservercontroller /etc/nginx/sites-enabled/
+        
+        # Test nginx configuration
+        if nginx -t 2>/dev/null; then
+            print_success "Nginx configuration is valid"
+        else
+            print_error "Nginx configuration test failed"
+            nginx -t
+            return 1
+        fi
+        
+        # Enable and start nginx
+        systemctl enable nginx
+        systemctl restart nginx
+        
+        print_success "Nginx configured as HTTPS reverse proxy"
+    else
+        # App serves directly, disable nginx if present
+        if systemctl is-active --quiet nginx 2>/dev/null; then
+            print_info "Disabling Nginx (app serves directly)..."
+            systemctl stop nginx 2>/dev/null || true
+            systemctl disable nginx 2>/dev/null || true
+            print_success "Nginx disabled"
+        fi
     fi
     return 0
 }
@@ -228,11 +377,17 @@ create_service() {
     local exec_start
     local service_port="3000"
     
-    # Determine port based on SSL
-    if [ "$USE_SSL" = "true" ]; then
+    # Determine port and SSL based on configuration
+    if [ "$USE_NGINX" = "true" ]; then
+        # With nginx: app runs HTTP on 3000, nginx handles SSL on 443
+        service_port="3000"
+        exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
+    elif [ "$USE_SSL" = "true" ]; then
+        # Direct SSL: app handles SSL on 443
         service_port="443"
         exec_start="$INSTALL_DIR/venv/bin/python server.py --port 443 --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
     else
+        # HTTP only: app serves on 3000
         service_port="3000"
         exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
     fi
@@ -308,8 +463,12 @@ show_completion() {
     
     # Show configuration
     echo "Configuration:"
-    if [ "$USE_SSL" = "true" ]; then
-        echo "  Transport Security: HTTPS (SSL/TLS Enabled) on port 443"
+    if [ "$USE_NGINX" = "true" ]; then
+        echo "  Transport Security: HTTPS via Nginx reverse proxy"
+        echo "  Nginx: SSL termination on port 443"
+        echo "  App: HTTP on port 3000 (internal)"
+    elif [ "$USE_SSL" = "true" ]; then
+        echo "  Transport Security: HTTPS (direct SSL) on port 443"
     else
         echo "  Transport Security: HTTP on port 3000"
     fi
@@ -318,14 +477,19 @@ show_completion() {
     # Show access URL
     if [ "$USE_SSL" = "true" ]; then
         echo "Access the web interface at:"
-        echo "  https://$(hostname -I | awk '{print $1}'):443"
-        echo "  or"
         echo "  https://$(hostname -I | awk '{print $1}')"
         echo "  or"
         echo "  https://localhost"
         echo ""
         print_warning "Using self-signed certificate - browsers will show security warning"
         echo "Accept the certificate warning to proceed."
+        if [ "$USE_NGINX" = "true" ]; then
+            echo ""
+            echo "Nginx commands:"
+            echo "  Reload: sudo systemctl reload nginx"
+            echo "  Status: sudo systemctl status nginx"
+            echo "  Logs:   sudo tail -f /var/log/nginx/error.log"
+        fi
     else
         echo "Access the web interface at:"
         echo "  http://$(hostname -I | awk '{print $1}'):3000"
@@ -349,7 +513,7 @@ show_completion() {
 do_install() {
     print_header "Fresh Installation"
     
-    check_debian
+    check_distro
     
     # Prompt for SSL configuration
     prompt_ssl_config
@@ -364,6 +528,7 @@ do_install() {
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             # Stop service if running
             systemctl stop mservercontroller 2>/dev/null || true
+            systemctl disable mservercontroller 2>/dev/null || true
             rm -rf "$INSTALL_DIR"
         else
             print_error "Installation cancelled."
@@ -371,21 +536,53 @@ do_install() {
         fi
     fi
     
+    # Determine source directory (where install.sh is located)
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    
     # Copy or clone files
-    if [ -f "$(dirname "$0")/server.py" ]; then
-        print_info "Copying files from current directory..."
+    if [ -f "$SCRIPT_DIR/server.py" ]; then
+        print_info "Copying files from source directory..."
         mkdir -p "$INSTALL_DIR"
-        cp -r "$(dirname "$0")"/* "$INSTALL_DIR/"
         
-        # Copy tools folder if it exists
-        if [ -d "$(dirname "$0")/tools" ]; then
-            print_info "Copying tools folder..."
-            cp -r "$(dirname "$0")/tools" "$INSTALL_DIR/"
-            print_success "Tools folder copied"
+        # Copy all application files
+        cp "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/version" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/users.json" "$INSTALL_DIR/" 2>/dev/null || true
+        
+        # Copy directories
+        if [ -d "$SCRIPT_DIR/public" ]; then
+            cp -r "$SCRIPT_DIR/public" "$INSTALL_DIR/"
+            print_success "Copied: public/"
         fi
+        
+        if [ -d "$SCRIPT_DIR/configs" ]; then
+            cp -r "$SCRIPT_DIR/configs" "$INSTALL_DIR/"
+            print_success "Copied: configs/"
+        fi
+        
+        if [ -d "$SCRIPT_DIR/docs" ]; then
+            cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
+            print_success "Copied: docs/"
+        fi
+        
+        if [ -d "$SCRIPT_DIR/tools" ]; then
+            cp -r "$SCRIPT_DIR/tools" "$INSTALL_DIR/"
+            print_success "Copied: tools/"
+        fi
+        
+        if [ -d "$SCRIPT_DIR/serverexecutables" ]; then
+            cp -r "$SCRIPT_DIR/serverexecutables" "$INSTALL_DIR/"
+            print_success "Copied: serverexecutables/"
+        fi
+        
+        print_success "Application files copied"
     else
         print_info "Cloning from GitHub..."
         git clone "$REPO_URL" "$INSTALL_DIR"
+        print_success "Repository cloned"
     fi
     
     cd "$INSTALL_DIR"
@@ -406,7 +603,7 @@ do_install() {
     fi
 }
 
-# Update existing installation (preserves all configs)
+# Update existing installation (preserves all configs and data)
 do_update() {
     print_header "Update Installation"
     
@@ -431,13 +628,21 @@ do_update() {
     echo "  • stats.json (performance metrics)"
     echo "  • servers/* (all game server data)"
     echo "  • backups/* (all backups)"
+    echo "  • uploads/* (uploaded files)"
     echo "  • ssl/* (SSL certificates if present)"
     echo ""
+    
+    read -p "Continue with update? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Update cancelled."
+        exit 0
+    fi
     
     # Stop the service
     print_info "Stopping MServerController service..."
     systemctl stop mservercontroller 2>/dev/null || true
-    sleep 1
+    sleep 2
     
     # List of critical files to preserve
     local preserve_files=(
@@ -467,53 +672,77 @@ do_update() {
         print_success "  Backed up: ssl/ (certificates)"
     fi
     
+    # Determine source directory (where install.sh is located)
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    
     # Update application files
-    if [ -f "$(dirname "$0")/server.py" ]; then
-        print_info "Updating application files from current directory..."
+    if [ -f "$SCRIPT_DIR/server.py" ]; then
+        print_info "Updating application files from source directory..."
         
         # Copy core application files
-        cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$(dirname "$0")/requirements.txt" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/nginx.conf" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/version" "$INSTALL_DIR/" 2>/dev/null || true
-        print_success "  Updated: version file"
+        cp "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
+        
+        # Update version file
+        if [ -f "$SCRIPT_DIR/version" ]; then
+            cp "$SCRIPT_DIR/version" "$INSTALL_DIR/"
+            print_success "  Updated: version"
+        fi
         
         # Update frontend files
-        if [ -d "$(dirname "$0")/public" ]; then
+        if [ -d "$SCRIPT_DIR/public" ]; then
             rm -rf "$INSTALL_DIR/public"
-            cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
+            cp -r "$SCRIPT_DIR/public" "$INSTALL_DIR/"
             print_success "  Updated: public/ (frontend files)"
         fi
         
-        # Update configs directory
-        if [ -d "$(dirname "$0")/configs" ]; then
+        # Update configs directory (templates only)
+        if [ -d "$SCRIPT_DIR/configs" ]; then
             rm -rf "$INSTALL_DIR/configs"
-            cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
+            cp -r "$SCRIPT_DIR/configs" "$INSTALL_DIR/"
             print_success "  Updated: configs/ (templates)"
         fi
         
         # Update documentation
-        if [ -d "$(dirname "$0")/docs" ]; then
+        if [ -d "$SCRIPT_DIR/docs" ]; then
             rm -rf "$INSTALL_DIR/docs"
-            cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
+            cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
             print_success "  Updated: docs/ (documentation)"
         fi
         
-        # Merge tools (don't overwrite user tools)
-        if [ -d "$(dirname "$0")/tools" ]; then
+        # Update tools
+        if [ -d "$SCRIPT_DIR/tools" ]; then
             mkdir -p "$INSTALL_DIR/tools"
-            cp "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
+            cp "$SCRIPT_DIR/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
             print_success "  Updated: tools/ (scripts)"
+        fi
+        
+        # Update serverexecutables (new jar files etc)
+        if [ -d "$SCRIPT_DIR/serverexecutables" ]; then
+            # Merge, don't replace - preserve any custom executables
+            cp -r "$SCRIPT_DIR/serverexecutables"/* "$INSTALL_DIR/serverexecutables/" 2>/dev/null || true
+            print_success "  Updated: serverexecutables/"
         fi
         
         print_success "Application files updated from local source"
     else
         print_info "Updating from GitHub..."
         cd "$INSTALL_DIR"
+        
+        # Stash any local changes
         git stash 2>/dev/null || true
-        git pull origin main
-        print_success "Application files updated from GitHub"
+        
+        # Pull latest changes
+        if git pull origin main; then
+            print_success "Application files updated from GitHub"
+        else
+            print_warning "Git pull had issues, trying reset..."
+            git fetch origin main
+            git reset --hard origin/main
+            print_success "Application files updated from GitHub (hard reset)"
+        fi
     fi
     
     # Restore all critical files from backup
@@ -532,6 +761,7 @@ do_update() {
         print_success "  Restored: ssl/ (certificates)"
     fi
     
+    # Cleanup temporary backup
     rm -rf "$backup_dir"
     
     cd "$INSTALL_DIR"
@@ -546,10 +776,7 @@ do_update() {
     # Fix permissions
     set_permissions
     
-    # Update Nginx configuration
-    configure_nginx
-    
-    # Update systemd service
+    # Update systemd service (in case of changes)
     print_info "Updating systemd service..."
     create_service
     
@@ -574,111 +801,11 @@ do_update() {
     fi
 }
 
-# Quick update (files only, no dependency reinstall - preserves configs)
-do_quick_update() {
-    print_header "Quick Update (Files Only)"
-    
-    # Check if installation exists
-    if [ ! -d "$INSTALL_DIR" ]; then
-        print_error "No existing installation found at $INSTALL_DIR"
-        echo "Please run a fresh installation first."
-        exit 1
-    fi
-    
-    # Check if SSL was previously enabled
-    if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
-        USE_SSL="true"
-        print_info "SSL configuration detected"
-    fi
-    
-    print_info "This quick update will:"
-    echo "  • Update application files ONLY"
-    echo "  • NOT reinstall Python dependencies"
-    echo "  • PRESERVE all configurations"
-    echo "  • PRESERVE user data and logs"
-    echo ""
-    
-    # Stop the service
-    print_info "Stopping MServerController service..."
-    systemctl stop mservercontroller 2>/dev/null || true
-    sleep 1
-    
-    # Update only application files (no backups needed - quick update)
-    if [ -f "$(dirname "$0")/server.py" ]; then
-        print_info "Updating application files..."
-        
-        # Core application files
-        cp "$(dirname "$0")/server.py" "$INSTALL_DIR/"
-        cp "$(dirname "$0")/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$(dirname "$0")/version" "$INSTALL_DIR/" 2>/dev/null || true
-        print_success "  Updated: version file"
-        
-        # Frontend files
-        if [ -d "$(dirname "$0")/public" ]; then
-            rm -rf "$INSTALL_DIR/public"
-            cp -r "$(dirname "$0")/public" "$INSTALL_DIR/"
-            print_success "  Updated: public/"
-        fi
-        
-        # Config templates
-        if [ -d "$(dirname "$0")/configs" ]; then
-            rm -rf "$INSTALL_DIR/configs"
-            cp -r "$(dirname "$0")/configs" "$INSTALL_DIR/"
-            print_success "  Updated: configs/"
-        fi
-        
-        # Documentation
-        if [ -d "$(dirname "$0")/docs" ]; then
-            rm -rf "$INSTALL_DIR/docs"
-            cp -r "$(dirname "$0")/docs" "$INSTALL_DIR/"
-            print_success "  Updated: docs/"
-        fi
-        
-        # Tools
-        if [ -d "$(dirname "$0")/tools" ]; then
-            mkdir -p "$INSTALL_DIR/tools"
-            cp "$(dirname "$0")/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
-            print_success "  Updated: tools/"
-        fi
-        
-        print_success "Application files updated"
-    else
-        print_info "Updating from GitHub (files only)..."
-        cd "$INSTALL_DIR"
-        git stash 2>/dev/null || true
-        git pull origin main
-        print_success "Application files updated from GitHub"
-    fi
-    
-    # Fix permissions
-    set_permissions
-    
-    # Restart services quickly without dependency reinstall
-    if restart_services; then
-        echo ""
-        print_success "Quick update complete!"
-        echo ""
-        echo "Summary:"
-        echo "  ✓ Application files updated"
-        echo "  ✓ All configurations preserved"
-        echo "  ✓ All user data preserved"
-        echo "  ✓ Service restarted"
-        echo ""
-        echo "Note: Python dependencies were NOT updated in quick mode."
-        echo "Run 'sudo $0 update' for a full update with dependency refresh."
-        echo ""
-    else
-        print_error "Quick update completed with warnings"
-        echo "Check logs with: sudo journalctl -u mservercontroller -xe"
-        exit 1
-    fi
-}
-
 # Dev mode - run locally without installing
 do_dev() {
     print_header "Development Mode"
     
-    SCRIPT_DIR="$(dirname "$0")"
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     
     if [ ! -f "$SCRIPT_DIR/server.py" ]; then
         print_error "server.py not found in current directory"
@@ -695,36 +822,41 @@ do_dev() {
     
     source venv/bin/activate
     
-    # Check if dependencies need to be installed
-    if ! pip show flask >/dev/null 2>&1; then
-        print_info "Installing Python dependencies..."
-        pip install --upgrade pip
-        pip install -r requirements.txt
-    fi
+    # Check if dependencies need to be installed or updated
+    print_info "Checking Python dependencies..."
+    pip install --upgrade pip -q
+    pip install -r requirements.txt -q
     
     # Create data directories if they don't exist
-    mkdir -p servers backups uploads
+    mkdir -p servers backups uploads serverexecutables
     
     echo ""
     print_success "Development environment ready!"
     echo ""
     echo "Starting MServerController in development mode..."
+    echo "Access at: http://localhost:3000"
     echo "Press Ctrl+C to stop"
     echo ""
     echo "=========================================="
     
     # Run the server
-    python server.py
+    python server.py --port 3000
 }
 
 # Uninstall
 do_uninstall() {
     print_header "Uninstall MServerController"
     
+    # Check if installation exists
+    if [ ! -d "$INSTALL_DIR" ]; then
+        print_warning "No installation found at $INSTALL_DIR"
+        echo "Nothing to uninstall."
+        exit 0
+    fi
+    
     echo "This will remove:"
     echo "  - The application at $INSTALL_DIR"
     echo "  - The systemd service"
-    echo "  - The Nginx configuration"
     echo ""
     print_warning "All server data, backups, and configurations will be DELETED!"
     echo ""
@@ -736,18 +868,32 @@ do_uninstall() {
         exit 0
     fi
     
+    # Double-check for servers data
+    if [ -d "$INSTALL_DIR/servers" ] && [ "$(ls -A "$INSTALL_DIR/servers" 2>/dev/null)" ]; then
+        echo ""
+        print_warning "Server data detected in $INSTALL_DIR/servers"
+        read -p "This will DELETE all server worlds and data! Type 'DELETE' to confirm: " confirm
+        if [ "$confirm" != "DELETE" ]; then
+            echo "Uninstall cancelled."
+            exit 0
+        fi
+    fi
+    
     print_info "Stopping services..."
     systemctl stop mservercontroller 2>/dev/null || true
     systemctl disable mservercontroller 2>/dev/null || true
     
+    # Clean up nginx configuration if it exists
+    if [ -f "/etc/nginx/sites-enabled/mservercontroller" ]; then
+        print_info "Removing Nginx configuration..."
+        rm -f /etc/nginx/sites-enabled/mservercontroller
+        rm -f /etc/nginx/sites-available/mservercontroller
+        systemctl reload nginx 2>/dev/null || true
+    fi
+    
     print_info "Removing systemd service..."
     rm -f /etc/systemd/system/mservercontroller.service
     systemctl daemon-reload
-    
-    print_info "Removing Nginx configuration..."
-    rm -f /etc/nginx/sites-enabled/mservercontroller
-    rm -f /etc/nginx/sites-available/mservercontroller
-    systemctl reload nginx 2>/dev/null || true
     
     print_info "Removing application files..."
     rm -rf "$INSTALL_DIR"
@@ -765,21 +911,31 @@ do_status() {
     if [ -d "$INSTALL_DIR" ]; then
         print_success "Installation found at $INSTALL_DIR"
         
-        # Check for SSL
+        # Show version if available
+        if [ -f "$INSTALL_DIR/version" ]; then
+            echo "  Version: $(cat \"$INSTALL_DIR/version\")"
+        fi
+        
+        # Check for SSL and Nginx
         if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
-            echo "  SSL: Enabled"
+            if [ -f "/etc/nginx/sites-enabled/mservercontroller" ]; then
+                echo "  Mode: HTTPS via Nginx reverse proxy"
+            else
+                echo "  Mode: HTTPS direct (app handles SSL)"
+            fi
         else
-            echo "  SSL: Disabled"
+            echo "  Mode: HTTP (no encryption)"
         fi
     else
         print_warning "No installation found at $INSTALL_DIR"
+        return
     fi
     
     echo ""
     
     # Check service status
     echo "Service Status:"
-    if systemctl is-active --quiet mservercontroller; then
+    if systemctl is-active --quiet mservercontroller 2>/dev/null; then
         print_success "MServerController service is running"
     else
         print_warning "MServerController service is not running"
@@ -791,21 +947,22 @@ do_status() {
         print_warning "Service is not enabled"
     fi
     
-    echo ""
-    
-    # Check Nginx
-    echo "Nginx Status:"
-    if systemctl is-active --quiet nginx; then
-        print_success "Nginx is running"
-    else
-        print_warning "Nginx is not running"
+    # Check nginx status if site is configured
+    if [ -f "/etc/nginx/sites-enabled/mservercontroller" ]; then
+        echo ""
+        echo "Nginx Status:"
+        if systemctl is-active --quiet nginx 2>/dev/null; then
+            print_success "Nginx is running"
+        else
+            print_warning "Nginx is not running"
+        fi
     fi
     
     echo ""
     
     # Show config info if exists
     if [ -f "$INSTALL_DIR/config.json" ]; then
-        SERVER_COUNT=$(grep -o '"[a-f0-9]\{8\}"' "$INSTALL_DIR/config.json" 2>/dev/null | wc -l || echo "0")
+        SERVER_COUNT=$(grep -c '"name"' "$INSTALL_DIR/config.json" 2>/dev/null || echo "0")
         echo "Configured servers: $SERVER_COUNT"
     fi
     
@@ -814,8 +971,12 @@ do_status() {
         echo ""
         echo "Disk Usage:"
         du -sh "$INSTALL_DIR" 2>/dev/null || true
-        du -sh "$INSTALL_DIR/servers" 2>/dev/null || true
-        du -sh "$INSTALL_DIR/backups" 2>/dev/null || true
+        if [ -d "$INSTALL_DIR/servers" ]; then
+            du -sh "$INSTALL_DIR/servers" 2>/dev/null || true
+        fi
+        if [ -d "$INSTALL_DIR/backups" ]; then
+            du -sh "$INSTALL_DIR/backups" 2>/dev/null || true
+        fi
     fi
     
     echo ""
@@ -830,7 +991,6 @@ show_usage() {
     echo "Options:"
     echo "  install       Fresh installation (default if no option given)"
     echo "  update        Update existing installation (preserves data)"
-    echo "  quick-update  Quick update (files only, faster for dev testing)"
     echo "  dev           Run in development mode (no installation)"
     echo "  status        Show installation status"
     echo "  uninstall     Remove MServerController completely"
@@ -839,8 +999,8 @@ show_usage() {
     echo "Examples:"
     echo "  sudo $0 install        # Fresh installation"
     echo "  sudo $0 update         # Update to latest version"
-    echo "  sudo $0 quick-update   # Quick file update for testing"
     echo "  $0 dev                 # Run locally for development"
+    echo "  $0 status              # Check installation status"
     echo ""
 }
 
@@ -850,7 +1010,10 @@ show_menu() {
     
     # Check if already installed
     if [ -d "$INSTALL_DIR" ]; then
-        echo "Existing installation detected at $INSTALL_DIR"
+        print_info "Existing installation detected at $INSTALL_DIR"
+        if [ -f "$INSTALL_DIR/version" ]; then
+            echo "  Version: $(cat "$INSTALL_DIR/version")"
+        fi
         echo ""
     fi
     
@@ -858,22 +1021,20 @@ show_menu() {
     echo ""
     echo "  1) Fresh Install      - Complete new installation"
     echo "  2) Update             - Update existing installation (preserves data)"
-    echo "  3) Quick Update       - Update files only (fast, for dev testing)"
-    echo "  4) Development Mode   - Run locally without installing"
-    echo "  5) Status             - Show installation status"
-    echo "  6) Uninstall          - Remove MServerController"
-    echo "  7) Exit"
+    echo "  3) Development Mode   - Run locally without installing"
+    echo "  4) Status             - Show installation status"
+    echo "  5) Uninstall          - Remove MServerController"
+    echo "  6) Exit"
     echo ""
-    read -p "Enter your choice [1-7]: " choice
+    read -p "Enter your choice [1-6]: " choice
     
     case $choice in
         1) check_root; do_install ;;
         2) check_root; do_update ;;
-        3) check_root; do_quick_update ;;
-        4) do_dev ;;
-        5) do_status ;;
-        6) check_root; do_uninstall ;;
-        7) echo "Goodbye!"; exit 0 ;;
+        3) do_dev ;;
+        4) do_status ;;
+        5) check_root; do_uninstall ;;
+        6) echo "Goodbye!"; exit 0 ;;
         *) print_error "Invalid option"; exit 1 ;;
     esac
 }
@@ -888,10 +1049,6 @@ main() {
         update)
             check_root
             do_update
-            ;;
-        quick-update|quickupdate|quick)
-            check_root
-            do_quick_update
             ;;
         dev|development)
             do_dev

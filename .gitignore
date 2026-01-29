@@ -17,6 +17,8 @@ uploads/
 backups/
 servers/
 config.json
+api_keys.json
+api_stats.json
 
 # Logs
 *.log

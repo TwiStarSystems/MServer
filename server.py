@@ -3178,6 +3178,10 @@ backup_scheduler = BackupScheduler()
 # Initialize task scheduler
 task_scheduler = TaskScheduler(server_manager, socketio)
 
+# Initialize API Manager
+from api_manager import init_api_manager
+init_api_manager(app)
+
 
 def is_safe_path(base_path, requested_path):
     """Check if the requested path is within the base path (prevent directory traversal)"""
