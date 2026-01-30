@@ -300,6 +300,83 @@
               </label>
             </div>
           </div>
+          
+          <div class="settings-card">
+            <h3>📧 Email / SMTP Configuration</h3>
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Enable Email Notifications</label>
+                <small>Send email notifications for backups, alerts, and other events</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="smtp-enabled" onchange="toggleSmtpFields(); saveSmtpSettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            
+            <div id="smtp-config-section" class="smtp-config-section" style="display: none;">
+              <div class="form-row">
+                <div class="form-group half">
+                  <label for="smtp-host">SMTP Host</label>
+                  <input type="text" id="smtp-host" class="form-control" placeholder="smtp.example.com">
+                </div>
+                <div class="form-group half">
+                  <label for="smtp-port">SMTP Port</label>
+                  <input type="number" id="smtp-port" class="form-control" placeholder="587" value="587">
+                </div>
+              </div>
+              
+              <div class="settings-option">
+                <div class="settings-option-info">
+                  <label>Use TLS/STARTTLS</label>
+                  <small>Enable secure connection (recommended)</small>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="smtp-secure" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              
+              <div class="form-row">
+                <div class="form-group half">
+                  <label for="smtp-username">SMTP Username</label>
+                  <input type="text" id="smtp-username" class="form-control" placeholder="username@example.com">
+                </div>
+                <div class="form-group half">
+                  <label for="smtp-password">SMTP Password</label>
+                  <input type="password" id="smtp-password" class="form-control" placeholder="••••••••">
+                </div>
+              </div>
+              
+              <div class="form-row">
+                <div class="form-group half">
+                  <label for="smtp-from-email">From Email</label>
+                  <input type="email" id="smtp-from-email" class="form-control" placeholder="noreply@example.com">
+                </div>
+                <div class="form-group half">
+                  <label for="smtp-from-name">From Name</label>
+                  <input type="text" id="smtp-from-name" class="form-control" placeholder="MServerController">
+                </div>
+              </div>
+              
+              <div class="smtp-actions">
+                <button type="button" class="btn btn-primary" onclick="saveSmtpSettings()">💾 Save SMTP Settings</button>
+              </div>
+              
+              <hr class="divider">
+              
+              <h4>Test Email Configuration</h4>
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label for="smtp-test-email">Test Email Address</label>
+                  <input type="email" id="smtp-test-email" class="form-control" placeholder="your@email.com">
+                </div>
+                <div class="form-group" style="display: flex; align-items: flex-end;">
+                  <button type="button" class="btn btn-secondary" onclick="testSmtpSettings()">📧 Send Test Email</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
         
         <!-- Tools Section -->
@@ -472,6 +549,11 @@
           <input type="text" id="new-username" class="form-control" required minlength="3" maxlength="32" placeholder="Enter username">
         </div>
         <div class="form-group">
+          <label for="new-email">Email <span class="optional-label">(Optional)</span></label>
+          <input type="email" id="new-email" class="form-control" placeholder="user@example.com">
+          <small class="form-hint">Used for notifications if SMTP is configured.</small>
+        </div>
+        <div class="form-group">
           <label for="new-password">Password</label>
           <input type="password" id="new-password" class="form-control" required minlength="6" placeholder="Enter password">
         </div>
@@ -488,6 +570,218 @@
           <button type="submit" class="btn btn-success">Create User</button>
         </div>
       </form>
+    </div>
+  </div>
+  
+  <!-- User Profile Settings Modal -->
+  <div id="profile-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>👤 Profile Settings</h2>
+        <button class="btn-icon modal-close" onclick="closeProfileModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Current Profile Info Display -->
+        <div class="profile-info-display">
+          <div class="profile-info-row">
+            <span class="profile-info-label">Username:</span>
+            <span class="profile-info-value" id="profile-display-username">admin</span>
+          </div>
+          <div class="profile-info-row">
+            <span class="profile-info-label">Role:</span>
+            <span class="profile-info-value profile-role-badge" id="profile-display-role">USER</span>
+          </div>
+        </div>
+        
+        <hr class="divider">
+        
+        <h3>📝 Edit Profile</h3>
+        <div class="form-group">
+          <label for="profile-username">Username (Login)</label>
+          <input type="text" id="profile-username" class="form-control" placeholder="username">
+          <small class="form-hint">3-32 characters. Letters, numbers, underscores, and hyphens only.</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="profile-name">Display Name <span class="optional-label">(Optional)</span></label>
+          <input type="text" id="profile-name" class="form-control" placeholder="John Doe">
+          <small class="form-hint">Your full name or display name. This is optional.</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="profile-email">Email <span class="optional-label">(Optional)</span></label>
+          <input type="email" id="profile-email" class="form-control" placeholder="you@example.com">
+          <small class="form-hint">Used for notifications if SMTP is configured.</small>
+        </div>
+        
+        <hr class="divider">
+        
+        <h3>🔑 Change Password</h3>
+        <div class="form-group">
+          <label for="profile-old-password">Current Password</label>
+          <input type="password" id="profile-old-password" class="form-control" placeholder="••••••••">
+        </div>
+        
+        <div class="form-group">
+          <label for="profile-new-password">New Password</label>
+          <input type="password" id="profile-new-password" class="form-control" placeholder="••••••••">
+          <small class="form-hint">Minimum 6 characters</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="profile-confirm-password">Confirm New Password</label>
+          <input type="password" id="profile-confirm-password" class="form-control" placeholder="••••••••">
+        </div>
+        
+        <hr class="divider">
+        
+        <h3>🔐 Two-Factor Authentication (TOTP)</h3>
+        <div id="mfa-status-section">
+          <div id="mfa-disabled-view">
+            <p class="mfa-info">Add an extra layer of security to your account with TOTP-based two-factor authentication.</p>
+            <button class="btn btn-primary" onclick="setupMFA()">Enable MFA</button>
+          </div>
+          
+          <div id="mfa-enabled-view" style="display: none;">
+            <p class="mfa-info success-text">✓ Two-factor authentication is enabled on your account.</p>
+            <button class="btn btn-danger" onclick="disableMFA()">Disable MFA</button>
+          </div>
+        </div>
+        
+        <!-- MFA Setup Section (hidden by default) -->
+        <div id="mfa-setup-section" style="display: none;">
+          <div class="mfa-setup-step">
+            <h4>Step 1: Scan QR Code</h4>
+            <div class="qr-code-container">
+              <img id="mfa-qr-code" src="" alt="QR Code" class="qr-code">
+            </div>
+            <p class="mfa-info">Scan this QR code with your authenticator app (Google Authenticator, Authy, Microsoft Authenticator, etc.)</p>
+          </div>
+          
+          <div class="mfa-setup-step">
+            <h4>Step 2: Manual Entry (Alternative)</h4>
+            <div class="form-group">
+              <label for="mfa-secret-text">Secret Key</label>
+              <div class="input-group">
+                <input type="text" id="mfa-secret-text" class="form-control" readonly>
+                <button class="btn btn-secondary btn-small" onclick="copyMFASecret()">Copy</button>
+              </div>
+              <small class="form-hint">Enter this key manually if you can't scan the QR code.</small>
+            </div>
+          </div>
+          
+          <div class="mfa-setup-step">
+            <h4>Step 3: Verify Code</h4>
+            <div class="form-group">
+              <label for="mfa-verify-code">Enter 6-digit code from your authenticator app</label>
+              <input type="text" id="mfa-verify-code" class="form-control" placeholder="123456" maxlength="6" pattern="[0-9]{6}">
+            </div>
+            <button class="btn btn-success" onclick="verifyMFACode()">Verify & Enable</button>
+            <button class="btn" onclick="cancelMFASetup()">Cancel</button>
+          </div>
+        </div>
+        
+        <!-- MFA Recovery Code Section (hidden by default) -->
+        <div id="mfa-recovery-section" style="display: none;">
+          <div class="mfa-recovery-box">
+            <h4>⚠️ Important: Save Your Recovery Code</h4>
+            <p class="mfa-info">This recovery code can be used to access your account if you lose access to your authenticator app. Save it in a safe place!</p>
+            
+            <div class="recovery-code-display">
+              <code id="mfa-recovery-code">XXXXXXXX-XXXXXXXX-XXXXXXXX</code>
+              <button class="btn btn-secondary btn-small" onclick="copyRecoveryCode()">Copy</button>
+            </div>
+            
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="mfa-recovery-confirm">
+                I copied my recovery code and stored it safely
+              </label>
+            </div>
+            
+            <button class="btn btn-success" onclick="completeMFASetup()" disabled id="mfa-complete-btn">Complete Setup</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveProfileSettings()">Save Changes</button>
+        <button class="btn btn-secondary" onclick="changePassword()">Change Password</button>
+        <button class="btn" onclick="closeProfileModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Edit User Modal (Admin) -->
+  <div id="edit-user-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>✏️ Edit User</h2>
+        <button class="btn-icon modal-close" onclick="closeEditUserModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Current User Info Display -->
+        <div class="profile-info-display">
+          <div class="profile-info-row">
+            <span class="profile-info-label">Username:</span>
+            <span class="profile-info-value" id="edit-user-display-username">username</span>
+          </div>
+          <div class="profile-info-row">
+            <span class="profile-info-label">Role:</span>
+            <span class="profile-info-value profile-role-badge" id="edit-user-display-role">USER</span>
+          </div>
+        </div>
+        
+        <hr class="divider">
+        
+        <h3>📝 Edit Account</h3>
+        <div class="form-group">
+          <label for="edit-user-username">Username (Login)</label>
+          <input type="text" id="edit-user-username" class="form-control" placeholder="username">
+          <small class="form-hint">3-32 characters. Letters, numbers, underscores, and hyphens only.</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-user-name">Display Name <span class="optional-label">(Optional)</span></label>
+          <input type="text" id="edit-user-name" class="form-control" placeholder="John Doe">
+          <small class="form-hint">The user's full name or display name.</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-user-email">Email <span class="optional-label">(Optional)</span></label>
+          <input type="email" id="edit-user-email" class="form-control" placeholder="user@example.com">
+          <small class="form-hint">Used for notifications if SMTP is configured.</small>
+        </div>
+        
+        <div class="form-group">
+          <label for="edit-user-role">Role</label>
+          <select id="edit-user-role" class="form-control">
+            <option value="public">Public</option>
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
+          <small class="form-hint">User's permission level.</small>
+        </div>
+        
+        <hr class="divider">
+        
+        <h3>🔑 Reset Password</h3>
+        <div class="form-group">
+          <label for="edit-user-new-password">New Password <span class="optional-label">(Leave blank to keep current)</span></label>
+          <input type="password" id="edit-user-new-password" class="form-control" placeholder="••••••••">
+          <small class="form-hint">Minimum 6 characters. Leave empty to keep the current password.</small>
+        </div>
+        
+        <hr class="divider">
+        
+        <h3>🔐 Two-Factor Authentication</h3>
+        <div id="edit-user-mfa-status">
+          <p class="mfa-info">Loading MFA status...</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveEditUser()">Save Changes</button>
+        <button class="btn" onclick="closeEditUserModal()">Cancel</button>
+      </div>
     </div>
   </div>
   

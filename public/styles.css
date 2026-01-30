@@ -1864,6 +1864,19 @@ select.form-control:disabled {
   color: white;
 }
 
+/* ==================== Utility Classes ==================== */
+
+.text-muted {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.optional-label {
+  color: #6b7280;
+  font-weight: normal;
+  font-size: 0.9em;
+}
+
 /* ==================== Admin Panel ==================== */
 
 .modal-large {
@@ -3629,7 +3642,7 @@ select.form-control:disabled {
   padding: 12px;
   background: #1e1e2e;
   border: 1px solid #333;
-  border-radius: 8px;
+  border-radius: 0px;
   color: #e0e0e0;
   font-size: 1rem;
 }
@@ -3730,7 +3743,7 @@ select.form-control:disabled {
   padding: 14px;
   background: linear-gradient(135deg, #4caf50, #2e7d32);
   border: none;
-  border-radius: 8px;
+  border-radius: 0px;
   color: white;
   font-size: 1rem;
   font-weight: 600;
@@ -3754,7 +3767,7 @@ select.form-control:disabled {
   border: 1px solid #f44336;
   color: #f44336;
   padding: 12px 16px;
-  border-radius: 8px;
+  border-radius: 0px;
   margin-bottom: 20px;
   display: none;
 }
@@ -3768,7 +3781,7 @@ select.form-control:disabled {
   border: 1px solid #4caf50;
   color: #4caf50;
   padding: 12px 16px;
-  border-radius: 8px;
+  border-radius: 0px;
   margin-bottom: 20px;
   display: none;
 }
@@ -3835,7 +3848,7 @@ select.form-control:disabled {
   width: 100%;
   padding: 12px 16px;
   border: 1px solid #333;
-  border-radius: 8px;
+  border-radius: 0px;
   background: #2a2a3e;
   color: #fff;
   font-size: 1rem;
@@ -4041,7 +4054,7 @@ select.form-control:disabled {
   border: 1px solid #333;
   color: #aaa;
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: 0px;
   cursor: pointer;
   transition: all 0.2s;
   margin-top: 20px;
@@ -4263,6 +4276,47 @@ select.form-control:disabled {
 .settings-option-info small {
   font-size: 0.85rem;
   color: #888;
+}
+
+/* SMTP Configuration Section */
+.smtp-config-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #333;
+}
+
+.smtp-config-section h4 {
+  margin: 20px 0 15px 0;
+  color: #e2e8f0;
+  font-size: 1rem;
+}
+
+.smtp-config-section .form-row {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.smtp-config-section .form-group.half {
+  flex: 1;
+}
+
+.smtp-config-section .divider {
+  margin: 25px 0;
+  border: none;
+  border-top: 1px solid #333;
+}
+
+.smtp-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.smtp-actions .btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Toggle Switch */

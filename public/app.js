@@ -155,6 +155,7 @@ function openProfileSettings() {
     // Populate editable fields
     document.getElementById('profile-username').value = currentUser.username;
     document.getElementById('profile-name').value = currentUser.name || '';
+    document.getElementById('profile-email').value = currentUser.email || '';
     
     // Clear password fields
     document.getElementById('profile-old-password').value = '';
@@ -180,6 +181,7 @@ function closeProfileModal() {
 async function saveProfileSettings() {
   const username = document.getElementById('profile-username').value.trim();
   const name = document.getElementById('profile-name').value.trim();
+  const email = document.getElementById('profile-email').value.trim();
   
   if (!username) {
     showNotification('Username is required', 'error');
@@ -221,6 +223,24 @@ async function saveProfileSettings() {
       }
       
       currentUser.name = name;
+    }
+    
+    // Update email if changed
+    if (email !== (currentUser.email || '')) {
+      const emailResponse = await fetch('/api/auth/profile/email', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      
+      const emailData = await emailResponse.json();
+      
+      if (!emailResponse.ok) {
+        showNotification(emailData.error || 'Failed to update email', 'error');
+        return;
+      }
+      
+      currentUser.email = email;
     }
     
     showNotification('Profile updated successfully', 'success');

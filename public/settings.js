@@ -119,6 +119,7 @@ function updateUserUI() {
         <span class="user-role ${currentUser.role}">${currentUser.role}</span>
       </div>
       <div class="user-actions">
+        <button class="btn-icon" onclick="openProfileSettings()" title="Profile Settings">⚙️</button>
         <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
       </div>
     `;
@@ -159,6 +160,328 @@ async function logout() {
     console.error('Logout error:', err);
   }
   window.location.href = '/login.html';
+}
+
+// ==================== Profile Settings ====================
+
+let currentMFASecret = null;
+let currentRecoveryCode = null;
+
+function openProfileSettings() {
+  try {
+    // Populate profile display section (read-only)
+    document.getElementById('profile-display-username').textContent = currentUser.username;
+    const roleDisplay = document.getElementById('profile-display-role');
+    roleDisplay.textContent = currentUser.role.toUpperCase();
+    roleDisplay.className = 'profile-info-value profile-role-badge ' + currentUser.role;
+    
+    // Populate editable fields
+    document.getElementById('profile-username').value = currentUser.username;
+    document.getElementById('profile-name').value = currentUser.name || '';
+    document.getElementById('profile-email').value = currentUser.email || '';
+    
+    // Clear password fields
+    document.getElementById('profile-old-password').value = '';
+    document.getElementById('profile-new-password').value = '';
+    document.getElementById('profile-confirm-password').value = '';
+    
+    // Update MFA status
+    updateMFAStatus();
+    
+    // Show modal
+    document.getElementById('profile-modal').style.display = 'flex';
+  } catch (err) {
+    console.error('Error opening profile settings:', err);
+    // Still show the modal even if there's an error
+    document.getElementById('profile-modal').style.display = 'flex';
+  }
+}
+
+function closeProfileModal() {
+  document.getElementById('profile-modal').style.display = 'none';
+}
+
+async function saveProfileSettings() {
+  const username = document.getElementById('profile-username').value.trim();
+  const name = document.getElementById('profile-name').value.trim();
+  const email = document.getElementById('profile-email').value.trim();
+  
+  if (!username) {
+    showNotification('Username is required', 'error');
+    return;
+  }
+  
+  try {
+    // Update username if changed
+    if (username !== currentUser.username) {
+      const usernameResponse = await fetch('/api/auth/profile/username', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+      });
+      
+      const usernameData = await usernameResponse.json();
+      
+      if (!usernameResponse.ok) {
+        showNotification(usernameData.error || 'Failed to update username', 'error');
+        return;
+      }
+      
+      currentUser.username = username;
+    }
+    
+    // Update name if changed
+    if (name !== (currentUser.name || '')) {
+      const nameResponse = await fetch('/api/auth/profile/name', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      
+      const nameData = await nameResponse.json();
+      
+      if (!nameResponse.ok) {
+        showNotification(nameData.error || 'Failed to update name', 'error');
+        return;
+      }
+      
+      currentUser.name = name;
+    }
+    
+    // Update email if changed
+    if (email !== (currentUser.email || '')) {
+      const emailResponse = await fetch('/api/auth/profile/email', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      
+      const emailData = await emailResponse.json();
+      
+      if (!emailResponse.ok) {
+        showNotification(emailData.error || 'Failed to update email', 'error');
+        return;
+      }
+      
+      currentUser.email = email;
+    }
+    
+    showNotification('Profile updated successfully', 'success');
+    updateUserUI();
+    closeProfileModal();
+  } catch (err) {
+    showNotification('Failed to update profile: ' + err.message, 'error');
+  }
+}
+
+async function changePassword() {
+  const oldPassword = document.getElementById('profile-old-password').value;
+  const newPassword = document.getElementById('profile-new-password').value;
+  const confirmPassword = document.getElementById('profile-confirm-password').value;
+  
+  // Validation
+  if (!oldPassword || !newPassword || !confirmPassword) {
+    showNotification('All password fields are required', 'error');
+    return;
+  }
+  
+  if (newPassword !== confirmPassword) {
+    showNotification('New passwords do not match', 'error');
+    return;
+  }
+  
+  if (newPassword.length < 6) {
+    showNotification('New password must be at least 6 characters', 'error');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        oldPassword,
+        newPassword
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to change password', 'error');
+      return;
+    }
+    
+    showNotification('Password changed successfully', 'success');
+    
+    // Clear password fields
+    document.getElementById('profile-old-password').value = '';
+    document.getElementById('profile-new-password').value = '';
+    document.getElementById('profile-confirm-password').value = '';
+  } catch (err) {
+    showNotification('Failed to change password: ' + err.message, 'error');
+  }
+}
+
+// ==================== MFA Functions ====================
+
+function updateMFAStatus() {
+  if (!currentUser) {
+    console.warn('currentUser not defined yet');
+    return;
+  }
+  
+  const mfaEnabled = currentUser.mfaEnabled === true;
+  
+  const mfaDisabledView = document.getElementById('mfa-disabled-view');
+  const mfaEnabledView = document.getElementById('mfa-enabled-view');
+  const mfaSetupSection = document.getElementById('mfa-setup-section');
+  const mfaRecoverySection = document.getElementById('mfa-recovery-section');
+  
+  if (mfaDisabledView) mfaDisabledView.style.display = mfaEnabled ? 'none' : 'block';
+  if (mfaEnabledView) mfaEnabledView.style.display = mfaEnabled ? 'block' : 'none';
+  if (mfaSetupSection) mfaSetupSection.style.display = 'none';
+  if (mfaRecoverySection) mfaRecoverySection.style.display = 'none';
+}
+
+async function setupMFA() {
+  try {
+    const response = await fetch('/api/auth/mfa/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to setup MFA', 'error');
+      return;
+    }
+    
+    currentMFASecret = data.secret;
+    
+    // Display QR code
+    document.getElementById('mfa-qr-code').src = data.qrCode;
+    document.getElementById('mfa-secret-text').value = data.manualEntry;
+    
+    // Show setup section
+    document.getElementById('mfa-status-section').style.display = 'none';
+    document.getElementById('mfa-setup-section').style.display = 'block';
+    document.getElementById('mfa-verify-code').value = '';
+  } catch (err) {
+    showNotification('Failed to setup MFA: ' + err.message, 'error');
+  }
+}
+
+function copyMFASecret() {
+  const secretInput = document.getElementById('mfa-secret-text');
+  secretInput.select();
+  document.execCommand('copy');
+  showNotification('Secret copied to clipboard', 'success');
+}
+
+async function verifyMFACode() {
+  const code = document.getElementById('mfa-verify-code').value.trim();
+  
+  if (!code || code.length !== 6) {
+    showNotification('Please enter a 6-digit code', 'error');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/auth/mfa/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: currentMFASecret,
+        code: code
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Invalid verification code', 'error');
+      return;
+    }
+    
+    currentRecoveryCode = data.recoveryCode;
+    
+    // Show recovery code
+    document.getElementById('mfa-recovery-code').textContent = currentRecoveryCode;
+    document.getElementById('mfa-setup-section').style.display = 'none';
+    document.getElementById('mfa-recovery-section').style.display = 'block';
+    
+    // Enable complete button when checkbox is checked
+    document.getElementById('mfa-recovery-confirm').addEventListener('change', (e) => {
+      document.getElementById('mfa-complete-btn').disabled = !e.target.checked;
+    });
+  } catch (err) {
+    showNotification('Failed to verify code: ' + err.message, 'error');
+  }
+}
+
+function copyRecoveryCode() {
+  const code = document.getElementById('mfa-recovery-code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    showNotification('Recovery code copied to clipboard', 'success');
+  }).catch(() => {
+    // Fallback for older browsers
+    const textarea = document.createElement('textarea');
+    textarea.value = code;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    showNotification('Recovery code copied to clipboard', 'success');
+  });
+}
+
+function completeMFASetup() {
+  showNotification('MFA has been enabled successfully!', 'success');
+  currentUser.mfaEnabled = true;
+  
+  // Reset view
+  document.getElementById('mfa-recovery-section').style.display = 'none';
+  document.getElementById('mfa-status-section').style.display = 'block';
+  document.getElementById('mfa-recovery-confirm').checked = false;
+  updateMFAStatus();
+  
+  currentMFASecret = null;
+  currentRecoveryCode = null;
+}
+
+function cancelMFASetup() {
+  document.getElementById('mfa-setup-section').style.display = 'none';
+  document.getElementById('mfa-status-section').style.display = 'block';
+  currentMFASecret = null;
+}
+
+async function disableMFA() {
+  const password = prompt('Enter your password to disable MFA:');
+  
+  if (!password) return;
+  
+  try {
+    const response = await fetch('/api/auth/mfa/disable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to disable MFA', 'error');
+      return;
+    }
+    
+    showNotification('MFA has been disabled', 'success');
+    currentUser.mfaEnabled = false;
+    updateMFAStatus();
+  } catch (err) {
+    showNotification('Failed to disable MFA: ' + err.message, 'error');
+  }
 }
 
 // ==================== Stats Functions ====================
@@ -1326,7 +1649,10 @@ async function loadUsers() {
           <thead>
             <tr>
               <th>Username</th>
+              <th>Display Name</th>
+              <th>Email</th>
               <th>Role</th>
+              <th>MFA</th>
               <th>Created</th>
               <th>Last Login</th>
               <th>Actions</th>
@@ -1336,17 +1662,15 @@ async function loadUsers() {
             ${approvedUsers.map(u => `
               <tr>
                 <td>${escapeHtml(u.username)}</td>
+                <td>${u.name ? escapeHtml(u.name) : '<span class="text-muted">Not set</span>'}</td>
+                <td>${u.email ? escapeHtml(u.email) : '<span class="text-muted">Not set</span>'}</td>
                 <td><span class="role-badge ${u.role}">${u.role}</span></td>
+                <td>${u.mfaEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-secondary">Disabled</span>'}</td>
                 <td>${new Date(u.created).toLocaleDateString()}</td>
                 <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
                 <td class="user-mgmt-actions">
-                  <select onchange="changeUserRole('${u.id}', this.value)">
-                    <option value="public" ${u.role === 'public' ? 'selected' : ''}>Public</option>
-                    <option value="user" ${u.role === 'user' ? 'selected' : ''}>User</option>
-                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
-                  </select>
-                  <button class="btn btn-small" onclick="resetUserPassword('${u.id}')">Reset PW</button>
-                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">Delete</button>
+                  <button class="btn btn-small btn-primary" onclick="openEditUserModal('${u.id}')">✏️ Edit</button>
+                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">🗑️</button>
                 </td>
               </tr>
             `).join('')}
@@ -1615,6 +1939,183 @@ async function deleteUser(userId, username) {
   }
 }
 
+// ==================== Edit User Functions ====================
+
+let editingUserId = null;
+
+async function openEditUserModal(userId) {
+  try {
+    const response = await fetch(`/api/admin/users/${userId}`);
+    if (!response.ok) throw new Error('Failed to load user');
+    
+    const data = await response.json();
+    const user = data.user;
+    
+    editingUserId = userId;
+    
+    // Populate the modal fields
+    document.getElementById('edit-user-display-username').textContent = user.username;
+    const roleDisplay = document.getElementById('edit-user-display-role');
+    roleDisplay.textContent = user.role.toUpperCase();
+    roleDisplay.className = 'profile-info-value profile-role-badge ' + user.role;
+    
+    document.getElementById('edit-user-username').value = user.username;
+    document.getElementById('edit-user-name').value = user.name || '';
+    document.getElementById('edit-user-email').value = user.email || '';
+    document.getElementById('edit-user-role').value = user.role;
+    
+    // Update MFA status display
+    const mfaStatusContainer = document.getElementById('edit-user-mfa-status');
+    if (user.mfaEnabled) {
+      mfaStatusContainer.innerHTML = `
+        <p class="mfa-info success-text">✓ Two-factor authentication is enabled on this account.</p>
+        <button class="btn btn-danger" onclick="clearUserMFA('${userId}')">Clear MFA</button>
+      `;
+    } else {
+      mfaStatusContainer.innerHTML = `
+        <p class="mfa-info">Two-factor authentication is not enabled on this account.</p>
+      `;
+    }
+    
+    // Clear password field
+    document.getElementById('edit-user-new-password').value = '';
+    
+    // Show modal
+    document.getElementById('edit-user-modal').style.display = 'flex';
+  } catch (err) {
+    console.error('Failed to load user:', err);
+    alert('Failed to load user: ' + err.message);
+  }
+}
+
+function closeEditUserModal() {
+  document.getElementById('edit-user-modal').style.display = 'none';
+  editingUserId = null;
+}
+
+async function saveEditUser() {
+  if (!editingUserId) return;
+  
+  const username = document.getElementById('edit-user-username').value.trim();
+  const name = document.getElementById('edit-user-name').value.trim();
+  const email = document.getElementById('edit-user-email').value.trim();
+  const role = document.getElementById('edit-user-role').value;
+  const newPassword = document.getElementById('edit-user-new-password').value;
+  
+  if (!username) {
+    showNotification('Username is required', 'error');
+    return;
+  }
+  
+  try {
+    // Update username
+    const usernameResponse = await fetch(`/api/admin/users/${editingUserId}/username`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username })
+    });
+    
+    if (!usernameResponse.ok) {
+      const data = await usernameResponse.json();
+      showNotification(data.error || 'Failed to update username', 'error');
+      return;
+    }
+    
+    // Update name
+    const nameResponse = await fetch(`/api/admin/users/${editingUserId}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    
+    if (!nameResponse.ok) {
+      const data = await nameResponse.json();
+      showNotification(data.error || 'Failed to update display name', 'error');
+      return;
+    }
+    
+    // Update email
+    const emailResponse = await fetch(`/api/admin/users/${editingUserId}/email`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    
+    if (!emailResponse.ok) {
+      const data = await emailResponse.json();
+      showNotification(data.error || 'Failed to update email', 'error');
+      return;
+    }
+    
+    // Update role
+    const roleResponse = await fetch(`/api/admin/users/${editingUserId}/role`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role })
+    });
+    
+    if (!roleResponse.ok) {
+      const data = await roleResponse.json();
+      showNotification(data.error || 'Failed to update role', 'error');
+      return;
+    }
+    
+    // Update password if provided
+    if (newPassword) {
+      if (newPassword.length < 6) {
+        showNotification('Password must be at least 6 characters', 'error');
+        return;
+      }
+      
+      const passwordResponse = await fetch(`/api/admin/users/${editingUserId}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPassword })
+      });
+      
+      if (!passwordResponse.ok) {
+        const data = await passwordResponse.json();
+        showNotification(data.error || 'Failed to reset password', 'error');
+        return;
+      }
+    }
+    
+    showNotification('User updated successfully', 'success');
+    closeEditUserModal();
+    loadUsers();
+  } catch (err) {
+    console.error('Failed to update user:', err);
+    showNotification('Failed to update user: ' + err.message, 'error');
+  }
+}
+
+async function clearUserMFA(userId) {
+  if (!confirm('Are you sure you want to clear MFA for this user? They will need to set it up again.')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/admin/users/${userId}/mfa`, {
+      method: 'DELETE'
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to clear MFA', 'error');
+      return;
+    }
+    
+    showNotification('MFA cleared successfully', 'success');
+    
+    // Refresh the modal to show updated MFA status
+    openEditUserModal(userId);
+  } catch (err) {
+    console.error('Failed to clear MFA:', err);
+    showNotification('Failed to clear MFA: ' + err.message, 'error');
+  }
+}
+
 // ==================== Add User Functions ====================
 
 function openAddUserModal() {
@@ -1631,6 +2132,7 @@ async function createUser(event) {
   event.preventDefault();
   
   const username = document.getElementById('new-username').value.trim();
+  const email = document.getElementById('new-email').value.trim();
   const password = document.getElementById('new-password').value;
   const role = document.getElementById('new-role').value;
   
@@ -1643,7 +2145,7 @@ async function createUser(event) {
     const response = await fetch('/api/admin/users', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, role })
+      body: JSON.stringify({ username, email, password, role })
     });
     
     const data = await response.json();
@@ -1655,6 +2157,12 @@ async function createUser(event) {
     alert('User created successfully!');
     closeAddUserModal();
     loadUsers();
+    
+    // Clear the form
+    document.getElementById('new-username').value = '';
+    document.getElementById('new-email').value = '';
+    document.getElementById('new-password').value = '';
+    document.getElementById('new-role').value = 'user';
   } catch (err) {
     console.error('Failed to create user:', err);
     alert('Failed to create user: ' + err.message);
@@ -1681,8 +2189,44 @@ async function loadAppSettings() {
       document.getElementById('require-mfa-admins').checked = mfaSettings.requireMfaForAdmins ?? false;
       document.getElementById('require-mfa-all').checked = mfaSettings.requireMfaForAllUsers ?? false;
     }
+    
+    // Load SMTP settings
+    await loadSmtpSettings();
   } catch (err) {
     console.error('Failed to load app settings:', err);
+  }
+}
+
+async function loadSmtpSettings() {
+  try {
+    const response = await fetch('/api/settings/smtp');
+    if (response.ok) {
+      const smtp = await response.json();
+      
+      document.getElementById('smtp-enabled').checked = smtp.enabled ?? false;
+      document.getElementById('smtp-host').value = smtp.host ?? '';
+      document.getElementById('smtp-port').value = smtp.port ?? 587;
+      document.getElementById('smtp-secure').checked = smtp.secure ?? true;
+      document.getElementById('smtp-username').value = smtp.username ?? '';
+      // Password is not returned from API for security, only show placeholder if configured
+      document.getElementById('smtp-password').value = '';
+      document.getElementById('smtp-password').placeholder = smtp.host ? '••••••••' : 'Password';
+      document.getElementById('smtp-from-email').value = smtp.fromEmail ?? '';
+      document.getElementById('smtp-from-name').value = smtp.fromName ?? '';
+      
+      toggleSmtpFields();
+    }
+  } catch (err) {
+    console.error('Failed to load SMTP settings:', err);
+  }
+}
+
+function toggleSmtpFields() {
+  const enabled = document.getElementById('smtp-enabled').checked;
+  const smtpConfigSection = document.getElementById('smtp-config-section');
+  
+  if (smtpConfigSection) {
+    smtpConfigSection.style.display = enabled ? 'block' : 'none';
   }
 }
 
@@ -1722,6 +2266,104 @@ async function saveAppSettings() {
   } catch (err) {
     console.error('Failed to save app settings:', err);
     alert('Failed to save settings: ' + err.message);
+  }
+}
+
+async function saveSmtpSettings() {
+  const smtpSettings = {
+    enabled: document.getElementById('smtp-enabled').checked,
+    host: document.getElementById('smtp-host').value.trim(),
+    port: parseInt(document.getElementById('smtp-port').value) || 587,
+    secure: document.getElementById('smtp-secure').checked,
+    username: document.getElementById('smtp-username').value.trim(),
+    fromEmail: document.getElementById('smtp-from-email').value.trim(),
+    fromName: document.getElementById('smtp-from-name').value.trim()
+  };
+  
+  // Only include password if it was changed (not empty)
+  const password = document.getElementById('smtp-password').value;
+  if (password) {
+    smtpSettings.password = password;
+  }
+  
+  // Validate required fields if SMTP is enabled
+  if (smtpSettings.enabled) {
+    if (!smtpSettings.host) {
+      showNotification('SMTP host is required', 'error');
+      return;
+    }
+    if (!smtpSettings.fromEmail) {
+      showNotification('From email is required', 'error');
+      return;
+    }
+  }
+  
+  try {
+    const response = await fetch('/api/settings/smtp', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(smtpSettings)
+    });
+    
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Failed to save SMTP settings');
+    }
+    
+    showNotification('SMTP settings saved successfully', 'success');
+    
+    // Clear password field after save
+    document.getElementById('smtp-password').value = '';
+    document.getElementById('smtp-password').placeholder = smtpSettings.host ? '••••••••' : 'Password';
+  } catch (err) {
+    console.error('Failed to save SMTP settings:', err);
+    showNotification('Failed to save SMTP settings: ' + err.message, 'error');
+  }
+}
+
+async function testSmtpSettings() {
+  const testEmail = document.getElementById('smtp-test-email')?.value.trim();
+  
+  if (!testEmail) {
+    showNotification('Please enter a test email address', 'error');
+    return;
+  }
+  
+  // Basic email validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(testEmail)) {
+    showNotification('Please enter a valid email address', 'error');
+    return;
+  }
+  
+  const testBtn = document.querySelector('.smtp-actions button');
+  if (testBtn) {
+    testBtn.disabled = true;
+    testBtn.textContent = 'Sending...';
+  }
+  
+  try {
+    const response = await fetch('/api/settings/smtp/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: testEmail })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to send test email');
+    }
+    
+    showNotification('Test email sent successfully! Check your inbox.', 'success');
+  } catch (err) {
+    console.error('Failed to send test email:', err);
+    showNotification('Failed to send test email: ' + err.message, 'error');
+  } finally {
+    if (testBtn) {
+      testBtn.disabled = false;
+      testBtn.textContent = '📧 Send Test Email';
+    }
   }
 }
 

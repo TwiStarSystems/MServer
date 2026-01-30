@@ -24,6 +24,9 @@ import pyotp
 import qrcode
 import argparse
 import sys
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from enum import Enum
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -207,6 +210,16 @@ class SettingsManager:
         'mfa': {
             'requireMfaForAdmins': False,
             'requireMfaForAllUsers': False
+        },
+        'smtp': {
+            'enabled': False,
+            'host': '',
+            'port': 587,
+            'secure': True,
+            'username': '',
+            'password': '',
+            'fromEmail': '',
+            'fromName': 'MServerController'
         }
     }
     
@@ -272,6 +285,158 @@ class SettingsManager:
         
         self._save_settings()
         return self.settings['app']
+    
+    def get_smtp_settings(self):
+        """Get SMTP settings (without password for security)"""
+        smtp = self.settings.get('smtp', self.DEFAULT_SETTINGS['smtp']).copy()
+        # Don't expose the password
+        if 'password' in smtp:
+            smtp['password'] = '********' if smtp['password'] else ''
+        return smtp
+    
+    def get_smtp_settings_full(self):
+        """Get full SMTP settings including password (for internal use)"""
+        return self.settings.get('smtp', self.DEFAULT_SETTINGS['smtp'])
+    
+    def update_smtp_settings(self, smtp_data):
+        """Update SMTP settings"""
+        if 'smtp' not in self.settings:
+            self.settings['smtp'] = self.DEFAULT_SETTINGS['smtp'].copy()
+        
+        for key in ['enabled', 'host', 'port', 'secure', 'username', 'fromEmail', 'fromName']:
+            if key in smtp_data:
+                self.settings['smtp'][key] = smtp_data[key]
+        
+        # Only update password if it's not the placeholder
+        if 'password' in smtp_data and smtp_data['password'] != '********':
+            self.settings['smtp']['password'] = smtp_data['password']
+        
+        self._save_settings()
+        return self.get_smtp_settings()
+    
+    def is_smtp_configured(self):
+        """Check if SMTP is properly configured"""
+        smtp = self.settings.get('smtp', {})
+        return (
+            smtp.get('enabled', False) and
+            smtp.get('host') and
+            smtp.get('fromEmail')
+        )
+
+
+# ==================== Email Service ====================
+
+class EmailService:
+    """Handles email sending via SMTP"""
+    
+    def __init__(self, settings_manager):
+        self.settings_manager = settings_manager
+    
+    def send_email(self, to_email, subject, html_content, text_content=None):
+        """Send an email using configured SMTP settings"""
+        if not self.settings_manager.is_smtp_configured():
+            return False, "SMTP is not configured"
+        
+        smtp_settings = self.settings_manager.get_smtp_settings_full()
+        
+        try:
+            # Create message
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = f"{smtp_settings['fromName']} <{smtp_settings['fromEmail']}>"
+            msg['To'] = to_email
+            
+            # Add text part
+            if text_content:
+                msg.attach(MIMEText(text_content, 'plain'))
+            
+            # Add HTML part
+            msg.attach(MIMEText(html_content, 'html'))
+            
+            # Connect to SMTP server
+            if smtp_settings.get('secure', True):
+                server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'])
+                server.starttls()
+            else:
+                server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'])
+            
+            # Login if credentials provided
+            if smtp_settings.get('username') and smtp_settings.get('password'):
+                server.login(smtp_settings['username'], smtp_settings['password'])
+            
+            # Send email
+            server.sendmail(smtp_settings['fromEmail'], to_email, msg.as_string())
+            server.quit()
+            
+            return True, "Email sent successfully"
+        except smtplib.SMTPAuthenticationError:
+            return False, "SMTP authentication failed"
+        except smtplib.SMTPException as e:
+            return False, f"SMTP error: {str(e)}"
+        except Exception as e:
+            return False, f"Failed to send email: {str(e)}"
+    
+    def send_backup_notification(self, to_email, server_name, backup_name, success=True, error_message=None):
+        """Send backup completion notification"""
+        site_title = self.settings_manager.get_branding().get('siteTitle', 'MServerController')
+        
+        if success:
+            subject = f"[{site_title}] Backup Complete: {server_name}"
+            html_content = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background-color: #1a1a2e; color: #e0e0e0; padding: 20px;">
+                <div style="max-width: 600px; margin: 0 auto; background-color: #16213e; border-radius: 8px; padding: 30px;">
+                    <h2 style="color: #10b981; margin-top: 0;">✅ Backup Completed Successfully</h2>
+                    <p style="margin: 10px 0;"><strong>Server:</strong> {server_name}</p>
+                    <p style="margin: 10px 0;"><strong>Backup Name:</strong> {backup_name}</p>
+                    <p style="margin: 10px 0;"><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    <hr style="border: 1px solid #333; margin: 20px 0;">
+                    <p style="color: #888; font-size: 12px;">This is an automated notification from {site_title}.</p>
+                </div>
+            </body>
+            </html>
+            """
+            text_content = f"Backup Completed Successfully\nServer: {server_name}\nBackup: {backup_name}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        else:
+            subject = f"[{site_title}] Backup Failed: {server_name}"
+            html_content = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background-color: #1a1a2e; color: #e0e0e0; padding: 20px;">
+                <div style="max-width: 600px; margin: 0 auto; background-color: #16213e; border-radius: 8px; padding: 30px;">
+                    <h2 style="color: #ef4444; margin-top: 0;">❌ Backup Failed</h2>
+                    <p style="margin: 10px 0;"><strong>Server:</strong> {server_name}</p>
+                    <p style="margin: 10px 0;"><strong>Error:</strong> {error_message or 'Unknown error'}</p>
+                    <p style="margin: 10px 0;"><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    <hr style="border: 1px solid #333; margin: 20px 0;">
+                    <p style="color: #888; font-size: 12px;">This is an automated notification from {site_title}.</p>
+                </div>
+            </body>
+            </html>
+            """
+            text_content = f"Backup Failed\nServer: {server_name}\nError: {error_message or 'Unknown error'}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        return self.send_email(to_email, subject, html_content, text_content)
+    
+    def send_test_email(self, to_email):
+        """Send a test email to verify SMTP configuration"""
+        site_title = self.settings_manager.get_branding().get('siteTitle', 'MServerController')
+        subject = f"[{site_title}] Test Email"
+        html_content = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; background-color: #1a1a2e; color: #e0e0e0; padding: 20px;">
+            <div style="max-width: 600px; margin: 0 auto; background-color: #16213e; border-radius: 8px; padding: 30px;">
+                <h2 style="color: #667eea; margin-top: 0;">🎮 {site_title} - Test Email</h2>
+                <p>This is a test email to verify your SMTP configuration is working correctly.</p>
+                <p style="margin: 10px 0;"><strong>Sent at:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <hr style="border: 1px solid #333; margin: 20px 0;">
+                <p style="color: #10b981;">✅ If you're reading this, your email settings are configured correctly!</p>
+            </div>
+        </body>
+        </html>
+        """
+        text_content = f"{site_title} - Test Email\n\nThis is a test email to verify your SMTP configuration is working correctly.\n\nSent at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\nIf you're reading this, your email settings are configured correctly!"
+        
+        return self.send_email(to_email, subject, html_content, text_content)
 
 
 # ==================== System Stats Manager ====================
@@ -1073,6 +1238,7 @@ class UserManager:
                 'password': generate_password_hash('admin'),
                 'role': 'admin',
                 'name': '',
+                'email': 'admin@example.com',
                 'mfaEnabled': False,
                 'mfaSecret': None,
                 'mfaRecoveryCode': None,
@@ -1274,7 +1440,7 @@ An emergency admin account has been created:
             
             return True, "Account enabled successfully"
     
-    def create_user(self, username, password, role='user'):
+    def create_user(self, username, password, role='user', email=''):
         """Create a user directly (admin function, auto-approved)"""
         with self.lock:
             # Check if username exists
@@ -1302,6 +1468,7 @@ An emergency admin account has been created:
                 'password': generate_password_hash(password),
                 'role': role,
                 'name': '',
+                'email': email,
                 'mfaEnabled': False,
                 'mfaSecret': None,
                 'mfaRecoveryCode': None,
@@ -1315,6 +1482,23 @@ An emergency admin account has been created:
     def get_user(self, user_id):
         """Get user by ID"""
         return self.users.get('users', {}).get(user_id)
+    
+    def get_user_by_id(self, user_id):
+        """Get user by ID with safe data (for admin panel)"""
+        user = self.users.get('users', {}).get(user_id)
+        if not user:
+            return None
+        return {
+            'id': user_id,
+            'username': user['username'],
+            'name': user.get('name', ''),
+            'email': user.get('email', ''),
+            'role': user['role'],
+            'mfaEnabled': user.get('mfaEnabled', False),
+            'approved': user.get('approved', False),
+            'created': user.get('created'),
+            'lastLogin': user.get('lastLogin')
+        }
     
     def get_user_by_username(self, username):
         """Get user by username"""
@@ -1331,7 +1515,9 @@ An emergency admin account has been created:
                 'id': user_id,
                 'username': user['username'],
                 'name': user.get('name', ''),
+                'email': user.get('email', ''),
                 'role': user['role'],
+                'mfaEnabled': user.get('mfaEnabled', False),
                 'approved': user.get('approved', False),
                 'created': user.get('created'),
                 'lastLogin': user.get('lastLogin')
@@ -1547,6 +1733,25 @@ An emergency admin account has been created:
             self._save_users()
             return True, "Name updated successfully"
     
+    def update_email(self, user_id, email):
+        """Update user's email address"""
+        with self.lock:
+            user = self.users.get('users', {}).get(user_id)
+            if not user:
+                return False, "User not found"
+            
+            # Validate email (basic validation, optional field)
+            if email and len(email) > 254:
+                return False, "Email must be 254 characters or less"
+            
+            # Basic email format check if provided
+            if email and '@' not in email:
+                return False, "Invalid email format"
+            
+            self.users['users'][user_id]['email'] = email
+            self._save_users()
+            return True, "Email updated successfully"
+    
     def generate_mfa_secret(self, user_id):
         """Generate a new TOTP secret for user"""
         user = self.users.get('users', {}).get(user_id)
@@ -1622,6 +1827,7 @@ An emergency admin account has been created:
 settings_manager = SettingsManager()
 user_manager = UserManager()
 stats_manager = StatsManager()
+email_service = EmailService(settings_manager)
 
 
 # ==================== Authentication Decorators ====================
@@ -3335,6 +3541,7 @@ def api_current_user():
         'id': user_id,
         'username': user['username'],
         'name': user.get('name', ''),
+        'email': user.get('email', ''),
         'role': user['role'],
         'mfaEnabled': user.get('mfaEnabled', False)
     })
@@ -3388,6 +3595,22 @@ def api_update_name():
     name = data.get('name', '').strip()
     
     success, message = user_manager.update_name(user_id, name)
+    
+    if not success:
+        return jsonify({'error': message}), 400
+    
+    return jsonify({'success': True, 'message': message})
+
+@app.route('/api/auth/profile/email', methods=['PUT'])
+@login_required
+def api_update_email():
+    """Update current user's email address"""
+    user_id = session.get('user_id')
+    data = request.get_json()
+    
+    email = data.get('email', '').strip()
+    
+    success, message = user_manager.update_email(user_id, email)
     
     if not success:
         return jsonify({'error': message}), 400
@@ -3577,6 +3800,7 @@ def api_create_user():
     username = data.get('username', '').strip()
     password = data.get('password', '')
     role = data.get('role', 'user')
+    email = data.get('email', '').strip()
     
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
@@ -3584,7 +3808,7 @@ def api_create_user():
     if role not in ['admin', 'user', 'public']:
         return jsonify({'error': 'Invalid role'}), 400
     
-    user_id, message = user_manager.create_user(username, password, role)
+    user_id, message = user_manager.create_user(username, password, role, email)
     
     if not user_id:
         return jsonify({'error': message}), 400
@@ -3652,6 +3876,54 @@ def api_enable_user_account(user_id):
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 404
+
+@app.route('/api/admin/users/<user_id>', methods=['GET'])
+@admin_required
+def api_get_user(user_id):
+    """Get a specific user's details (admin only)"""
+    user = user_manager.get_user_by_id(user_id)
+    if user:
+        return jsonify({'user': user})
+    return jsonify({'error': 'User not found'}), 404
+
+@app.route('/api/admin/users/<user_id>/username', methods=['PUT'])
+@admin_required
+def api_admin_update_username(user_id):
+    """Update a user's username (admin only)"""
+    data = request.get_json()
+    new_username = data.get('username', '').strip()
+    
+    if not new_username:
+        return jsonify({'error': 'Username required'}), 400
+    
+    success, message = user_manager.update_username(user_id, new_username)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 400
+
+@app.route('/api/admin/users/<user_id>/name', methods=['PUT'])
+@admin_required
+def api_admin_update_name(user_id):
+    """Update a user's display name (admin only)"""
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    
+    success, message = user_manager.update_name(user_id, name)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 400
+
+@app.route('/api/admin/users/<user_id>/email', methods=['PUT'])
+@admin_required
+def api_admin_update_email(user_id):
+    """Update a user's email address (admin only)"""
+    data = request.get_json()
+    email = data.get('email', '').strip()
+    
+    success, message = user_manager.update_email(user_id, email)
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 400
 
 @app.route('/api/admin/users/<user_id>', methods=['DELETE'])
 @admin_required
@@ -5544,6 +5816,36 @@ def update_mfa_settings():
     
     settings_manager.update_settings({'mfa': mfa_settings})
     return jsonify({'success': True, 'settings': mfa_settings})
+
+@app.route('/api/settings/smtp', methods=['GET'])
+@admin_required
+def get_smtp_settings():
+    """Get SMTP settings (admin only)"""
+    return jsonify(settings_manager.get_smtp_settings())
+
+@app.route('/api/settings/smtp', methods=['PUT'])
+@admin_required
+def update_smtp_settings():
+    """Update SMTP settings (admin only)"""
+    data = request.get_json()
+    smtp_settings = settings_manager.update_smtp_settings(data)
+    return jsonify({'success': True, 'settings': smtp_settings})
+
+@app.route('/api/settings/smtp/test', methods=['POST'])
+@admin_required
+def test_smtp_settings():
+    """Send a test email to verify SMTP configuration"""
+    data = request.get_json()
+    to_email = data.get('email')
+    
+    if not to_email:
+        return jsonify({'error': 'Email address required'}), 400
+    
+    success, message = email_service.send_test_email(to_email)
+    
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 400
 
 
 # ==================== System Stats API ====================
