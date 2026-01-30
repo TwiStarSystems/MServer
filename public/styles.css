@@ -2601,6 +2601,18 @@ select.form-control:disabled {
   color: #e6edf3;
 }
 
+.type-version-count {
+  font-size: 0.8rem;
+  color: #8b949e;
+  margin-left: 5px;
+}
+
+.versions-panel-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 .versions-panel-body {
   padding: 20px;
 }
@@ -2647,11 +2659,83 @@ select.form-control:disabled {
   background: #1f2937;
 }
 
+.version-item.downloaded {
+  border-color: #238636;
+  background: rgba(35, 134, 54, 0.1);
+}
+
+.version-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .version-number {
   font-weight: 600;
   color: #e6edf3;
   font-family: 'Monaco', 'Menlo', monospace;
   font-size: 0.9rem;
+}
+
+.downloaded-badge {
+  font-size: 0.75rem;
+  color: #3fb950;
+  background: rgba(63, 185, 80, 0.15);
+  padding: 3px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.btn-secondary {
+  background: #30363d;
+  color: #e6edf3;
+  border: 1px solid #484f58;
+}
+
+.btn-secondary:hover {
+  background: #484f58;
+  border-color: #6e7681;
+}
+
+/* Bulk Download Styles */
+.bulk-download-status {
+  padding: 15px;
+  background: #0d1117;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+}
+
+.bulk-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.bulk-current {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  color: #58a6ff;
+}
+
+.bulk-log {
+  margin-top: 15px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.bulk-log .log-success {
+  color: #3fb950;
+  padding: 3px 0;
+}
+
+.bulk-log .log-error {
+  color: #f85149;
+  padding: 3px 0;
 }
 
 /* Download Progress Panel */

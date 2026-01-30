@@ -619,6 +619,7 @@ let selectedServerType = null;
 let selectedServerTypeInfo = null;
 let allVersions = [];
 let activeDownloads = {};
+let downloadedVersions = {};  // Track which versions are already downloaded
 
 async function loadJarBucketTypes() {
   try {
@@ -695,11 +696,38 @@ async function selectServerType(typeId, typeInfo) {
   versionsList.innerHTML = '<div class="loading-text">Loading versions...</div>';
   
   try {
-    const response = await fetch(`/api/jar-bucket/versions/${typeId}`);
-    if (!response.ok) throw new Error('Failed to load versions');
+    // Fetch both versions and downloaded files in parallel
+    const [versionsResponse, downloadedResponse] = await Promise.all([
+      fetch(`/api/jar-bucket/versions/${typeId}`),
+      fetch('/api/jar-bucket/list')
+    ]);
     
-    const data = await response.json();
-    allVersions = data.versions || [];
+    if (!versionsResponse.ok) throw new Error('Failed to load versions');
+    
+    const versionsData = await versionsResponse.json();
+    allVersions = versionsData.versions || [];
+    
+    // Build set of downloaded versions for this type
+    downloadedVersions = {};
+    if (downloadedResponse.ok) {
+      const downloadedData = await downloadedResponse.json();
+      const typeJars = downloadedData.jars?.[typeId];
+      if (typeJars && typeJars.files) {
+        for (const file of typeJars.files) {
+          if (file.version) {
+            downloadedVersions[file.version] = file;
+          }
+        }
+      }
+    }
+    
+    // Update version count
+    const countEl = document.getElementById('selected-type-count');
+    if (countEl) {
+      const downloadedCount = Object.keys(downloadedVersions).length;
+      countEl.textContent = `(${allVersions.length} available, ${downloadedCount} downloaded)`;
+    }
+    
     renderVersions(allVersions);
   } catch (err) {
     versionsList.innerHTML = `<div class="error-text">Failed to load versions: ${err.message}</div>`;
@@ -714,14 +742,22 @@ function renderVersions(versions) {
     return;
   }
   
-  versionsList.innerHTML = versions.map(version => `
-    <div class="version-item">
-      <span class="version-number">${escapeHtml(version)}</span>
-      <button class="btn btn-small btn-success" onclick="downloadJarVersion('${selectedServerType}', '${escapeHtml(version)}')">
-        📥 Download
-      </button>
-    </div>
-  `).join('');
+  versionsList.innerHTML = versions.map(version => {
+    const isDownloaded = downloadedVersions[version];
+    const downloadedFile = isDownloaded ? downloadedVersions[version] : null;
+    
+    return `
+      <div class="version-item ${isDownloaded ? 'downloaded' : ''}">
+        <div class="version-info">
+          <span class="version-number">${escapeHtml(version)}</span>
+          ${isDownloaded ? `<span class="downloaded-badge" title="${escapeHtml(downloadedFile?.filename || '')}">✓ Downloaded</span>` : ''}
+        </div>
+        <button class="btn btn-small ${isDownloaded ? 'btn-secondary' : 'btn-success'}" onclick="downloadJarVersion('${selectedServerType}', '${escapeHtml(version)}')">
+          ${isDownloaded ? '🔄 Re-download' : '📥 Download'}
+        </button>
+      </div>
+    `;
+  }).join('');
 }
 
 function filterVersions() {
@@ -735,6 +771,115 @@ function closeVersionsPanel() {
   selectedServerType = null;
   selectedServerTypeInfo = null;
   allVersions = [];
+  downloadedVersions = {};
+}
+
+async function downloadAllVersions() {
+  if (!selectedServerType || !allVersions.length) {
+    alert('No versions to download');
+    return;
+  }
+  
+  // Filter to only non-downloaded versions
+  const toDownload = allVersions.filter(v => !downloadedVersions[v]);
+  
+  if (toDownload.length === 0) {
+    alert('All versions are already downloaded!');
+    return;
+  }
+  
+  const confirmMsg = `Download ${toDownload.length} version(s) of ${selectedServerTypeInfo?.name || selectedServerType}?\n\nThis may take a while and use significant disk space.`;
+  if (!confirm(confirmMsg)) return;
+  
+  const progressPanel = document.getElementById('jar-download-progress-panel');
+  const progressContent = document.getElementById('jar-download-progress-content');
+  
+  progressPanel.style.display = 'block';
+  progressContent.innerHTML = `
+    <div class="bulk-download-status">
+      <div class="bulk-progress-header">
+        <span>Downloading ${selectedServerTypeInfo?.name || selectedServerType}</span>
+        <span id="bulk-progress-count">0 / ${toDownload.length}</span>
+      </div>
+      <div class="progress-bar">
+        <div id="bulk-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+      </div>
+      <div id="bulk-progress-current" class="bulk-current">Starting...</div>
+      <div id="bulk-progress-log" class="bulk-log"></div>
+    </div>
+  `;
+  
+  let completed = 0;
+  let failed = 0;
+  const logEl = document.getElementById('bulk-progress-log');
+  
+  for (const version of toDownload) {
+    document.getElementById('bulk-progress-current').textContent = `Downloading: ${version}`;
+    
+    try {
+      const response = await fetch('/api/jar-bucket/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: selectedServerType, version })
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.progress_id) {
+        // Wait for download to complete
+        await waitForDownload(data.progress_id);
+        completed++;
+        logEl.innerHTML = `<div class="log-success">✅ ${version}</div>` + logEl.innerHTML;
+      } else {
+        failed++;
+        logEl.innerHTML = `<div class="log-error">❌ ${version}: ${data.error || 'Failed'}</div>` + logEl.innerHTML;
+      }
+    } catch (err) {
+      failed++;
+      logEl.innerHTML = `<div class="log-error">❌ ${version}: ${err.message}</div>` + logEl.innerHTML;
+    }
+    
+    // Update progress
+    const total = completed + failed;
+    const percent = Math.round((total / toDownload.length) * 100);
+    document.getElementById('bulk-progress-count').textContent = `${total} / ${toDownload.length}`;
+    document.getElementById('bulk-progress-bar').style.width = `${percent}%`;
+  }
+  
+  document.getElementById('bulk-progress-current').textContent = `Complete! ${completed} succeeded, ${failed} failed.`;
+  
+  // Refresh the downloaded list
+  loadJarBucketDownloaded();
+  
+  // Refresh the versions panel to update downloaded status
+  if (selectedServerType && selectedServerTypeInfo) {
+    selectServerType(selectedServerType, selectedServerTypeInfo);
+  }
+}
+
+async function waitForDownload(progressId, maxWaitMs = 300000) {
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    try {
+      const response = await fetch(`/api/jar-bucket/progress/${progressId}`);
+      const data = await response.json();
+      
+      if (data.status === 'complete') {
+        if (data.success) return true;
+        throw new Error(data.error || 'Download failed');
+      } else if (data.status === 'error') {
+        throw new Error(data.error || 'Download failed');
+      }
+      
+      // Still downloading, wait and check again
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (err) {
+      throw err;
+    }
+  }
+  
+  throw new Error('Download timeout');
 }
 
 async function downloadJarVersion(serverType, version) {

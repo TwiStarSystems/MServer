@@ -363,8 +363,12 @@
                     <div class="selected-type-info">
                       <span id="selected-type-icon" class="type-icon"></span>
                       <span id="selected-type-name" class="type-name"></span>
+                      <span id="selected-type-count" class="type-version-count"></span>
                     </div>
-                    <button class="btn btn-small" onclick="closeVersionsPanel()">✕ Close</button>
+                    <div class="versions-panel-actions">
+                      <button class="btn btn-small btn-success" onclick="downloadAllVersions()" title="Download all versions">📥 Download All</button>
+                      <button class="btn btn-small" onclick="closeVersionsPanel()">✕ Close</button>
+                    </div>
                   </div>
                   <div class="versions-panel-body">
                     <div class="version-search">
