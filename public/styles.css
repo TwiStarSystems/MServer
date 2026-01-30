@@ -800,18 +800,23 @@ body {
   border-color: #667eea;
 }
 
+
 .property-textarea {
   width: 100%;
+  min-width: 350px;
+  max-width: none;
   padding: 10px;
   background: #0b1929;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 0;
   color: #e0e0e0;
   font-size: 14px;
   font-family: 'Courier New', monospace;
   transition: border-color 0.2s;
-  resize: vertical;
+  resize: none;
   min-height: 50px;
+  align-self: flex-end;
+  margin-left: 40px;
 }
 
 .property-textarea:focus {
@@ -845,9 +850,12 @@ body {
 /* Toggle Switch Styles (Check/X style) */
 .toggle-switch {
   position: relative;
-  display: inline-block;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
   width: 80px;
   height: 36px;
+  margin-left: 40px;
 }
 
 .toggle-switch input {
@@ -1344,6 +1352,24 @@ select.form-control:disabled {
 }
 
 /* ==================== Forms ==================== */
+
+.form-group-header {
+  padding: 15px 25px 10px;
+  border-top: 1px solid #0f3460;
+  margin-top: 15px;
+}
+
+.form-group-header h4 {
+  margin: 0 0 5px 0;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.form-group-header small {
+  color: #888;
+  font-size: 12px;
+}
 
 .form-group {
   padding: 0 25px;

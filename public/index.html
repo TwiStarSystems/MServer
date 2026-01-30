@@ -584,6 +584,47 @@
             </div>
           </div>
           
+          <div id="server-properties-group" style="display: none;">
+            <div class="form-group-header">
+              <h4>🎮 Server Properties</h4>
+              <small>These settings will be saved to server.properties</small>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group half">
+                <label for="fresh-server-port">Server Port:</label>
+                <input type="number" id="fresh-server-port" class="form-control" value="25565" min="1" max="65535">
+                <small>Default: 25565 (1-65535)</small>
+              </div>
+              <div class="form-group half">
+                <label for="fresh-max-players">Max Players:</label>
+                <input type="number" id="fresh-max-players" class="form-control" value="20" min="1" max="100">
+                <small>Maximum players (1-100)</small>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group half">
+                <label for="fresh-gamemode">Game Mode:</label>
+                <select id="fresh-gamemode" class="form-control">
+                  <option value="survival" selected>Survival</option>
+                  <option value="creative">Creative</option>
+                  <option value="adventure">Adventure</option>
+                  <option value="spectator">Spectator</option>
+                </select>
+              </div>
+              <div class="form-group half">
+                <label for="fresh-difficulty">Difficulty:</label>
+                <select id="fresh-difficulty" class="form-control">
+                  <option value="peaceful">Peaceful</option>
+                  <option value="easy" selected>Easy</option>
+                  <option value="normal">Normal</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          
           <div class="form-group" id="upload-jar-group" style="display: none;">
             <label>
               <input type="checkbox" id="fresh-upload-jar" onchange="toggleCustomJarUpload()"> Upload my own JAR file instead

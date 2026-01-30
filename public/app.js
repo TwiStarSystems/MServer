@@ -1120,12 +1120,19 @@ async function openAddServerModal() {
   document.getElementById('fresh-upload-jar').checked = false;
   document.getElementById('custom-jar-upload').style.display = 'none';
   
+  // Reset server properties fields
+  document.getElementById('fresh-server-port').value = '25565';
+  document.getElementById('fresh-max-players').value = '20';
+  document.getElementById('fresh-gamemode').value = 'survival';
+  document.getElementById('fresh-difficulty').value = 'easy';
+  
   // Hide conditional fields
   document.getElementById('engine-group').style.display = 'none';
   document.getElementById('version-group').style.display = 'none';
   document.getElementById('jar-name-group').style.display = 'none';
   document.getElementById('ram-fields-group').style.display = 'none';
   document.getElementById('upload-jar-group').style.display = 'none';
+  document.getElementById('server-properties-group').style.display = 'none';
   
   // Reset download status UI
   const downloadStatusGroup = document.getElementById('download-status-group');
@@ -1235,6 +1242,7 @@ function onCategoryChange() {
     jarNameGroup.style.display = 'none';
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
+    document.getElementById('server-properties-group').style.display = 'none';
     categoryDesc.textContent = 'Choose whether you want a vanilla or modded server';
     return;
   }
@@ -1246,6 +1254,7 @@ function onCategoryChange() {
     jarNameGroup.style.display = 'block';
     ramFieldsGroup.style.display = 'block';
     uploadJarGroup.style.display = 'block';
+    document.getElementById('server-properties-group').style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft server - no mods or plugins';
     
     // Load vanilla versions from JAR Bucket
@@ -1257,6 +1266,7 @@ function onCategoryChange() {
     jarNameGroup.style.display = 'none';
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
+    document.getElementById('server-properties-group').style.display = 'none';
     categoryDesc.textContent = 'Supports plugins and/or mods';
     
     // Reset engine and version
@@ -1330,6 +1340,7 @@ async function loadVersions() {
     jarNameGroup.style.display = 'none';
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
+    document.getElementById('server-properties-group').style.display = 'none';
     engineDesc.textContent = '';
     return;
   }
@@ -1343,6 +1354,7 @@ async function loadVersions() {
   jarNameGroup.style.display = 'block';
   ramFieldsGroup.style.display = 'block';
   uploadJarGroup.style.display = 'block';
+  document.getElementById('server-properties-group').style.display = 'block';
   
   await loadVersionsForEngine(serverEngine);
 }
@@ -1546,6 +1558,12 @@ async function createFreshServer(e) {
   const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
   const uploadCustom = document.getElementById('fresh-upload-jar').checked;
   
+  // Server properties
+  const serverPort = parseInt(document.getElementById('fresh-server-port').value) || 25565;
+  const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('fresh-max-players').value) || 20));
+  const gamemode = document.getElementById('fresh-gamemode').value || 'survival';
+  const difficulty = document.getElementById('fresh-difficulty').value || 'easy';
+  
   // Check JAR availability - automatically download if not available
   const versionInfo = versionAvailability[version] || {};
   const needsDownload = !versionInfo.downloaded;
@@ -1630,7 +1648,13 @@ async function createFreshServer(e) {
           executable,
           javaArgs,
           category,
-          serverEngine: 'custom'
+          serverEngine: 'custom',
+          serverProperties: {
+            'server-port': serverPort,
+            'max-players': maxPlayers,
+            'gamemode': gamemode,
+            'difficulty': difficulty
+          }
         })
       });
       
@@ -1747,7 +1771,13 @@ async function createFreshServer(e) {
             category,
             serverEngine,
             version,
-            downloadJar: true  // Copy from local repo
+            downloadJar: true,  // Copy from local repo
+            serverProperties: {
+              'server-port': serverPort,
+              'max-players': maxPlayers,
+              'gamemode': gamemode,
+              'difficulty': difficulty
+            }
           })
         });
       } catch (createErr) {
@@ -1792,7 +1822,13 @@ async function createFreshServer(e) {
             category,
             serverEngine,
             version,
-            downloadJar: true
+            downloadJar: true,
+            serverProperties: {
+              'server-port': serverPort,
+              'max-players': maxPlayers,
+              'gamemode': gamemode,
+              'difficulty': difficulty
+            }
           })
         });
       } catch (createErr) {
