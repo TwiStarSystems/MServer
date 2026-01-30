@@ -524,27 +524,11 @@
             <small id="version-description" class="type-desc">Select the Minecraft version</small>
           </div>
           
-          <div class="form-group" id="jar-source-group" style="display: none;">
-            <label>JAR Source:</label>
-            <div class="jar-source-options">
-              <label class="jar-source-option">
-                <input type="radio" name="jar-source" value="local" id="jar-source-local" checked onchange="onJarSourceChange()">
-                <span class="option-label">Use Downloaded JAR</span>
-                <span class="option-desc">Use an already downloaded JAR from local repository</span>
-              </label>
-              <label class="jar-source-option">
-                <input type="radio" name="jar-source" value="bucket" id="jar-source-bucket" onchange="onJarSourceChange()">
-                <span class="option-label">Download from JAR Bucket</span>
-                <span class="option-desc">Download JAR on-demand if not already available</span>
-              </label>
-            </div>
-          </div>
-          
           <div id="download-status-group" class="form-group" style="display: none;">
             <div id="jar-download-status" class="jar-download-status">
               <div class="download-info"></div>
               <div class="download-progress" style="display: none;">
-                <div class="progress-bar"><div class="progress-fill"></div></div>
+                <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
                 <span class="progress-text">0%</span>
               </div>
             </div>
@@ -591,6 +575,12 @@
                 </div>
               </div>
               <small>Minimum and maximum memory for the JVM</small>
+            </div>
+            
+            <div class="form-group jvm-args-group">
+              <label for="fresh-jvm-args">Additional JVM Arguments (optional):</label>
+              <input type="text" id="fresh-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200">
+              <small>Extra Java arguments (memory args are set automatically above)</small>
             </div>
           </div>
           
@@ -676,6 +666,12 @@
             <small>Minimum and maximum memory for the JVM</small>
           </div>
           
+          <div class="form-group">
+            <label for="import-jvm-args">Additional JVM Arguments (optional):</label>
+            <input type="text" id="import-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200">
+            <small>Extra Java arguments (memory args are set automatically above)</small>
+          </div>
+          
           <div class="modal-footer">
             <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
             <button type="submit" class="btn btn-success">Import Server</button>
@@ -743,6 +739,12 @@
               </div>
             </div>
             <small>Minimum and maximum memory for the JVM</small>
+          </div>
+          
+          <div class="form-group">
+            <label for="input-jvm-args">Additional JVM Arguments (optional):</label>
+            <input type="text" id="input-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200">
+            <small>Extra Java arguments (memory args are set automatically above)</small>
           </div>
           
           <div class="modal-footer">

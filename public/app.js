@@ -1116,6 +1116,7 @@ async function openAddServerModal() {
   document.getElementById('fresh-jar-name').value = 'server.jar';
   document.getElementById('fresh-min-ram').value = '1G';
   document.getElementById('fresh-max-ram').value = '2G';
+  document.getElementById('fresh-jvm-args').value = '';
   document.getElementById('fresh-upload-jar').checked = false;
   document.getElementById('custom-jar-upload').style.display = 'none';
   
@@ -1126,15 +1127,23 @@ async function openAddServerModal() {
   document.getElementById('ram-fields-group').style.display = 'none';
   document.getElementById('upload-jar-group').style.display = 'none';
   
-  // Reset JAR source fields
-  const jarSourceGroup = document.getElementById('jar-source-group');
+  // Reset download status UI
   const downloadStatusGroup = document.getElementById('download-status-group');
   const versionStatus = document.getElementById('version-status');
-  if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+  const progressFill = document.querySelector('#jar-download-status .progress-fill');
+  const progressText = document.querySelector('#jar-download-status .progress-text');
+  const downloadProgress = document.querySelector('#jar-download-status .download-progress');
+  const downloadInfo = document.querySelector('#jar-download-status .download-info');
+  
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   if (versionStatus) versionStatus.textContent = '';
-  const localRadio = document.getElementById('jar-source-local');
-  if (localRadio) localRadio.checked = true;
+  if (progressFill) progressFill.style.width = '0%';
+  if (progressText) progressText.textContent = '0%';
+  if (downloadProgress) downloadProgress.style.display = 'none';
+  if (downloadInfo) {
+    downloadInfo.innerHTML = '';
+    downloadInfo.classList.remove('error');
+  }
   versionAvailability = {};
   
   // Reset import form
@@ -1144,6 +1153,7 @@ async function openAddServerModal() {
   document.getElementById('import-jar-name').value = 'server.jar';
   document.getElementById('import-min-ram').value = '1G';
   document.getElementById('import-max-ram').value = '2G';
+  document.getElementById('import-jvm-args').value = '';
   
   // Reset manual form with default path placeholder
   document.getElementById('input-name').value = '';
@@ -1153,6 +1163,7 @@ async function openAddServerModal() {
   document.getElementById('input-executable').value = 'server.jar';
   document.getElementById('input-min-ram').value = '1G';
   document.getElementById('input-max-ram').value = '2G';
+  document.getElementById('input-jvm-args').value = '';
   
   // Update path hint with actual default path
   const pathHint = document.getElementById('path-hint');
@@ -1207,7 +1218,6 @@ function onCategoryChange() {
   const jarNameGroup = document.getElementById('jar-name-group');
   const ramFieldsGroup = document.getElementById('ram-fields-group');
   const uploadJarGroup = document.getElementById('upload-jar-group');
-  const jarSourceGroup = document.getElementById('jar-source-group');
   const downloadStatusGroup = document.getElementById('download-status-group');
   const versionSelect = document.getElementById('fresh-version');
   const categoryDesc = document.getElementById('category-description');
@@ -1215,8 +1225,7 @@ function onCategoryChange() {
   // Reset version availability
   versionAvailability = {};
   
-  // Hide JAR source and download status
-  if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+  // Hide download status
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   if (!category) {
@@ -1304,7 +1313,6 @@ async function loadVersions() {
   const jarNameGroup = document.getElementById('jar-name-group');
   const ramFieldsGroup = document.getElementById('ram-fields-group');
   const uploadJarGroup = document.getElementById('upload-jar-group');
-  const jarSourceGroup = document.getElementById('jar-source-group');
   const downloadStatusGroup = document.getElementById('download-status-group');
   
   const serverEngine = engineSelect.value;
@@ -1312,8 +1320,7 @@ async function loadVersions() {
   // Reset version availability
   versionAvailability = {};
   
-  // Hide JAR source and download status
-  if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+  // Hide download status
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   if (!serverEngine) {
@@ -1384,14 +1391,14 @@ async function loadVersionsForEngine(serverEngine) {
 // Handle version selection change
 function onVersionChange() {
   const version = document.getElementById('fresh-version').value;
-  const jarSourceGroup = document.getElementById('jar-source-group');
   const downloadStatusGroup = document.getElementById('download-status-group');
   const versionStatus = document.getElementById('version-status');
   const versionDesc = document.getElementById('version-description');
   
+  // Always hide download status until Create Server is clicked
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+  
   if (!version) {
-    if (jarSourceGroup) jarSourceGroup.style.display = 'none';
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
     if (versionStatus) versionStatus.textContent = '';
     if (versionDesc) versionDesc.textContent = 'Select the Minecraft version';
     return;
@@ -1406,39 +1413,13 @@ function onVersionChange() {
       versionStatus.className = 'version-status downloaded';
     }
     if (versionDesc) versionDesc.textContent = 'JAR file is already downloaded and ready to use';
-    if (jarSourceGroup) jarSourceGroup.style.display = 'none';
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-    // Set source to local
-    const localRadio = document.getElementById('jar-source-local');
-    if (localRadio) localRadio.checked = true;
   } else {
     // JAR needs to be downloaded
     if (versionStatus) {
-      versionStatus.textContent = '⬇ Not Downloaded';
+      versionStatus.textContent = '⬇ Will Download';
       versionStatus.className = 'version-status not-downloaded';
     }
-    if (versionDesc) versionDesc.textContent = 'JAR will be downloaded when server is created';
-    if (jarSourceGroup) jarSourceGroup.style.display = 'block';
-    // Set source to bucket
-    const bucketRadio = document.getElementById('jar-source-bucket');
-    if (bucketRadio) bucketRadio.checked = true;
-    onJarSourceChange();
-  }
-}
-
-// Handle JAR source radio change
-function onJarSourceChange() {
-  const jarSource = document.querySelector('input[name="jar-source"]:checked')?.value || 'local';
-  const downloadStatusGroup = document.getElementById('download-status-group');
-  const downloadInfo = document.querySelector('#jar-download-status .download-info');
-  
-  if (jarSource === 'bucket') {
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
-    if (downloadInfo) {
-      downloadInfo.innerHTML = '<span class="info-icon">ℹ️</span> JAR will be downloaded from the internet when you create the server. This may take a moment.';
-    }
-  } else {
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+    if (versionDesc) versionDesc.textContent = 'JAR will be automatically downloaded when server is created';
   }
 }
 
@@ -1467,13 +1448,20 @@ async function openEditServerModal() {
     document.getElementById('input-executable').value = server.executable || 'server.jar';
     document.getElementById('input-category').value = server.category || 'unmodded';
     
-    // Parse RAM values from javaArgs
+    // Parse RAM values and extra JVM args from javaArgs
     const javaArgs = server.javaArgs || '-Xms1G -Xmx2G';
     const minRamMatch = javaArgs.match(/-Xms(\d+[GMK])/i);
     const maxRamMatch = javaArgs.match(/-Xmx(\d+[GMK])/i);
     
+    // Extract extra JVM args (everything except -Xms and -Xmx)
+    const extraArgs = javaArgs
+      .replace(/-Xms\d+[GMK]/gi, '')
+      .replace(/-Xmx\d+[GMK]/gi, '')
+      .trim();
+    
     document.getElementById('input-min-ram').value = minRamMatch ? minRamMatch[1] : '1G';
     document.getElementById('input-max-ram').value = maxRamMatch ? maxRamMatch[1] : '2G';
+    document.getElementById('input-jvm-args').value = extraArgs;
     
     document.getElementById('server-modal').classList.add('active');
   } catch (error) {
@@ -1494,7 +1482,8 @@ async function saveServer(e) {
   const category = document.getElementById('input-category').value;
   const minRam = document.getElementById('input-min-ram').value;
   const maxRam = document.getElementById('input-max-ram').value;
-  const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
+  const extraJvmArgs = document.getElementById('input-jvm-args').value.trim();
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
   
   const serverData = {
     name: document.getElementById('input-name').value,
@@ -1553,11 +1542,11 @@ async function createFreshServer(e) {
   const executable = document.getElementById('fresh-jar-name').value || 'server.jar';
   const minRam = document.getElementById('fresh-min-ram').value;
   const maxRam = document.getElementById('fresh-max-ram').value;
-  const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
+  const extraJvmArgs = document.getElementById('fresh-jvm-args').value.trim();
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
   const uploadCustom = document.getElementById('fresh-upload-jar').checked;
   
-  // Check JAR source and availability
-  const jarSource = document.querySelector('input[name="jar-source"]:checked')?.value || 'local';
+  // Check JAR availability - automatically download if not available
   const versionInfo = versionAvailability[version] || {};
   const needsDownload = !versionInfo.downloaded;
   
@@ -1585,6 +1574,12 @@ async function createFreshServer(e) {
   const progressFill = document.querySelector('#jar-download-status .progress-fill');
   const progressText = document.querySelector('#jar-download-status .progress-text');
   const downloadInfo = document.querySelector('#jar-download-status .download-info');
+  
+  // Reset progress bar to 0
+  if (progressFill) progressFill.style.width = '0%';
+  if (progressText) progressText.textContent = '0%';
+  if (downloadProgress) downloadProgress.style.display = 'none';
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   // Helper to update progress UI
   const updateProgress = (message, percent = null, isError = false) => {
@@ -1669,7 +1664,7 @@ async function createFreshServer(e) {
       selectServer(result.serverId);
       closeServerModal();
       
-    } else if (needsDownload && jarSource === 'bucket') {
+    } else if (needsDownload) {
       // Need to download from JAR Bucket first
       updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
       submitBtn.textContent = 'Downloading JAR...';
@@ -1859,7 +1854,8 @@ async function importServer(e) {
   const category = document.getElementById('import-category').value;
   const minRam = document.getElementById('import-min-ram').value;
   const maxRam = document.getElementById('import-max-ram').value;
-  const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
+  const extraJvmArgs = document.getElementById('import-jvm-args').value.trim();
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
   
   if (!fileInput.files.length) {
     showNotification('Please select a ZIP file to import', 'error');
