@@ -1106,6 +1106,17 @@ async function openAddServerModal() {
   document.getElementById('ram-fields-group').style.display = 'none';
   document.getElementById('upload-jar-group').style.display = 'none';
   
+  // Reset JAR source fields
+  const jarSourceGroup = document.getElementById('jar-source-group');
+  const downloadStatusGroup = document.getElementById('download-status-group');
+  const versionStatus = document.getElementById('version-status');
+  if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+  if (versionStatus) versionStatus.textContent = '';
+  const localRadio = document.getElementById('jar-source-local');
+  if (localRadio) localRadio.checked = true;
+  versionAvailability = {};
+  
   // Reset import form
   document.getElementById('import-name').value = '';
   document.getElementById('import-file').value = '';
@@ -1165,6 +1176,9 @@ function backToCreationType() {
   document.getElementById('creation-type-section').style.display = 'block';
 }
 
+// Track JAR availability for versions
+let versionAvailability = {};  // {version: {downloaded: bool}}
+
 // Handle category change for fresh server form
 function onCategoryChange() {
   const category = document.getElementById('fresh-category').value;
@@ -1173,8 +1187,17 @@ function onCategoryChange() {
   const jarNameGroup = document.getElementById('jar-name-group');
   const ramFieldsGroup = document.getElementById('ram-fields-group');
   const uploadJarGroup = document.getElementById('upload-jar-group');
+  const jarSourceGroup = document.getElementById('jar-source-group');
+  const downloadStatusGroup = document.getElementById('download-status-group');
   const versionSelect = document.getElementById('fresh-version');
   const categoryDesc = document.getElementById('category-description');
+  
+  // Reset version availability
+  versionAvailability = {};
+  
+  // Hide JAR source and download status
+  if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   if (!category) {
     // Hide all conditional fields
@@ -1196,7 +1219,7 @@ function onCategoryChange() {
     uploadJarGroup.style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft server - no mods or plugins';
     
-    // Load vanilla versions
+    // Load vanilla versions from JAR Bucket
     loadVersionsForEngine('vanilla');
   } else if (category === 'modded') {
     // Modded: Show engine selector
@@ -1216,19 +1239,23 @@ function onCategoryChange() {
 
 async function loadServerEngines() {
   try {
-    const result = await apiRequest('/api/server-engines');
-    serverTypes = result.engines || [];
+    // Load all available server types from JAR Bucket (not just local)
+    const result = await apiRequest('/api/jar-bucket/all-types');
+    const allTypes = result.types || [];
     
-    const engineSelect = document.getElementById('fresh-engine');
+    // Filter to server types (not proxies)
+    const serverTypes = allTypes.filter(t => t.category === 'servers' || t.category === 'modded');
     
     // Filter to only modded engines (exclude vanilla)
     const moddedEngines = serverTypes.filter(e => e.id !== 'vanilla');
     
+    const engineSelect = document.getElementById('fresh-engine');
+    
     if (moddedEngines.length === 0) {
-      engineSelect.innerHTML = '<option value="">No modded server JARs available</option>';
+      engineSelect.innerHTML = '<option value="">No server types available</option>';
       engineSelect.disabled = true;
       document.getElementById('engine-description').textContent = 
-        'No modded server JAR files found. Use the Settings page JAR Downloader to download server files first.';
+        'No server types found.';
       return;
     }
     
@@ -1238,9 +1265,7 @@ async function loadServerEngines() {
     moddedEngines.forEach(engine => {
       const option = document.createElement('option');
       option.value = engine.id;
-      // Show JAR count in the option text
-      const jarCount = engine.jarCount || 0;
-      option.textContent = `${engine.name} (${jarCount} ${jarCount === 1 ? 'version' : 'versions'})`;
+      option.textContent = `${engine.icon || '📦'} ${engine.name}`;
       option.dataset.description = engine.description || '';
       engineSelect.appendChild(option);
     });
@@ -1259,8 +1284,17 @@ async function loadVersions() {
   const jarNameGroup = document.getElementById('jar-name-group');
   const ramFieldsGroup = document.getElementById('ram-fields-group');
   const uploadJarGroup = document.getElementById('upload-jar-group');
+  const jarSourceGroup = document.getElementById('jar-source-group');
+  const downloadStatusGroup = document.getElementById('download-status-group');
   
   const serverEngine = engineSelect.value;
+  
+  // Reset version availability
+  versionAvailability = {};
+  
+  // Hide JAR source and download status
+  if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   if (!serverEngine) {
     versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
@@ -1288,25 +1322,103 @@ async function loadVersions() {
 
 async function loadVersionsForEngine(serverEngine) {
   const versionSelect = document.getElementById('fresh-version');
+  const versionStatus = document.getElementById('version-status');
   
   try {
     versionSelect.innerHTML = '<option value="">Loading versions...</option>';
     versionSelect.disabled = true;
+    if (versionStatus) versionStatus.textContent = '';
     
-    const result = await apiRequest(`/api/server-engines/${serverEngine}/versions`);
+    // Use JAR Bucket API to get all available versions (not just local)
+    const result = await apiRequest(`/api/jar-bucket/all-versions/${serverEngine}`);
     const versions = result.versions || [];
     
+    if (versions.length === 0) {
+      versionSelect.innerHTML = '<option value="">No versions available</option>';
+      return;
+    }
+    
+    // Store availability info
+    versionAvailability = {};
+    versions.forEach(v => {
+      versionAvailability[v.version] = { downloaded: v.downloaded };
+    });
+    
     versionSelect.innerHTML = '<option value="">Select version...</option>';
-    versions.forEach(version => {
+    versions.forEach(v => {
       const option = document.createElement('option');
-      option.value = version;
-      option.textContent = version;
+      option.value = v.version;
+      option.textContent = v.downloaded 
+        ? `${v.version} ✓ (Downloaded)` 
+        : v.version;
+      option.dataset.downloaded = v.downloaded;
       versionSelect.appendChild(option);
     });
     versionSelect.disabled = false;
   } catch (error) {
     console.error('Failed to load versions:', error);
     versionSelect.innerHTML = '<option value="">Error loading versions</option>';
+  }
+}
+
+// Handle version selection change
+function onVersionChange() {
+  const version = document.getElementById('fresh-version').value;
+  const jarSourceGroup = document.getElementById('jar-source-group');
+  const downloadStatusGroup = document.getElementById('download-status-group');
+  const versionStatus = document.getElementById('version-status');
+  const versionDesc = document.getElementById('version-description');
+  
+  if (!version) {
+    if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+    if (versionStatus) versionStatus.textContent = '';
+    if (versionDesc) versionDesc.textContent = 'Select the Minecraft version';
+    return;
+  }
+  
+  const info = versionAvailability[version] || {};
+  
+  if (info.downloaded) {
+    // JAR is available locally
+    if (versionStatus) {
+      versionStatus.textContent = '✓ Downloaded';
+      versionStatus.className = 'version-status downloaded';
+    }
+    if (versionDesc) versionDesc.textContent = 'JAR file is already downloaded and ready to use';
+    if (jarSourceGroup) jarSourceGroup.style.display = 'none';
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+    // Set source to local
+    const localRadio = document.getElementById('jar-source-local');
+    if (localRadio) localRadio.checked = true;
+  } else {
+    // JAR needs to be downloaded
+    if (versionStatus) {
+      versionStatus.textContent = '⬇ Not Downloaded';
+      versionStatus.className = 'version-status not-downloaded';
+    }
+    if (versionDesc) versionDesc.textContent = 'JAR will be downloaded when server is created';
+    if (jarSourceGroup) jarSourceGroup.style.display = 'block';
+    // Set source to bucket
+    const bucketRadio = document.getElementById('jar-source-bucket');
+    if (bucketRadio) bucketRadio.checked = true;
+    onJarSourceChange();
+  }
+}
+
+// Handle JAR source radio change
+function onJarSourceChange() {
+  const jarSource = document.querySelector('input[name="jar-source"]:checked')?.value || 'local';
+  const downloadStatusGroup = document.getElementById('download-status-group');
+  const downloadInfo = document.querySelector('#jar-download-status .download-info');
+  
+  if (jarSource === 'bucket') {
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    if (downloadInfo) {
+      downloadInfo.innerHTML = '<span class="info-icon">ℹ️</span> JAR will be downloaded from the internet when you create the server. This may take a moment.';
+    }
+  } else {
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   }
 }
 
@@ -1424,6 +1536,11 @@ async function createFreshServer(e) {
   const javaArgs = `-Xms${minRam} -Xmx${maxRam}`;
   const uploadCustom = document.getElementById('fresh-upload-jar').checked;
   
+  // Check JAR source and availability
+  const jarSource = document.querySelector('input[name="jar-source"]:checked')?.value || 'local';
+  const versionInfo = versionAvailability[version] || {};
+  const needsDownload = !versionInfo.downloaded;
+  
   if (!category) {
     showNotification('Please select a category', 'error');
     return;
@@ -1439,22 +1556,56 @@ async function createFreshServer(e) {
     return;
   }
   
+  // Get UI elements
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  const backBtn = e.target.querySelector('.btn:not([type="submit"])');
+  const originalText = submitBtn.textContent;
+  const downloadStatusGroup = document.getElementById('download-status-group');
+  const downloadProgress = document.querySelector('#jar-download-status .download-progress');
+  const progressFill = document.querySelector('#jar-download-status .progress-fill');
+  const progressText = document.querySelector('#jar-download-status .progress-text');
+  const downloadInfo = document.querySelector('#jar-download-status .download-info');
+  
+  // Helper to update progress UI
+  const updateProgress = (message, percent = null, isError = false) => {
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    if (downloadInfo) {
+      const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
+      downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
+      if (isError) downloadInfo.classList.add('error');
+      else downloadInfo.classList.remove('error');
+    }
+    if (percent !== null && downloadProgress) {
+      downloadProgress.style.display = 'flex';
+      if (progressFill) progressFill.style.width = `${percent}%`;
+      if (progressText) progressText.textContent = `${Math.round(percent)}%`;
+    }
+  };
+  
+  // Helper to reset UI on error
+  const resetOnError = (errorMsg) => {
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+    if (backBtn) backBtn.disabled = false;
+    updateProgress(errorMsg, null, true);
+    showNotification(errorMsg, 'error');
+  };
+  
   try {
-    // Show loading state
-    const submitBtn = e.target.querySelector('button[type="submit"]');
-    const originalText = submitBtn.textContent;
+    // Disable form controls during creation
     submitBtn.textContent = 'Creating...';
     submitBtn.disabled = true;
+    if (backBtn) backBtn.disabled = true;
     
     if (uploadCustom) {
       // Custom JAR upload flow
       const fileInput = document.getElementById('fresh-jar-file');
       if (!fileInput.files.length) {
-        showNotification('Please select a JAR file to upload', 'error');
-        submitBtn.textContent = originalText;
-        submitBtn.disabled = false;
+        resetOnError('Please select a JAR file to upload');
         return;
       }
+      
+      updateProgress('Creating server...', 10);
       
       // First create the server
       const result = await apiRequest('/api/servers', {
@@ -1475,55 +1626,207 @@ async function createFreshServer(e) {
         return;
       }
       
+      updateProgress('Uploading JAR file...', 50);
+      
       // Then upload the JAR
       const formData = new FormData();
       formData.append('file', fileInput.files[0]);
       
-      await fetch(`/api/servers/${result.serverId}/upload-jar`, {
+      const uploadResponse = await fetch(`/api/servers/${result.serverId}/upload-jar`, {
         method: 'POST',
         body: formData
       });
       
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to upload JAR file');
+      }
+      
+      updateProgress('Server created successfully!', 100);
+      await new Promise(r => setTimeout(r, 1000)); // Brief pause to show completion
+      
       await loadServers();
       selectServer(result.serverId);
-    } else {
-      // Download server JAR from repository
-      const result = await apiRequest('/api/servers', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          executable,
-          javaArgs,
-          category,
-          serverEngine,
-          version,
-          downloadJar: true
-        })
-      });
+      closeServerModal();
+      
+    } else if (needsDownload && jarSource === 'bucket') {
+      // Need to download from JAR Bucket first
+      updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
+      submitBtn.textContent = 'Downloading JAR...';
+      
+      // Start the download
+      let downloadResult;
+      try {
+        downloadResult = await apiRequest('/api/jar-bucket/download', {
+          method: 'POST',
+          body: JSON.stringify({ type: serverEngine, version })
+        });
+      } catch (downloadErr) {
+        resetOnError(`Failed to start download: ${downloadErr.message}`);
+        return;
+      }
+      
+      if (!downloadResult.progress_id) {
+        resetOnError('Failed to start download - no progress ID returned');
+        return;
+      }
+      
+      // Poll for progress with timeout
+      const progressId = downloadResult.progress_id;
+      let downloadComplete = false;
+      let downloadError = null;
+      let pollCount = 0;
+      const maxPolls = 600; // 5 minutes timeout (600 * 500ms)
+      
+      while (!downloadComplete && pollCount < maxPolls) {
+        await new Promise(r => setTimeout(r, 500));
+        pollCount++;
+        
+        try {
+          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+          
+          if (progress.status === 'downloading') {
+            const pct = progress.progress || 0;
+            const downloaded = formatBytes(progress.downloaded || 0);
+            const total = formatBytes(progress.total || 0);
+            updateProgress(`Downloading ${serverEngine} ${version}... (${downloaded} / ${total})`, pct);
+          } else if (progress.status === 'complete') {
+            downloadComplete = true;
+            if (progress.success === false) {
+              downloadError = progress.error || 'Download failed';
+            } else {
+              updateProgress('Download complete!', 100);
+            }
+          } else if (progress.status === 'error') {
+            downloadComplete = true;
+            downloadError = progress.error || 'Download failed';
+          }
+        } catch (pollErr) {
+          console.error('Error polling download progress:', pollErr);
+          // Don't fail immediately, keep trying
+        }
+      }
+      
+      if (!downloadComplete) {
+        resetOnError('Download timed out. Please try again.');
+        return;
+      }
+      
+      if (downloadError) {
+        resetOnError(`Download failed: ${downloadError}`);
+        return;
+      }
+      
+      // Now create the server with the downloaded JAR
+      submitBtn.textContent = 'Creating Server...';
+      updateProgress('Creating server files...', 0);
+      
+      let result;
+      try {
+        result = await apiRequest('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            executable,
+            javaArgs,
+            category,
+            serverEngine,
+            version,
+            downloadJar: true  // Copy from local repo
+          })
+        });
+      } catch (createErr) {
+        resetOnError(`Failed to create server: ${createErr.message}`);
+        return;
+      }
       
       if (result.pendingApproval) {
+        updateProgress('Server created and pending admin approval', 100);
         showNotification('Server created and pending admin approval', 'info');
+        await new Promise(r => setTimeout(r, 1500));
+        closeServerModal();
+        await loadServers();
       } else if (result.warning) {
+        updateProgress(`Server created with warning: ${result.warning}`, 100);
         showNotification(result.warning, 'warning');
+        await new Promise(r => setTimeout(r, 1500));
         await loadServers();
         selectServer(result.serverId);
+        closeServerModal();
       } else {
+        updateProgress('Server created successfully!', 100);
+        showNotification('Server created successfully!', 'success');
+        await new Promise(r => setTimeout(r, 1000));
         await loadServers();
         selectServer(result.serverId);
+        closeServerModal();
+      }
+      
+    } else {
+      // Use existing local JAR
+      updateProgress('Creating server files...', 20);
+      
+      let result;
+      try {
+        result = await apiRequest('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            executable,
+            javaArgs,
+            category,
+            serverEngine,
+            version,
+            downloadJar: true
+          })
+        });
+      } catch (createErr) {
+        resetOnError(`Failed to create server: ${createErr.message}`);
+        return;
+      }
+      
+      if (result.pendingApproval) {
+        updateProgress('Server created and pending admin approval', 100);
+        showNotification('Server created and pending admin approval', 'info');
+        await new Promise(r => setTimeout(r, 1500));
+        closeServerModal();
+        await loadServers();
+      } else if (result.warning) {
+        updateProgress(`Server created with warning: ${result.warning}`, 100);
+        showNotification(result.warning, 'warning');
+        await new Promise(r => setTimeout(r, 1500));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+      } else {
+        updateProgress('Server created successfully!', 100);
+        showNotification('Server created successfully!', 'success');
+        await new Promise(r => setTimeout(r, 1000));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
       }
     }
     
-    closeServerModal();
+    // Reset button state (in case modal wasn't closed)
     submitBtn.textContent = originalText;
     submitBtn.disabled = false;
+    if (backBtn) backBtn.disabled = false;
+    
   } catch (error) {
     console.error('Failed to create server:', error);
-    showNotification('Failed to create server: ' + error.message, 'error');
-    // Reset button state
-    const submitBtn = e.target.querySelector('button[type="submit"]');
-    submitBtn.textContent = 'Create Server';
-    submitBtn.disabled = false;
+    resetOnError(`Failed to create server: ${error.message}`);
   }
+}
+
+// Helper function to format bytes
+function formatBytes(bytes, decimals = 2) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
 // Import server from ZIP

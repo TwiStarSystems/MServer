@@ -6058,7 +6058,7 @@ class JarBucketManager:
                     'status': 'downloading',
                     'total': total_size,
                     'downloaded': 0,
-                    'percent': 0
+                    'progress': 0
                 }
             
             with open(filepath, 'wb') as f:
@@ -6071,7 +6071,7 @@ class JarBucketManager:
                                 'status': 'downloading',
                                 'total': total_size,
                                 'downloaded': downloaded,
-                                'percent': int((downloaded / total_size) * 100)
+                                'progress': int((downloaded / total_size) * 100)
                             }
             
             # Verify hash if available
@@ -6086,7 +6086,7 @@ class JarBucketManager:
                     'status': 'complete',
                     'total': total_size,
                     'downloaded': downloaded,
-                    'percent': 100
+                    'progress': 100
                 }
             
             return {
@@ -6314,6 +6314,67 @@ def api_jar_bucket_refresh():
         for st in jar_bucket.SERVER_TYPES.keys():
             jar_bucket.get_versions(st, force_refresh=True)
         return jsonify({'message': 'Refreshed all versions'})
+
+@app.route('/api/jar-bucket/check/<server_type>/<version>', methods=['GET'])
+@login_required
+def api_jar_bucket_check(server_type, version):
+    """Check if a specific JAR version is downloaded locally"""
+    # Check in both the old jar_manager and new jar_bucket
+    local_jar = jar_manager.get_local_jar_info(server_type, version)
+    
+    if local_jar:
+        return jsonify({
+            'downloaded': True,
+            'filename': local_jar.get('filename'),
+            'size': local_jar.get('size'),
+            'path': local_jar.get('path')
+        })
+    
+    return jsonify({'downloaded': False})
+
+@app.route('/api/jar-bucket/all-types', methods=['GET'])
+@login_required
+def api_jar_bucket_all_types():
+    """Get all JAR Bucket server types (regardless of local availability)"""
+    types = []
+    for type_id, info in jar_bucket.SERVER_TYPES.items():
+        types.append({
+            'id': type_id,
+            'name': info['name'],
+            'description': info['description'],
+            'category': info['category'],
+            'icon': info.get('icon', '📦')
+        })
+    types.sort(key=lambda x: x['name'])
+    return jsonify({'types': types})
+
+@app.route('/api/jar-bucket/all-versions/<server_type>', methods=['GET'])
+@login_required
+def api_jar_bucket_all_versions(server_type):
+    """Get all available versions for a server type from JAR Bucket API (not just local)"""
+    versions = jar_bucket.get_versions(server_type, force_refresh=False)
+    
+    # Also get list of locally downloaded versions
+    downloaded = set()
+    jars = jar_bucket.list_downloaded_jars()
+    if server_type in jars:
+        for jar in jars[server_type].get('files', []):
+            downloaded.add(jar.get('version'))
+    
+    # Normalize version format and add download status
+    result = []
+    for v in versions:
+        version_str = v.get('version', str(v)) if isinstance(v, dict) else str(v)
+        result.append({
+            'version': version_str,
+            'downloaded': version_str in downloaded
+        })
+    
+    return jsonify({
+        'server_type': server_type,
+        'versions': result,
+        'count': len(result)
+    })
 
 
 # ==================== Legacy JAR Downloader API (for backward compatibility) ====================

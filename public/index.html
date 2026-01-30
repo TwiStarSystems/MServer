@@ -510,14 +510,44 @@
             <select id="fresh-engine" class="form-control" onchange="loadVersions()">
               <option value="">Select server engine...</option>
             </select>
-            <small id="engine-description" class="type-desc">Select from locally downloaded server JARs</small>
+            <small id="engine-description" class="type-desc">Select a server type</small>
           </div>
           
           <div class="form-group" id="version-group" style="display: none;">
             <label for="fresh-version">Version:</label>
-            <select id="fresh-version" class="form-control" disabled>
-              <option value="">Select category first...</option>
-            </select>
+            <div class="version-selector">
+              <select id="fresh-version" class="form-control" disabled onchange="onVersionChange()">
+                <option value="">Select category first...</option>
+              </select>
+              <span id="version-status" class="version-status"></span>
+            </div>
+            <small id="version-description" class="type-desc">Select the Minecraft version</small>
+          </div>
+          
+          <div class="form-group" id="jar-source-group" style="display: none;">
+            <label>JAR Source:</label>
+            <div class="jar-source-options">
+              <label class="jar-source-option">
+                <input type="radio" name="jar-source" value="local" id="jar-source-local" checked onchange="onJarSourceChange()">
+                <span class="option-label">Use Downloaded JAR</span>
+                <span class="option-desc">Use an already downloaded JAR from local repository</span>
+              </label>
+              <label class="jar-source-option">
+                <input type="radio" name="jar-source" value="bucket" id="jar-source-bucket" onchange="onJarSourceChange()">
+                <span class="option-label">Download from JAR Bucket</span>
+                <span class="option-desc">Download JAR on-demand if not already available</span>
+              </label>
+            </div>
+          </div>
+          
+          <div id="download-status-group" class="form-group" style="display: none;">
+            <div id="jar-download-status" class="jar-download-status">
+              <div class="download-info"></div>
+              <div class="download-progress" style="display: none;">
+                <div class="progress-bar"><div class="progress-fill"></div></div>
+                <span class="progress-text">0%</span>
+              </div>
+            </div>
           </div>
           
           <div class="form-group" id="jar-name-group" style="display: none;">
