@@ -1,3 +1,42 @@
+/* Horizontal Server Creation Form Layout */
+.horizontal-server-form .server-form-horizontal-wrapper {
+  display: flex;
+  flex-direction: row;
+  gap: 40px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.horizontal-server-form .server-form-main-fields {
+  flex: 2 1 350px;
+  min-width: 320px;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.horizontal-server-form .server-form-properties-fields {
+  flex: 1 1 320px;
+  min-width: 280px;
+  max-width: 420px;
+  background: rgba(0,0,50,0.08);
+  border-radius: 0px;
+  padding: 18px 18px 12px 18px;
+  box-shadow: 0 2px 8px 0 rgba(0,0,0,0.04);
+}
+
+@media (max-width: 900px) {
+  .horizontal-server-form .server-form-horizontal-wrapper {
+    flex-direction: column;
+    gap: 20px;
+  }
+  .horizontal-server-form .server-form-main-fields,
+  .horizontal-server-form .server-form-properties-fields {
+    max-width: 100%;
+    min-width: 0;
+  }
+}
 /* MServerController - Multi-Server CSS */
 
 * {
@@ -410,7 +449,7 @@ body {
 
 .terminal-container {
   background: #0d0d0d;
-  border-radius: 8px;
+  border-radius: 0px;
   overflow: hidden;
   height: calc(100vh - 250px);
   display: flex;
@@ -505,7 +544,7 @@ body {
 
 .file-explorer {
   background: #16213e;
-  border-radius: 8px;
+  border-radius: 0px;
   overflow: hidden;
 }
 
@@ -561,7 +600,7 @@ body {
 .action-btn {
   padding: 4px 10px;
   font-size: 12px;
-  border-radius: 4px;
+  border-radius: 0px;
 }
 
 /* ==================== Mods Tab ==================== */
@@ -595,7 +634,7 @@ body {
 
 .mods-section {
   background: #16213e;
-  border-radius: 8px;
+  border-radius: 0px;
   padding: 15px;
   margin-bottom: 20px;
 }
@@ -694,7 +733,7 @@ body {
   font-size: 14px;
   padding: 12px 15px;
   background: rgba(245, 166, 35, 0.1);
-  border-radius: 6px;
+  border-radius: 0px;
   border-left: 3px solid #f5a623;
 }
 
@@ -706,7 +745,7 @@ body {
 
 .properties-editor {
   background: #16213e;
-  border-radius: 8px;
+  border-radius: 0px;
   padding: 20px;
 }
 
@@ -742,7 +781,7 @@ body {
   padding: 12px 15px;
   margin-bottom: 10px;
   background: #1a1a2e;
-  border-radius: 8px;
+  border-radius: 0px;
   gap: 20px;
   transition: background 0.2s;
 }
@@ -788,7 +827,7 @@ body {
   padding: 10px;
   background: #0b1929;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 0px;
   color: #e0e0e0;
   font-size: 14px;
   font-family: inherit;
@@ -829,7 +868,7 @@ body {
   padding: 10px;
   background: #0b1929;
   border: 1px solid #333;
-  border-radius: 6px;
+  border-radius: 0px;
   color: #e0e0e0;
   font-size: 14px;
   font-family: inherit;
@@ -916,7 +955,7 @@ body {
 
 .backup-list {
   background: #16213e;
-  border-radius: 8px;
+  border-radius: 0px;
   overflow: hidden;
 }
 
@@ -954,7 +993,7 @@ body {
   align-items: center;
   background: linear-gradient(135deg, #1a3a5c 0%, #0f3460 100%);
   border: 1px solid #667eea;
-  border-radius: 8px;
+  border-radius: 0px;
   padding: 12px 16px;
   margin-bottom: 15px;
 }
@@ -988,7 +1027,7 @@ body {
 .schedule-info-box {
   background: rgba(102, 126, 234, 0.1);
   border: 1px solid #667eea;
-  border-radius: 6px;
+  border-radius: 0px;
   padding: 12px 15px;
   margin-bottom: 20px;
   font-size: 13px;
@@ -1041,7 +1080,7 @@ body {
   width: 100%;
   border-collapse: collapse;
   background: #16213e;
-  border-radius: 8px;
+  border-radius: 0px;
   overflow: hidden;
 }
 
@@ -1121,7 +1160,7 @@ body {
 
 .modal-content {
   background: #16213e;
-  border-radius: 12px;
+  border-radius: 0px;
   width: 90%;
   max-width: 500px;
   max-height: 90vh;
@@ -1167,12 +1206,12 @@ body {
 
 .modal-body::-webkit-scrollbar-track {
   background: #0d0d1a;
-  border-radius: 4px;
+  border-radius: 0px;
 }
 
 .modal-body::-webkit-scrollbar-thumb {
   background: #667eea;
-  border-radius: 4px;
+  border-radius: 0px;
 }
 
 .modal-body::-webkit-scrollbar-thumb:hover {
@@ -1325,7 +1364,7 @@ body {
   padding: 10px;
   background: #1a1a2e;
   border: 2px dashed #0f3460;
-  border-radius: 6px;
+  border-radius: 0px;
   cursor: pointer;
 }
 
@@ -1393,7 +1432,7 @@ select.form-control:disabled {
   padding: 12px 15px;
   background: #1a1a2e;
   border: 2px solid #0f3460;
-  border-radius: 6px;
+  border-radius: 0px;
   font-size: 14px;
   color: #fff;
   transition: border-color 0.2s;
