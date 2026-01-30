@@ -5600,14 +5600,728 @@ def api_get_current_version():
         return jsonify({'error': str(e)}), 500
 
 
-# ==================== JAR Downloader API ====================
+# ==================== JAR Bucket Manager ====================
 
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
+JAR_CACHE_FILE = BASE_DIR / 'jar_cache.json'
+JAR_CACHE_MAX_AGE_HOURS = 6  # Refresh cache every 6 hours
+
+class JarBucketManager:
+    """
+    Manager for downloading Minecraft server JAR files from various sources.
+    Inspired by Crafty Controller's Big Bucket system.
+    """
+    
+    # API URLs for various server types
+    API_URLS = {
+        'paper': 'https://api.papermc.io/v2/',
+        'velocity': 'https://api.papermc.io/v2/',
+        'waterfall': 'https://api.papermc.io/v2/',
+        'folia': 'https://api.papermc.io/v2/',
+        'purpur': 'https://api.purpurmc.org/v2/purpur/',
+        'vanilla': 'https://launchermeta.mojang.com/mc/game/version_manifest.json',
+        'fabric': 'https://meta.fabricmc.net/v2/',
+        'forge': 'https://maven.minecraftforge.net/net/minecraftforge/forge/',
+        'neoforge': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/',
+        'spigot': 'https://hub.spigotmc.org/versions/',
+        'bungeecord': 'https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar'
+    }
+    
+    # Server type metadata with descriptions
+    SERVER_TYPES = {
+        'vanilla': {
+            'name': 'Vanilla',
+            'description': 'Official Minecraft Java Edition server',
+            'category': 'servers',
+            'icon': '🎮'
+        },
+        'paper': {
+            'name': 'Paper',
+            'description': 'High-performance Spigot fork with optimizations',
+            'category': 'servers',
+            'icon': '📄'
+        },
+        'purpur': {
+            'name': 'Purpur',
+            'description': 'Paper fork with extra features and configuration',
+            'category': 'servers',
+            'icon': '💜'
+        },
+        'folia': {
+            'name': 'Folia',
+            'description': 'Paper fork for multi-threaded regions',
+            'category': 'servers',
+            'icon': '🌿'
+        },
+        'spigot': {
+            'name': 'Spigot',
+            'description': 'Modified Minecraft server with Bukkit plugin support',
+            'category': 'servers',
+            'icon': '🔧'
+        },
+        'fabric': {
+            'name': 'Fabric',
+            'description': 'Lightweight mod loader for Minecraft',
+            'category': 'modded',
+            'icon': '🧵'
+        },
+        'forge': {
+            'name': 'Forge',
+            'description': 'Popular mod loader for Minecraft mods',
+            'category': 'modded',
+            'icon': '⚒️'
+        },
+        'neoforge': {
+            'name': 'NeoForge',
+            'description': 'Modern community-driven Forge fork',
+            'category': 'modded',
+            'icon': '🔨'
+        },
+        'velocity': {
+            'name': 'Velocity',
+            'description': 'Modern, high-performance Minecraft proxy',
+            'category': 'proxies',
+            'icon': '⚡'
+        },
+        'waterfall': {
+            'name': 'Waterfall',
+            'description': 'BungeeCord fork with improvements',
+            'category': 'proxies',
+            'icon': '💧'
+        },
+        'bungeecord': {
+            'name': 'BungeeCord',
+            'description': 'Minecraft server proxy for multiple servers',
+            'category': 'proxies',
+            'icon': '🔗'
+        }
+    }
+    
+    # Known Forge versions mapping (MC version -> Forge version)
+    FORGE_VERSIONS = {
+        '1.21.5': '55.1.6', '1.21.4': '54.1.12', '1.21.3': '53.1.6',
+        '1.21.1': '52.1.9', '1.21': '51.0.33', '1.20.6': '50.2.4',
+        '1.20.4': '49.2.4', '1.20.3': '49.0.2', '1.20.2': '48.1.0',
+        '1.20.1': '47.4.15', '1.20': '46.0.14', '1.19.4': '45.4.3',
+        '1.19.3': '44.1.23', '1.19.2': '43.5.2', '1.19.1': '42.0.9',
+        '1.19': '41.1.0', '1.18.2': '40.3.12', '1.18.1': '39.1.2',
+        '1.18': '38.0.17', '1.17.1': '37.1.1', '1.16.5': '36.2.42',
+        '1.16.4': '35.1.37', '1.16.3': '34.1.42', '1.16.2': '33.0.61',
+        '1.16.1': '32.0.108', '1.15.2': '31.2.60', '1.14.4': '28.2.28',
+        '1.12.2': '14.23.5.2864'
+    }
+    
+    # Known NeoForge versions mapping (MC version -> NeoForge version)
+    NEOFORGE_VERSIONS = {
+        '1.21.5': '21.5.96', '1.21.4': '21.4.156', '1.21.3': '21.3.95',
+        '1.21.1': '21.1.218', '1.21': '21.0.167', '1.20.6': '20.6.139',
+        '1.20.4': '20.4.251', '1.20.3': '20.3.8-beta', '1.20.2': '20.2.93'
+    }
+    
+    def __init__(self):
+        self.cache = self._load_cache()
+        self.download_progress = {}  # Track download progress by ID
+    
+    def _load_cache(self):
+        """Load cached version data from file"""
+        if JAR_CACHE_FILE.exists():
+            try:
+                with open(JAR_CACHE_FILE, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[JarBucket] Error loading cache: {e}")
+        return {'last_updated': None, 'versions': {}}
+    
+    def _save_cache(self):
+        """Save version data to cache file"""
+        try:
+            with open(JAR_CACHE_FILE, 'w') as f:
+                json.dump(self.cache, f, indent=2)
+        except Exception as e:
+            print(f"[JarBucket] Error saving cache: {e}")
+    
+    def _is_cache_valid(self, server_type=None):
+        """Check if cache is still valid (not too old)"""
+        if not self.cache.get('last_updated'):
+            return False
+        
+        # Check specific server type cache
+        if server_type:
+            type_cache = self.cache.get('versions', {}).get(server_type)
+            if not type_cache or not type_cache.get('last_updated'):
+                return False
+            last_updated = datetime.fromisoformat(type_cache['last_updated'])
+        else:
+            last_updated = datetime.fromisoformat(self.cache['last_updated'])
+        
+        age_hours = (datetime.now() - last_updated).total_seconds() / 3600
+        return age_hours < JAR_CACHE_MAX_AGE_HOURS
+    
+    def get_server_types(self):
+        """Get list of available server types with metadata"""
+        types_by_category = {'servers': [], 'modded': [], 'proxies': []}
+        
+        for type_id, info in self.SERVER_TYPES.items():
+            category = info.get('category', 'servers')
+            types_by_category.setdefault(category, []).append({
+                'id': type_id,
+                **info
+            })
+        
+        return types_by_category
+    
+    def _fetch_paper_versions(self, project='paper'):
+        """Fetch versions from Paper API (Paper, Folia, Velocity, Waterfall)"""
+        try:
+            url = f"{self.API_URLS['paper']}projects/{project}"
+            response = requests.get(url, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                return list(reversed(data.get('versions', [])))
+        except Exception as e:
+            print(f"[JarBucket] Error fetching {project} versions: {e}")
+        return []
+    
+    def _fetch_paper_download_url(self, project, version):
+        """Get download URL for Paper-based project"""
+        try:
+            # Get builds for version
+            url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}"
+            response = requests.get(url, timeout=10)
+            if response.status_code != 200:
+                return None, None
+            
+            data = response.json()
+            builds = data.get('builds', [])
+            if not builds:
+                return None, None
+            
+            latest_build = max(builds)
+            
+            # Get download info
+            build_url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}/builds/{latest_build}"
+            build_response = requests.get(build_url, timeout=10)
+            if build_response.status_code != 200:
+                return None, None
+            
+            build_data = build_response.json()
+            downloads = build_data.get('downloads', {})
+            application = downloads.get('application', {})
+            jar_name = application.get('name')
+            sha256 = application.get('sha256')
+            
+            if jar_name:
+                download_url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}/builds/{latest_build}/downloads/{jar_name}"
+                return download_url, sha256
+        except Exception as e:
+            print(f"[JarBucket] Error getting {project} download URL: {e}")
+        return None, None
+    
+    def _fetch_purpur_versions(self):
+        """Fetch versions from Purpur API"""
+        try:
+            response = requests.get(self.API_URLS['purpur'], timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                return list(reversed(data.get('versions', [])))
+        except Exception as e:
+            print(f"[JarBucket] Error fetching Purpur versions: {e}")
+        return []
+    
+    def _fetch_purpur_download_url(self, version):
+        """Get download URL for Purpur"""
+        try:
+            url = f"{self.API_URLS['purpur']}{version}"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                builds = data.get('builds', {})
+                latest = builds.get('latest')
+                if latest:
+                    return f"{self.API_URLS['purpur']}{version}/{latest}/download", None
+        except Exception as e:
+            print(f"[JarBucket] Error getting Purpur download URL: {e}")
+        return None, None
+    
+    def _fetch_vanilla_versions(self):
+        """Fetch versions from Mojang manifest"""
+        try:
+            response = requests.get(self.API_URLS['vanilla'], timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                versions = []
+                for ver in data.get('versions', []):
+                    if ver.get('type') == 'release':
+                        try:
+                            # Filter versions 1.10+
+                            minor = int(ver['id'].split('.')[1])
+                            if minor >= 10:
+                                versions.append({
+                                    'id': ver['id'],
+                                    'url': ver['url']
+                                })
+                        except (ValueError, IndexError):
+                            continue
+                return versions
+        except Exception as e:
+            print(f"[JarBucket] Error fetching Vanilla versions: {e}")
+        return []
+    
+    def _fetch_vanilla_download_url(self, version_url):
+        """Get download URL for Vanilla server"""
+        try:
+            response = requests.get(version_url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                server = data.get('downloads', {}).get('server', {})
+                return server.get('url'), server.get('sha1')
+        except Exception as e:
+            print(f"[JarBucket] Error getting Vanilla download URL: {e}")
+        return None, None
+    
+    def _fetch_fabric_versions(self):
+        """Fetch Fabric loader versions and game versions"""
+        try:
+            # Get supported game versions
+            game_url = f"{self.API_URLS['fabric']}game"
+            response = requests.get(game_url, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                versions = []
+                for ver in data:
+                    if ver.get('stable'):
+                        versions.append(ver['version'])
+                return versions
+        except Exception as e:
+            print(f"[JarBucket] Error fetching Fabric versions: {e}")
+        return []
+    
+    def _get_fabric_loader_version(self):
+        """Get latest stable Fabric loader version"""
+        try:
+            url = f"{self.API_URLS['fabric']}loader"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                for loader in data:
+                    if loader.get('stable'):
+                        return loader['version']
+        except Exception as e:
+            print(f"[JarBucket] Error getting Fabric loader version: {e}")
+        return '0.16.10'  # Fallback
+    
+    def _fetch_fabric_download_url(self, game_version):
+        """Get download URL for Fabric server"""
+        try:
+            loader_version = self._get_fabric_loader_version()
+            installer_version = '1.0.1'  # Stable installer
+            # Server JAR URL format
+            download_url = f"https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/{installer_version}/server/jar"
+            return download_url, None
+        except Exception as e:
+            print(f"[JarBucket] Error getting Fabric download URL: {e}")
+        return None, None
+    
+    def get_versions(self, server_type, force_refresh=False):
+        """Get available versions for a server type"""
+        # Check cache first
+        if not force_refresh and self._is_cache_valid(server_type):
+            cached = self.cache.get('versions', {}).get(server_type, {}).get('data', [])
+            if cached:
+                return cached
+        
+        versions = []
+        
+        # Fetch based on server type
+        if server_type == 'paper':
+            versions = self._fetch_paper_versions('paper')
+        elif server_type == 'folia':
+            versions = self._fetch_paper_versions('folia')
+        elif server_type == 'velocity':
+            versions = self._fetch_paper_versions('velocity')
+        elif server_type == 'waterfall':
+            versions = self._fetch_paper_versions('waterfall')
+        elif server_type == 'purpur':
+            versions = self._fetch_purpur_versions()
+        elif server_type == 'vanilla':
+            vanilla_data = self._fetch_vanilla_versions()
+            versions = [{'version': v['id'], 'manifest_url': v['url']} for v in vanilla_data]
+        elif server_type == 'fabric':
+            versions = self._fetch_fabric_versions()
+        elif server_type == 'forge':
+            versions = list(self.FORGE_VERSIONS.keys())
+        elif server_type == 'neoforge':
+            versions = list(self.NEOFORGE_VERSIONS.keys())
+        elif server_type == 'spigot':
+            # Spigot requires BuildTools, return common versions
+            versions = ['1.21.4', '1.21.3', '1.21.1', '1.21', '1.20.6', '1.20.4', 
+                       '1.20.2', '1.20.1', '1.19.4', '1.19.3', '1.19.2', '1.18.2', 
+                       '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2']
+        elif server_type == 'bungeecord':
+            versions = ['latest']
+        
+        # Update cache
+        if versions:
+            if 'versions' not in self.cache:
+                self.cache['versions'] = {}
+            self.cache['versions'][server_type] = {
+                'last_updated': datetime.now().isoformat(),
+                'data': versions
+            }
+            self.cache['last_updated'] = datetime.now().isoformat()
+            self._save_cache()
+        
+        return versions
+    
+    def get_download_info(self, server_type, version):
+        """Get download URL and hash for a specific version"""
+        download_url = None
+        file_hash = None
+        filename = None
+        
+        if server_type in ['paper', 'folia', 'velocity', 'waterfall']:
+            download_url, file_hash = self._fetch_paper_download_url(server_type, version)
+            filename = f"{server_type}-{version}.jar"
+        elif server_type == 'purpur':
+            download_url, file_hash = self._fetch_purpur_download_url(version)
+            filename = f"purpur-{version}.jar"
+        elif server_type == 'vanilla':
+            # Need to look up manifest URL
+            vanilla_versions = self.get_versions('vanilla')
+            for v in vanilla_versions:
+                if isinstance(v, dict) and v.get('version') == version:
+                    download_url, file_hash = self._fetch_vanilla_download_url(v['manifest_url'])
+                    break
+            filename = f"vanilla-{version}.jar"
+        elif server_type == 'fabric':
+            download_url, file_hash = self._fetch_fabric_download_url(version)
+            filename = f"fabric-{version}.jar"
+        elif server_type == 'forge':
+            forge_ver = self.FORGE_VERSIONS.get(version)
+            if forge_ver:
+                download_url = f"{self.API_URLS['forge']}{version}-{forge_ver}/forge-{version}-{forge_ver}-installer.jar"
+                filename = f"forge-{version}-{forge_ver}-installer.jar"
+        elif server_type == 'neoforge':
+            neo_ver = self.NEOFORGE_VERSIONS.get(version)
+            if neo_ver:
+                download_url = f"{self.API_URLS['neoforge']}{neo_ver}/neoforge-{neo_ver}-installer.jar"
+                filename = f"neoforge-{neo_ver}-installer.jar"
+        elif server_type == 'bungeecord':
+            download_url = self.API_URLS['bungeecord']
+            filename = "BungeeCord.jar"
+        elif server_type == 'spigot':
+            # Spigot requires BuildTools - return info about that
+            return {
+                'requires_build': True,
+                'message': 'Spigot requires BuildTools to compile. Download BuildTools and run: java -jar BuildTools.jar --rev ' + version,
+                'buildtools_url': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
+            }
+        
+        if download_url:
+            return {
+                'url': download_url,
+                'hash': file_hash,
+                'filename': filename,
+                'hash_type': 'sha256' if file_hash and len(file_hash) == 64 else 'sha1'
+            }
+        
+        return None
+    
+    def download_jar(self, server_type, version, progress_id=None):
+        """Download a JAR file to serverexecutables folder"""
+        download_info = self.get_download_info(server_type, version)
+        
+        if not download_info:
+            return {'success': False, 'error': 'Could not find download URL for this version'}
+        
+        if download_info.get('requires_build'):
+            return {'success': False, 'error': download_info.get('message'), 'requires_build': True}
+        
+        url = download_info['url']
+        filename = download_info['filename']
+        
+        # Create directory
+        type_dir = SERVER_EXECUTABLES_DIR / server_type
+        type_dir.mkdir(parents=True, exist_ok=True)
+        filepath = type_dir / filename
+        
+        try:
+            # Download with progress tracking
+            response = requests.get(url, stream=True, timeout=300)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            if progress_id:
+                self.download_progress[progress_id] = {
+                    'status': 'downloading',
+                    'total': total_size,
+                    'downloaded': 0,
+                    'percent': 0
+                }
+            
+            with open(filepath, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_id and total_size:
+                            self.download_progress[progress_id] = {
+                                'status': 'downloading',
+                                'total': total_size,
+                                'downloaded': downloaded,
+                                'percent': int((downloaded / total_size) * 100)
+                            }
+            
+            # Verify hash if available
+            if download_info.get('hash'):
+                file_hash = self._calculate_hash(filepath, download_info.get('hash_type', 'sha256'))
+                if file_hash != download_info['hash']:
+                    filepath.unlink()  # Delete mismatched file
+                    return {'success': False, 'error': 'Hash verification failed'}
+            
+            if progress_id:
+                self.download_progress[progress_id] = {
+                    'status': 'complete',
+                    'total': total_size,
+                    'downloaded': downloaded,
+                    'percent': 100
+                }
+            
+            return {
+                'success': True,
+                'message': f'Downloaded {filename} successfully',
+                'path': str(filepath.relative_to(BASE_DIR)),
+                'filename': filename,
+                'size': downloaded
+            }
+            
+        except requests.exceptions.RequestException as e:
+            if filepath.exists():
+                filepath.unlink()
+            if progress_id:
+                self.download_progress[progress_id] = {'status': 'error', 'error': str(e)}
+            return {'success': False, 'error': f'Download failed: {str(e)}'}
+        except Exception as e:
+            if filepath.exists():
+                filepath.unlink()
+            if progress_id:
+                self.download_progress[progress_id] = {'status': 'error', 'error': str(e)}
+            return {'success': False, 'error': f'Error: {str(e)}'}
+    
+    def _calculate_hash(self, filepath, hash_type='sha256'):
+        """Calculate file hash"""
+        if hash_type == 'sha1':
+            hasher = hashlib.sha1()
+        else:
+            hasher = hashlib.sha256()
+        
+        with open(filepath, 'rb') as f:
+            while True:
+                data = f.read(65536)
+                if not data:
+                    break
+                hasher.update(data)
+        
+        return hasher.hexdigest()
+    
+    def list_downloaded_jars(self):
+        """List all downloaded JAR files organized by type"""
+        jars = {}
+        
+        if SERVER_EXECUTABLES_DIR.exists():
+            for type_dir in SERVER_EXECUTABLES_DIR.iterdir():
+                if type_dir.is_dir():
+                    server_type = type_dir.name
+                    type_info = self.SERVER_TYPES.get(server_type, {})
+                    jars[server_type] = {
+                        'name': type_info.get('name', server_type.title()),
+                        'icon': type_info.get('icon', '📦'),
+                        'files': []
+                    }
+                    
+                    for jar_file in sorted(type_dir.iterdir(), reverse=True):
+                        if jar_file.is_file() and jar_file.suffix in ['.jar', '.zip']:
+                            # Extract version from filename
+                            version = self._extract_version_from_filename(jar_file.name, server_type)
+                            jars[server_type]['files'].append({
+                                'filename': jar_file.name,
+                                'version': version,
+                                'size': jar_file.stat().st_size,
+                                'path': str(jar_file.relative_to(BASE_DIR)),
+                                'modified': datetime.fromtimestamp(jar_file.stat().st_mtime).isoformat()
+                            })
+        
+        return jars
+    
+    def _extract_version_from_filename(self, filename, server_type):
+        """Extract version from filename"""
+        import re
+        name = filename.replace('.jar', '').replace('.zip', '').replace('-installer', '')
+        
+        # Try to extract version pattern
+        match = re.search(rf'{server_type}-([\d.]+(?:-[\d.]+)?(?:-beta)?)', name, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        
+        # Generic version pattern
+        match = re.search(r'(\d+\.\d+(?:\.\d+)?(?:-[\d.]+)?)', name)
+        if match:
+            return match.group(1)
+        
+        return 'unknown'
+    
+    def delete_jar(self, server_type, filename):
+        """Delete a downloaded JAR file"""
+        filepath = SERVER_EXECUTABLES_DIR / server_type / filename
+        
+        if not filepath.exists():
+            return {'success': False, 'error': 'File not found'}
+        
+        try:
+            filepath.relative_to(SERVER_EXECUTABLES_DIR)
+        except ValueError:
+            return {'success': False, 'error': 'Invalid path'}
+        
+        try:
+            filepath.unlink()
+            return {'success': True, 'message': f'Deleted {filename}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Failed to delete: {str(e)}'}
+
+
+# Initialize JAR Bucket Manager
+jar_bucket = JarBucketManager()
+
+
+# ==================== JAR Bucket API Endpoints ====================
+
+@app.route('/api/jar-bucket/types', methods=['GET'])
+@admin_required
+def api_jar_bucket_types():
+    """Get available server types organized by category"""
+    return jsonify(jar_bucket.get_server_types())
+
+@app.route('/api/jar-bucket/versions/<server_type>', methods=['GET'])
+@admin_required
+def api_jar_bucket_versions(server_type):
+    """Get available versions for a server type"""
+    force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+    versions = jar_bucket.get_versions(server_type, force_refresh)
+    
+    # Normalize version format
+    normalized = []
+    for v in versions:
+        if isinstance(v, dict):
+            normalized.append(v.get('version', str(v)))
+        else:
+            normalized.append(str(v))
+    
+    return jsonify({
+        'server_type': server_type,
+        'versions': normalized,
+        'count': len(normalized)
+    })
+
+@app.route('/api/jar-bucket/download', methods=['POST'])
+@admin_required
+def api_jar_bucket_download():
+    """Download a specific server JAR"""
+    data = request.get_json()
+    server_type = data.get('type', '').strip().lower()
+    version = data.get('version', '').strip()
+    
+    if not server_type or not version:
+        return jsonify({'error': 'Missing server type or version'}), 400
+    
+    # Validate server type
+    import re
+    if not re.match(r'^[a-z0-9-]+$', server_type):
+        return jsonify({'error': 'Invalid server type'}), 400
+    
+    # Generate progress ID
+    progress_id = str(uuid.uuid4())
+    
+    # Start download in background thread
+    def do_download():
+        result = jar_bucket.download_jar(server_type, version, progress_id)
+        jar_bucket.download_progress[progress_id] = {
+            'status': 'complete' if result.get('success') else 'error',
+            **result
+        }
+    
+    thread = threading.Thread(target=do_download, daemon=True)
+    thread.start()
+    
+    return jsonify({
+        'progress_id': progress_id,
+        'message': f'Starting download of {server_type} {version}'
+    })
+
+@app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
+@admin_required
+def api_jar_bucket_progress(progress_id):
+    """Get download progress"""
+    progress = jar_bucket.download_progress.get(progress_id)
+    if progress:
+        return jsonify(progress)
+    return jsonify({'status': 'unknown'}), 404
+
+@app.route('/api/jar-bucket/list', methods=['GET'])
+@admin_required
+def api_jar_bucket_list():
+    """List all downloaded JAR files"""
+    return jsonify({'jars': jar_bucket.list_downloaded_jars()})
+
+@app.route('/api/jar-bucket/delete', methods=['DELETE'])
+@admin_required
+def api_jar_bucket_delete():
+    """Delete a downloaded JAR file"""
+    data = request.get_json()
+    server_type = data.get('type', '').strip().lower()
+    filename = data.get('filename', '').strip()
+    
+    if not server_type or not filename:
+        return jsonify({'error': 'Missing type or filename'}), 400
+    
+    result = jar_bucket.delete_jar(server_type, filename)
+    if result.get('success'):
+        return jsonify(result)
+    return jsonify(result), 400
+
+@app.route('/api/jar-bucket/info/<server_type>/<version>', methods=['GET'])
+@admin_required
+def api_jar_bucket_info(server_type, version):
+    """Get download info for a specific version (URL, hash, etc.)"""
+    info = jar_bucket.get_download_info(server_type, version)
+    if info:
+        return jsonify(info)
+    return jsonify({'error': 'Version not found'}), 404
+
+@app.route('/api/jar-bucket/refresh', methods=['POST'])
+@admin_required
+def api_jar_bucket_refresh():
+    """Force refresh the version cache"""
+    data = request.get_json() or {}
+    server_type = data.get('type')
+    
+    if server_type:
+        jar_bucket.get_versions(server_type, force_refresh=True)
+        return jsonify({'message': f'Refreshed {server_type} versions'})
+    else:
+        # Refresh all
+        for st in jar_bucket.SERVER_TYPES.keys():
+            jar_bucket.get_versions(st, force_refresh=True)
+        return jsonify({'message': 'Refreshed all versions'})
+
+
+# ==================== Legacy JAR Downloader API (for backward compatibility) ====================
 
 @app.route('/api/tools/jar-downloader/download', methods=['POST'])
 @admin_required
-def download_jar():
-    """Download a JAR file to serverexecutables folder"""
+def download_jar_legacy():
+    """Download a JAR file to serverexecutables folder (legacy endpoint)"""
     data = request.get_json()
     server_type = data.get('type', '').strip().lower()
     version = data.get('version', '').strip()
@@ -5663,8 +6377,8 @@ def download_jar():
 
 @app.route('/api/tools/jar-downloader/list', methods=['GET'])
 @admin_required
-def list_downloaded_jars():
-    """List all downloaded JAR files"""
+def list_downloaded_jars_legacy():
+    """List all downloaded JAR files (legacy endpoint)"""
     jars = {}
     
     if SERVER_EXECUTABLES_DIR.exists():
@@ -5684,8 +6398,8 @@ def list_downloaded_jars():
 
 @app.route('/api/tools/jar-downloader/delete', methods=['DELETE'])
 @admin_required
-def delete_downloaded_jar():
-    """Delete a downloaded JAR file"""
+def delete_downloaded_jar_legacy():
+    """Delete a downloaded JAR file (legacy endpoint)"""
     data = request.get_json()
     server_type = data.get('type', '').strip().lower()
     filename = data.get('filename', '').strip()

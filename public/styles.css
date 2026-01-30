@@ -2506,6 +2506,345 @@ select.form-control:disabled {
   font-size: 0.9rem;
 }
 
+/* JAR Bucket Browser */
+.jar-bucket-browser {
+  margin-bottom: 20px;
+}
+
+.jar-bucket-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.category-section h4 {
+  margin: 0 0 12px 0;
+  color: #e6edf3;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.server-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.server-type-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.server-type-card:hover {
+  background: #1f2937;
+  border-color: #58a6ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.server-type-card .type-icon {
+  font-size: 2rem;
+}
+
+.server-type-card .type-name {
+  font-weight: 600;
+  color: #e6edf3;
+  font-size: 0.95rem;
+}
+
+.server-type-card .type-desc {
+  color: #8b949e;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
+/* Versions Panel */
+.jar-bucket-versions-panel {
+  margin-top: 20px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.versions-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 20px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+}
+
+.selected-type-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.selected-type-info .type-icon {
+  font-size: 1.5rem;
+}
+
+.selected-type-info .type-name {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: #e6edf3;
+}
+
+.versions-panel-body {
+  padding: 20px;
+}
+
+.version-search {
+  margin-bottom: 15px;
+}
+
+.version-search input {
+  width: 100%;
+  padding: 10px 15px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  color: #e6edf3;
+  font-size: 0.9rem;
+}
+
+.version-search input:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+
+.versions-list {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.version-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.version-item:hover {
+  background: #1f2937;
+}
+
+.version-number {
+  font-weight: 600;
+  color: #e6edf3;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.9rem;
+}
+
+/* Download Progress Panel */
+.download-progress-panel {
+  margin-top: 20px;
+  padding: 20px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+}
+
+.download-progress-panel h4 {
+  margin: 0 0 15px 0;
+  color: #e6edf3;
+}
+
+.download-item {
+  padding: 15px;
+  background: #0d1117;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+}
+
+.download-item.success {
+  border-color: #3fb950;
+  background: rgba(63, 185, 80, 0.1);
+}
+
+.download-item.error {
+  border-color: #f85149;
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.download-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.download-name {
+  font-weight: 600;
+  color: #e6edf3;
+}
+
+.download-status {
+  font-size: 0.85rem;
+  color: #8b949e;
+}
+
+.download-status.success {
+  color: #3fb950;
+}
+
+.download-status.error {
+  color: #f85149;
+}
+
+.download-path {
+  display: block;
+  margin-top: 8px;
+  color: #8b949e;
+  font-size: 0.8rem;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.progress-bar {
+  height: 8px;
+  background: #0d1117;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #58a6ff, #238636);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* Downloaded JARs Section */
+.downloaded-jars-section {
+  margin-top: 25px;
+  padding-top: 20px;
+  border-top: 1px solid #30363d;
+}
+
+.jar-type-group {
+  margin-bottom: 20px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.jar-type-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 20px;
+  background: #0d1117;
+  border-bottom: 1px solid #30363d;
+}
+
+.jar-type-icon {
+  font-size: 1.3rem;
+}
+
+.jar-type-name {
+  font-weight: 600;
+  color: #e6edf3;
+  flex: 1;
+}
+
+.jar-type-count {
+  font-size: 0.8rem;
+  color: #8b949e;
+  background: #30363d;
+  padding: 4px 10px;
+  border-radius: 12px;
+}
+
+.jar-type-files {
+  padding: 10px;
+}
+
+.jar-file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background: #0d1117;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.jar-file-item:last-child {
+  margin-bottom: 0;
+}
+
+.jar-file-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 15px;
+  flex: 1;
+}
+
+.jar-filename {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.85rem;
+  color: #e6edf3;
+  word-break: break-word;
+}
+
+.jar-version {
+  font-size: 0.8rem;
+  color: #58a6ff;
+  background: rgba(88, 166, 255, 0.15);
+  padding: 3px 8px;
+  border-radius: 10px;
+}
+
+.jar-size {
+  font-size: 0.8rem;
+  color: #7ee787;
+}
+
+.jar-file-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Collapsible Tool Panels */
+.tool-panel.collapsed .collapse-indicator {
+  transform: rotate(-90deg);
+}
+
+.tool-panel-header.collapsible {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.tool-panel-header.collapsible:hover {
+  background: rgba(88, 166, 255, 0.05);
+}
+
+.collapse-indicator {
+  margin-left: auto;
+  color: #8b949e;
+  transition: transform 0.2s;
+}
+
 /* Bulk URL Update */
 .bulk-update-options {
   display: flex;
@@ -4368,7 +4707,7 @@ select.form-control:disabled {
 .btn-small {
   padding: 6px 12px;
   font-size: 0.8rem;
-}}
+}
 
 /* ==================== Resource Pack Management ==================== */
 

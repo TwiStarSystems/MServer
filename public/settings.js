@@ -45,9 +45,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab === 'appsettings') {
         loadAppSettings();
       }
-      // Load version info when Tools tab is clicked
+      // Load version info and JAR bucket when Tools tab is clicked
       if (tab === 'tools') {
         loadVersionInfo();
+        loadJarBucketTypes();
+        loadJarBucketDownloaded();
       }
     });
   });
@@ -88,7 +90,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadStatsHistory();
   loadBranding();
   loadTools();
-  loadDownloadedJars();
+  loadJarBucketTypes();
+  loadJarBucketDownloaded();
   
   // Time range change handler
   document.getElementById('time-range').addEventListener('change', loadStatsHistory);
@@ -609,9 +612,343 @@ async function loadVersionInfo() {
   }
 }
 
-// ==================== JAR Downloader Functions ====================
+// ==================== JAR Bucket Functions ====================
 
-async function downloadJar() {
+let jarBucketTypes = {};
+let selectedServerType = null;
+let selectedServerTypeInfo = null;
+let allVersions = [];
+let activeDownloads = {};
+
+async function loadJarBucketTypes() {
+  try {
+    const response = await fetch('/api/jar-bucket/types');
+    if (!response.ok) throw new Error('Failed to load server types');
+    
+    jarBucketTypes = await response.json();
+    renderJarBucketTypes();
+  } catch (err) {
+    console.error('Error loading JAR bucket types:', err);
+  }
+}
+
+function refreshJarBucketTypes() {
+  loadJarBucketTypes();
+  loadJarBucketDownloaded();
+}
+
+function renderJarBucketTypes() {
+  // Render servers category
+  const serversContainer = document.getElementById('jar-bucket-servers');
+  if (serversContainer && jarBucketTypes.servers) {
+    serversContainer.innerHTML = jarBucketTypes.servers.map(type => `
+      <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
+        <span class="type-icon">${type.icon || '📦'}</span>
+        <span class="type-name">${escapeHtml(type.name)}</span>
+        <small class="type-desc">${escapeHtml(type.description)}</small>
+      </div>
+    `).join('') || '<div class="no-data">No servers available</div>';
+  }
+  
+  // Render modded category
+  const moddedContainer = document.getElementById('jar-bucket-modded');
+  if (moddedContainer && jarBucketTypes.modded) {
+    moddedContainer.innerHTML = jarBucketTypes.modded.map(type => `
+      <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
+        <span class="type-icon">${type.icon || '📦'}</span>
+        <span class="type-name">${escapeHtml(type.name)}</span>
+        <small class="type-desc">${escapeHtml(type.description)}</small>
+      </div>
+    `).join('') || '<div class="no-data">No modded servers available</div>';
+  }
+  
+  // Render proxies category
+  const proxiesContainer = document.getElementById('jar-bucket-proxies');
+  if (proxiesContainer && jarBucketTypes.proxies) {
+    proxiesContainer.innerHTML = jarBucketTypes.proxies.map(type => `
+      <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
+        <span class="type-icon">${type.icon || '📦'}</span>
+        <span class="type-name">${escapeHtml(type.name)}</span>
+        <small class="type-desc">${escapeHtml(type.description)}</small>
+      </div>
+    `).join('') || '<div class="no-data">No proxies available</div>';
+  }
+}
+
+async function selectServerType(typeId, typeInfo) {
+  selectedServerType = typeId;
+  selectedServerTypeInfo = typeInfo;
+  
+  // Update header
+  document.getElementById('selected-type-icon').textContent = typeInfo.icon || '📦';
+  document.getElementById('selected-type-name').textContent = typeInfo.name;
+  
+  // Show versions panel
+  const versionsPanel = document.getElementById('jar-bucket-versions-panel');
+  versionsPanel.style.display = 'block';
+  
+  // Clear search
+  document.getElementById('version-search-input').value = '';
+  
+  // Load versions
+  const versionsList = document.getElementById('jar-bucket-versions-list');
+  versionsList.innerHTML = '<div class="loading-text">Loading versions...</div>';
+  
+  try {
+    const response = await fetch(`/api/jar-bucket/versions/${typeId}`);
+    if (!response.ok) throw new Error('Failed to load versions');
+    
+    const data = await response.json();
+    allVersions = data.versions || [];
+    renderVersions(allVersions);
+  } catch (err) {
+    versionsList.innerHTML = `<div class="error-text">Failed to load versions: ${err.message}</div>`;
+  }
+}
+
+function renderVersions(versions) {
+  const versionsList = document.getElementById('jar-bucket-versions-list');
+  
+  if (!versions || versions.length === 0) {
+    versionsList.innerHTML = '<div class="no-data">No versions available</div>';
+    return;
+  }
+  
+  versionsList.innerHTML = versions.map(version => `
+    <div class="version-item">
+      <span class="version-number">${escapeHtml(version)}</span>
+      <button class="btn btn-small btn-success" onclick="downloadJarVersion('${selectedServerType}', '${escapeHtml(version)}')">
+        📥 Download
+      </button>
+    </div>
+  `).join('');
+}
+
+function filterVersions() {
+  const searchTerm = document.getElementById('version-search-input').value.toLowerCase();
+  const filtered = allVersions.filter(v => v.toLowerCase().includes(searchTerm));
+  renderVersions(filtered);
+}
+
+function closeVersionsPanel() {
+  document.getElementById('jar-bucket-versions-panel').style.display = 'none';
+  selectedServerType = null;
+  selectedServerTypeInfo = null;
+  allVersions = [];
+}
+
+async function downloadJarVersion(serverType, version) {
+  const progressPanel = document.getElementById('jar-download-progress-panel');
+  const progressContent = document.getElementById('jar-download-progress-content');
+  
+  progressPanel.style.display = 'block';
+  progressContent.innerHTML = `
+    <div class="download-item">
+      <div class="download-info">
+        <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+        <span class="download-status">Starting...</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-bar-fill" style="width: 0%"></div>
+      </div>
+    </div>
+  `;
+  
+  try {
+    const response = await fetch('/api/jar-bucket/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: serverType, version })
+    });
+    
+    const data = await response.json();
+    
+    if (!response.ok) {
+      progressContent.innerHTML = `
+        <div class="download-item error">
+          <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+          <span class="download-status error">❌ ${data.error || 'Download failed'}</span>
+        </div>
+      `;
+      return;
+    }
+    
+    // Poll for progress
+    const progressId = data.progress_id;
+    pollDownloadProgress(progressId, serverType, version);
+    
+  } catch (err) {
+    progressContent.innerHTML = `
+      <div class="download-item error">
+        <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+        <span class="download-status error">❌ Error: ${err.message}</span>
+      </div>
+    `;
+  }
+}
+
+async function pollDownloadProgress(progressId, serverType, version) {
+  const progressContent = document.getElementById('jar-download-progress-content');
+  
+  const checkProgress = async () => {
+    try {
+      const response = await fetch(`/api/jar-bucket/progress/${progressId}`);
+      const data = await response.json();
+      
+      if (data.status === 'downloading') {
+        const percent = data.percent || 0;
+        const downloaded = formatBytes(data.downloaded || 0);
+        const total = formatBytes(data.total || 0);
+        
+        progressContent.innerHTML = `
+          <div class="download-item">
+            <div class="download-info">
+              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+              <span class="download-status">${downloaded} / ${total}</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-bar-fill" style="width: ${percent}%"></div>
+            </div>
+          </div>
+        `;
+        setTimeout(checkProgress, 500);
+      } else if (data.status === 'complete') {
+        if (data.success) {
+          progressContent.innerHTML = `
+            <div class="download-item success">
+              <div class="download-info">
+                <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+                <span class="download-status success">✅ ${data.message || 'Download complete!'}</span>
+              </div>
+              <small class="download-path">📁 ${data.path || ''}</small>
+            </div>
+          `;
+          // Refresh the downloaded list
+          loadJarBucketDownloaded();
+        } else {
+          progressContent.innerHTML = `
+            <div class="download-item error">
+              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+              <span class="download-status error">❌ ${data.error || 'Download failed'}</span>
+            </div>
+          `;
+        }
+      } else if (data.status === 'error') {
+        progressContent.innerHTML = `
+          <div class="download-item error">
+            <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+            <span class="download-status error">❌ ${data.error || 'Download failed'}</span>
+          </div>
+        `;
+      }
+    } catch (err) {
+      progressContent.innerHTML = `
+        <div class="download-item error">
+          <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+          <span class="download-status error">❌ Error checking progress</span>
+        </div>
+      `;
+    }
+  };
+  
+  checkProgress();
+}
+
+async function loadJarBucketDownloaded() {
+  const container = document.getElementById('jar-bucket-downloaded-list');
+  if (!container) return;
+  
+  try {
+    const response = await fetch('/api/jar-bucket/list');
+    const data = await response.json();
+    
+    if (!data.jars || Object.keys(data.jars).length === 0) {
+      container.innerHTML = '<div class="no-jars-text">No downloaded JARs yet. Use the browser above to download server files.</div>';
+      return;
+    }
+    
+    let html = '';
+    
+    for (const [serverType, typeData] of Object.entries(data.jars)) {
+      if (!typeData.files || typeData.files.length === 0) continue;
+      
+      html += `
+        <div class="jar-type-group">
+          <div class="jar-type-header">
+            <span class="jar-type-icon">${typeData.icon || '📦'}</span>
+            <span class="jar-type-name">${escapeHtml(typeData.name || serverType)}</span>
+            <span class="jar-type-count">${typeData.files.length} file(s)</span>
+          </div>
+          <div class="jar-type-files">
+      `;
+      
+      for (const file of typeData.files) {
+        html += `
+          <div class="jar-file-item">
+            <div class="jar-file-info">
+              <span class="jar-filename">${escapeHtml(file.filename)}</span>
+              <span class="jar-version">${escapeHtml(file.version || 'Unknown')}</span>
+              <span class="jar-size">${formatBytes(file.size)}</span>
+            </div>
+            <div class="jar-file-actions">
+              <button class="btn btn-small btn-danger" onclick="deleteJarBucket('${serverType}', '${escapeHtml(file.filename)}')" title="Delete">🗑️</button>
+            </div>
+          </div>
+        `;
+      }
+      
+      html += '</div></div>';
+    }
+    
+    container.innerHTML = html || '<div class="no-jars-text">No downloaded JARs yet</div>';
+    
+  } catch (err) {
+    container.innerHTML = `<div class="error-text">Failed to load files: ${err.message}</div>`;
+  }
+}
+
+async function deleteJarBucket(serverType, filename) {
+  if (!confirm(`Delete ${filename}?`)) return;
+  
+  try {
+    const response = await fetch('/api/jar-bucket/delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: serverType, filename })
+    });
+    
+    const data = await response.json();
+    
+    if (response.ok && data.success) {
+      loadJarBucketDownloaded();
+    } else {
+      alert('Failed to delete: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+// Toggle collapsible tool panels
+function toggleToolPanel(header) {
+  const panel = header.closest('.tool-panel');
+  const body = panel.querySelector('.tool-panel-body');
+  const indicator = header.querySelector('.collapse-indicator');
+  
+  if (body.style.display === 'none') {
+    body.style.display = 'block';
+    panel.classList.remove('collapsed');
+    if (indicator) indicator.textContent = '▼';
+  } else {
+    body.style.display = 'none';
+    panel.classList.add('collapsed');
+    if (indicator) indicator.textContent = '▶';
+  }
+}
+
+// ==================== Legacy JAR Downloader Functions ====================
+
+async function downloadJarManual() {
   const typeInput = document.getElementById('download-type');
   const versionInput = document.getElementById('download-version');
   const urlInput = document.getElementById('download-url');
@@ -652,8 +989,9 @@ async function downloadJar() {
       versionInput.value = '';
       urlInput.value = '';
       
-      // Reload the list
+      // Reload both lists
       loadDownloadedJars();
+      loadJarBucketDownloaded();
     } else {
       statusDiv.innerHTML = `<span class="error-text">❌ ${data.error || 'Download failed'}</span>`;
     }
