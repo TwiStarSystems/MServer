@@ -8,18 +8,18 @@
 }
 
 .horizontal-server-form .server-form-main-fields {
-  flex: 2 1 350px;
-  min-width: 320px;
-  max-width: 480px;
+  flex: 2 1 600px;
+  min-width: 420px;
+  max-width: 730px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
 .horizontal-server-form .server-form-properties-fields {
-  flex: 1 1 320px;
-  min-width: 280px;
-  max-width: 420px;
+  flex: 1 1 570px;
+  min-width: 380px;
+  max-width: 670px;
   background: rgba(0,0,50,0.08);
   border-radius: 0px;
   padding: 18px 18px 12px 18px;
