@@ -1341,6 +1341,12 @@ async function pollDownloadProgress(progressId, serverType, version) {
     
     try {
       const response = await fetch(`/api/jar-bucket/progress/${progressId}`);
+      
+      // Check if response is valid JSON before parsing
+      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
       const data = await response.json();
       
       consecutiveErrors = 0; // Reset on successful poll

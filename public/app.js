@@ -100,9 +100,11 @@ function updateUserUI() {
   // Update user info in top bar
   const userInfo = document.getElementById('user-info');
   if (userInfo && currentUser) {
+    // Use displayName if available, otherwise fall back to username
+    const displayName = currentUser.displayName || currentUser.username;
     userInfo.innerHTML = `
       <div class="user-display">
-        <span class="user-name">${escapeHtml(currentUser.username)}</span>
+        <span class="user-name">${escapeHtml(displayName)}</span>
         <span class="user-role ${currentUser.role}">${currentUser.role}</span>
       </div>
       <div class="user-actions">
@@ -572,6 +574,15 @@ async function apiRequest(url, options = {}) {
     if (response.status === 401) {
       window.location.href = '/login.html';
       throw new Error('Session expired. Please login again.');
+    }
+    
+    // Check if response has JSON content before parsing
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      throw new Error('Invalid response from server (not JSON)');
     }
     
     const data = await response.json();
