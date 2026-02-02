@@ -1,29 +1,44 @@
 /* Horizontal Server Creation Form Layout */
+.horizontal-server-form {
+  padding: 20px 25px;
+}
+
 .horizontal-server-form .server-form-horizontal-wrapper {
   display: flex;
   flex-direction: row;
-  gap: 40px;
-  align-items: flex-start;
-  justify-content: space-between;
+  gap: 30px;
+  align-items: stretch;
 }
 
 .horizontal-server-form .server-form-main-fields {
-  flex: 2 1 600px;
-  min-width: 420px;
-  max-width: 730px;
+  flex: 1 1 auto;
+  min-width: 300px;
+  max-width: 500px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .horizontal-server-form .server-form-properties-fields {
-  flex: 1 1 570px;
-  min-width: 380px;
-  max-width: 670px;
-  background: rgba(0,0,50,0.08);
-  border-radius: 0px;
-  padding: 18px 18px 12px 18px;
-  box-shadow: 0 2px 8px 0 rgba(0,0,0,0.04);
+  flex: 1 1 auto;
+  min-width: 280px;
+  max-width: 450px;
+  background: rgba(15, 52, 96, 0.3);
+  border: 1px solid var(--color-border);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.horizontal-server-form .server-form-properties-fields:empty,
+.horizontal-server-form .server-form-properties-fields:not(:has(*:not([style*="display: none"]))) {
+  display: none;
+}
+
+/* When properties panel is hidden, main fields can expand */
+.horizontal-server-form .server-form-horizontal-wrapper:has(.server-form-properties-fields:empty) .server-form-main-fields,
+.horizontal-server-form .server-form-horizontal-wrapper:has(.server-form-properties-fields[style*="display: none"]) .server-form-main-fields {
+  max-width: 600px;
 }
 
 @media (max-width: 900px) {
@@ -35,7 +50,17 @@
   .horizontal-server-form .server-form-properties-fields {
     max-width: 100%;
     min-width: 0;
+    width: 100%;
   }
+}
+
+/* Auto-sizing form based on visible content */
+.horizontal-server-form .form-group {
+  margin-bottom: 0;
+}
+
+.horizontal-server-form .form-group[style*="display: none"] + .form-group {
+  margin-top: 0;
 }
 /* MServerController - Multi-Server CSS */
 
@@ -1189,8 +1214,17 @@ body {
 }
 
 .modal-content.modal-medium {
-  max-width: 650px;
+  max-width: 1100px;
   max-height: 85vh;
+  width: fit-content;
+  min-width: 400px;
+}
+
+/* Adaptive modal for server creation */
+#server-modal .modal-content.modal-medium {
+  width: auto;
+  max-width: 1100px;
+  transition: width 0.3s ease;
 }
 
 .modal-body {
@@ -1274,57 +1308,79 @@ body {
 /* ==================== Server Creation Type Selection ==================== */
 
 .creation-type-section {
-  padding: 25px;
+  padding: 20px 25px;
+  max-width: 700px;
+  margin: 0 auto;
 }
 
 .creation-type-section h3 {
-  font-size: 16px;
-  color: #fff;
-  margin-bottom: 20px;
+  font-size: 14px;
+  color: var(--color-muted);
+  margin-bottom: 16px;
   text-align: center;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .creation-type-buttons {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
+}
+
+@media (max-width: 650px) {
+  .creation-type-buttons {
+    grid-template-columns: 1fr;
+  }
 }
 
 .creation-type-btn {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 15px;
-  padding: 20px;
-  background: #1a1a2e;
-  border: 2px solid #0f3460;
-  border-radius: 10px;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px;
+  background: rgba(15, 52, 96, 0.4);
+  border: 1px solid var(--color-border);
   cursor: pointer;
-  transition: all 0.2s;
-  text-align: left;
+  transition: all 0.2s ease;
+  text-align: center;
+  min-height: 100px;
 }
 
 .creation-type-btn:hover {
-  border-color: #667eea;
-  background: #0f3460;
+  border-color: var(--color-primary);
+  background: rgba(150, 0, 225, 0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(150, 0, 225, 0.2);
+}
+
+.creation-type-btn:active {
+  transform: translateY(0);
 }
 
 .creation-icon {
-  font-size: 32px;
+  font-size: 28px;
   flex-shrink: 0;
+  line-height: 1;
 }
 
 .creation-label {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
   color: #fff;
   display: block;
+  line-height: 1.2;
 }
 
 .creation-desc {
-  font-size: 12px;
-  color: #888;
+  font-size: 11px;
+  color: var(--color-muted);
   display: block;
-  margin-top: 4px;
+  line-height: 1.3;
+  opacity: 0.8;
 }
 
 /* Server form specific styles */
@@ -1398,6 +1454,20 @@ select.form-control:disabled {
   margin-top: 15px;
 }
 
+/* Form group header within horizontal form properties panel */
+.horizontal-server-form .server-form-properties-fields .form-group-header {
+  padding: 0 0 12px 0;
+  border-top: none;
+  margin-top: 0;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 12px;
+}
+
+.horizontal-server-form .server-form-properties-fields .form-row {
+  padding: 0;
+  margin-bottom: 14px;
+}
+
 .form-group-header h4 {
   margin: 0 0 5px 0;
   color: #fff;
@@ -1415,8 +1485,22 @@ select.form-control:disabled {
   margin-bottom: 20px;
 }
 
+/* Remove padding for form groups inside horizontal server form */
+.horizontal-server-form .form-group {
+  padding: 0;
+  margin-bottom: 0;
+}
+
+.horizontal-server-form .server-form-properties-fields .form-group.half {
+  padding: 0;
+}
+
 .form-group:first-of-type {
   margin-top: 20px;
+}
+
+.horizontal-server-form .form-group:first-of-type {
+  margin-top: 0;
 }
 
 .form-group label {
