@@ -1342,9 +1342,38 @@ async function pollDownloadProgress(progressId, serverType, version) {
     try {
       const response = await fetch(`/api/jar-bucket/progress/${progressId}`);
       
-      // Check if response is valid JSON before parsing
-      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+      // Check if response is valid before parsing
+      if (!response.ok) {
+        // If 404, the progress ID doesn't exist yet (still initializing)
+        if (response.status === 404) {
+          consecutiveErrors++;
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            progressContent.innerHTML = `
+              <div class="download-item error">
+                <div class="download-info">
+                  <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+                  <span class="download-status error">❌ Download initialization failed</span>
+                </div>
+                <div class="download-actions">
+                  <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
+                  <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
+                </div>
+              </div>
+            `;
+            return;
+          } else {
+            // Keep trying for 404s (initialization delay)
+            setTimeout(checkProgress, 1000);
+            return;
+          }
+        }
         throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      // Check content type before parsing
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('Server response is not JSON');
       }
       
       const data = await response.json();

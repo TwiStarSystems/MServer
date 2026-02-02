@@ -592,7 +592,12 @@ async function apiRequest(url, options = {}) {
     return data;
   } catch (error) {
     console.error('API request failed:', error);
-    alert('Error: ' + error.message);
+    console.error('URL:', url);
+    console.error('Options:', options);
+    // Don't show alert for certain requests to avoid interrupting the UI
+    if (!url.includes('/api/servers') && !url.includes('/api/auth/me')) {
+      showNotification('Error: ' + error.message, 'error');
+    }
     throw error;
   }
 }
