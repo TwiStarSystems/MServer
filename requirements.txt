@@ -6,6 +6,12 @@ Flask-SocketIO>=5.3.6
 python-socketio>=5.10.0
 python-engineio>=4.8.0
 
+# Environment variables
+python-dotenv>=1.0.0
+
+# CSRF Protection
+Flask-WTF>=1.2.0
+
 # WebSocket support
 gevent>=23.9.0
 gevent-websocket>=0.10.1

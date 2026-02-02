@@ -1,12 +1,39 @@
 // Settings page JavaScript
 
+// CSRF token management
+let csrfToken = null;
+
 let socket = null;
 let statsChart = null;
 let currentUser = null;
 
-// Global fetch wrapper to handle authentication errors
+// Fetch CSRF token
+async function fetchCSRFToken() {
+  try {
+    const response = await fetch('/api/csrf-token');
+    if (response.ok) {
+      const data = await response.json();
+      csrfToken = data.csrf_token;
+    }
+  } catch (err) {
+    console.error('Failed to fetch CSRF token:', err);
+  }
+}
+
+// Global fetch wrapper to handle authentication errors and CSRF
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
+  // Add CSRF token to POST, PUT, DELETE, PATCH requests
+  const method = args[1]?.method?.toUpperCase();
+  if (method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    if (!args[1].headers) {
+      args[1].headers = {};
+    }
+    if (csrfToken && !args[1].headers['X-CSRF-Token']) {
+      args[1].headers['X-CSRF-Token'] = csrfToken;
+    }
+  }
+  
   const response = await originalFetch.apply(this, args);
   
   // Redirect to login if authentication fails
@@ -18,6 +45,9 @@ window.fetch = async function(...args) {
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Fetch CSRF token first
+  await fetchCSRFToken();
+  
   // Set up tab switching FIRST before any async operations
   document.querySelectorAll('.settings-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {

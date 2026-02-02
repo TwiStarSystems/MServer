@@ -33,14 +33,19 @@ from pathlib import Path
 from functools import wraps
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from dotenv import load_dotenv
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
 from flask_socketio import SocketIO, emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -48,12 +53,29 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') != 'development'  # Enable HTTPS-only in production
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 
 # Configure ProxyFix for reverse proxy (e.g., Nginx) headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
+# Initialize CSRF Protection
+csrf = CSRFProtect(app)
+
+# Configure CORS for SocketIO based on environment
+if os.environ.get('FLASK_ENV') == 'production':
+    # In production, restrict to allowed origins
+    ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '').split(',')
+    if ALLOWED_ORIGINS and ALLOWED_ORIGINS[0]:  # Only if ALLOWED_ORIGINS is set
+        socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, manage_session=False)
+        print(f"[Security] CORS restricted to: {ALLOWED_ORIGINS}")
+    else:
+        print("[Security] WARNING: ALLOWED_ORIGINS not set in production, using wildcard")
+        socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
+else:
+    # In development, allow all origins for easier testing
+    socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
+    print("[Security] Development mode: CORS allows all origins")
 
 # Rate limiting
 limiter = Limiter(
@@ -1307,9 +1329,15 @@ class UserManager:
             if not username.replace('_', '').replace('-', '').isalnum():
                 return None, "Username can only contain letters, numbers, underscores, and hyphens"
             
-            # Validate password
-            if len(password) < 6:
-                return None, "Password must be at least 6 characters"
+            # Validate password - strengthened for production security
+            if len(password) < 12:
+                return None, "Password must be at least 12 characters"
+            if not any(c.isupper() for c in password):
+                return None, "Password must contain at least one uppercase letter"
+            if not any(c.islower() for c in password):
+                return None, "Password must contain at least one lowercase letter"
+            if not any(c.isdigit() for c in password):
+                return None, "Password must contain at least one number"
             
             # Check if approval is required
             require_approval = settings_manager.get_app_settings().get('requireApproval', True)
@@ -1678,8 +1706,15 @@ An emergency admin account has been created:
             if not check_password_hash(user['password'], old_password):
                 return False, "Current password is incorrect"
             
-            if len(new_password) < 6:
-                return False, "New password must be at least 6 characters"
+            # Validate password - strengthened for production security
+            if len(new_password) < 12:
+                return False, "New password must be at least 12 characters"
+            if not any(c.isupper() for c in new_password):
+                return False, "Password must contain at least one uppercase letter"
+            if not any(c.islower() for c in new_password):
+                return False, "Password must contain at least one lowercase letter"
+            if not any(c.isdigit() for c in new_password):
+                return False, "Password must contain at least one number"
             
             self.users['users'][user_id]['password'] = generate_password_hash(new_password)
             self._save_users()
@@ -1690,7 +1725,14 @@ An emergency admin account has been created:
         with self.lock:
             if user_id not in self.users.get('users', {}):
                 return False
-            if len(new_password) < 6:
+            # Validate password strength
+            if len(new_password) < 12:
+                return False
+            if not any(c.isupper() for c in new_password):
+                return False
+            if not any(c.islower() for c in new_password):
+                return False
+            if not any(c.isdigit() for c in new_password):
                 return False
             self.users['users'][user_id]['password'] = generate_password_hash(new_password)
             self._save_users()
@@ -1777,15 +1819,18 @@ An emergency admin account has been created:
         return totp.verify(code, valid_window=1)  # Allow 1 step before/after for clock drift
     
     def enable_mfa(self, user_id, secret, recovery_code):
-        """Enable MFA for user"""
+        """Enable MFA for user with hashed recovery code"""
         with self.lock:
             user = self.users.get('users', {}).get(user_id)
             if not user:
                 return False, "User not found"
             
+            # Hash recovery code before storage for security
+            recovery_code_hash = generate_password_hash(recovery_code)
+            
             self.users['users'][user_id]['mfaEnabled'] = True
             self.users['users'][user_id]['mfaSecret'] = secret
-            self.users['users'][user_id]['mfaRecoveryCode'] = recovery_code
+            self.users['users'][user_id]['mfaRecoveryCode'] = recovery_code_hash
             self._save_users()
             return True, "MFA enabled successfully"
     
@@ -1803,11 +1848,23 @@ An emergency admin account has been created:
             return True, "MFA disabled successfully"
     
     def verify_recovery_code(self, user_id, recovery_code):
-        """Verify and use recovery code (one-time use)"""
+        """Verify and use recovery code (one-time use) - now supports hashed codes"""
         with self.lock:
             user = self.users.get('users', {}).get(user_id)
             if not user:
                 return False
+            
+            stored_code_hash = user.get('mfaRecoveryCode')
+            if not stored_code_hash:
+                return False
+            
+            # Verify hashed recovery code
+            if check_password_hash(stored_code_hash, recovery_code):
+                # Disable MFA after successful recovery
+                self.disable_mfa(user_id)
+                return True
+            
+            return False
             
             if user.get('mfaRecoveryCode') == recovery_code:
                 # Disable MFA after recovery code is used
@@ -3385,8 +3442,11 @@ backup_scheduler = BackupScheduler()
 task_scheduler = TaskScheduler(server_manager, socketio)
 
 # Initialize API Manager
-from api_manager import init_api_manager
+from api_manager import init_api_manager, api_v1
 init_api_manager(app)
+
+# Exempt API v1 from CSRF protection (uses API key authentication)
+csrf.exempt(api_v1)
 
 
 def is_safe_path(base_path, requested_path):
@@ -3397,6 +3457,14 @@ def is_safe_path(base_path, requested_path):
         return str(full).startswith(str(base))
     except Exception:
         return False
+
+# ==================== CSRF Token Endpoint ====================
+
+@app.route('/api/csrf-token', methods=['GET'])
+def get_csrf_token():
+    """Get CSRF token for authenticated sessions"""
+    token = generate_csrf()
+    return jsonify({'csrf_token': token})
 
 
 # ==================== Static Files & Page Routes ====================
@@ -3464,9 +3532,10 @@ def api_login():
     
     # Check if MFA is enabled for this user
     if result.get('mfaEnabled', False):
-        # Set temporary session for MFA verification
+        # Set temporary session for MFA verification with timestamp
         session['temp_user_id'] = user_id
         session['mfa_required'] = True
+        session['mfa_timestamp'] = time.time()
         
         return jsonify({
             'success': True,
@@ -3727,9 +3796,19 @@ def api_mfa_disable():
 def api_mfa_verify_login():
     """Verify MFA code during login"""
     temp_user_id = session.get('temp_user_id')
+    mfa_timestamp = session.get('mfa_timestamp')
     
     if not temp_user_id:
         return jsonify({'error': 'No pending MFA verification'}), 400
+    
+    # Check for MFA timeout (5 minutes)
+    if mfa_timestamp:
+        mfa_age = time.time() - mfa_timestamp
+        if mfa_age > 300:  # 5 minutes
+            session.pop('temp_user_id', None)
+            session.pop('mfa_required', None)
+            session.pop('mfa_timestamp', None)
+            return jsonify({'error': 'MFA verification timeout. Please login again.'}), 400
     
     data = request.get_json()
     code = data.get('code', '')
@@ -7039,6 +7118,45 @@ def run_tool(tool_name):
         return jsonify({'error': f'Tool execution timed out ({timeout_seconds}s limit)'}), 408
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== Security Headers Middleware ====================
+
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses for production hardening"""
+    # Prevent clickjacking attacks
+    response.headers['X-Frame-Options'] = 'DENY'
+    
+    # Prevent MIME-sniffing vulnerabilities
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    
+    # Enable XSS protection for legacy browsers
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    
+    # Strict Transport Security (HSTS) - enforce HTTPS in production
+    if os.environ.get('FLASK_ENV') != 'development' and request.is_secure:
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    
+    # Content Security Policy - restrictive default, adjust for your needs
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self' ws: wss:; "
+        "font-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self';"
+    )
+    
+    # Referrer Policy - prevent sensitive URL leakage
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    
+    # Permissions Policy - disable unnecessary features
+    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    
+    return response
 
 
 # ==================== WebSocket Events ====================

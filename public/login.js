@@ -1,9 +1,28 @@
 // Login page JavaScript
 
+// CSRF token management
+let csrfToken = null;
+
+// Fetch CSRF token
+async function fetchCSRFToken() {
+  try {
+    const response = await fetch('/api/csrf-token');
+    if (response.ok) {
+      const data = await response.json();
+      csrfToken = data.csrf_token;
+    }
+  } catch (err) {
+    console.error('Failed to fetch CSRF token:', err);
+  }
+}
+
 // Prevent multiple auth checks
 let authCheckDone = false;
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // Fetch CSRF token first
+    await fetchCSRFToken();
+    
     // Check if already logged in (only once)
     if (!authCheckDone) {
         authCheckDone = true;
@@ -43,7 +62,10 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/api/auth/login', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
                 body: JSON.stringify({ username, password })
             });
             
@@ -101,7 +123,10 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/api/auth/register', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrfToken
+                },
                 body: JSON.stringify({ username, password })
             });
             
@@ -232,7 +257,10 @@ async function verifyMFACode() {
     try {
         const response = await fetch('/api/auth/mfa/verify-login', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
             body: JSON.stringify({ code, useRecovery: false })
         });
         
@@ -266,7 +294,10 @@ async function verifyMFARecovery() {
     try {
         const response = await fetch('/api/auth/mfa/verify-login', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
             body: JSON.stringify({ code, useRecovery: true })
         });
         
