@@ -134,23 +134,37 @@ prompt_env_config() {
     if [ "$FLASK_ENV" = "production" ]; then
         echo "CORS Configuration (ALLOWED_ORIGINS):"
         echo "This controls which domains can access your API."
+        echo ""
+        echo "The following will be automatically included:"
+        echo "  - http://localhost:3000 and https://localhost (for local testing)"
+        echo "  - http://<server-ip>:3000 and https://<server-ip> (for IP access)"
+        echo ""
+        echo "You can add additional domains (comma-separated):"
         echo "Examples:"
         echo "  - https://example.com"
         echo "  - https://example.com,https://www.example.com"
         echo ""
         
-        # Get server IP for suggestion
+        # Get server IP
         local server_ip=$(hostname -I | awk '{print $1}')
         local hostname=$(hostname)
         
-        read -p "Enter allowed origins (comma-separated) [default: https://$server_ip]: " user_origins
+        read -p "Enter additional allowed origins (comma-separated) [press Enter to skip]: " user_origins
         
-        if [ -z "$user_origins" ]; then
-            ALLOWED_ORIGINS="https://$server_ip"
-        else
-            ALLOWED_ORIGINS="$user_origins"
+        # Build ALLOWED_ORIGINS list with localhost and server IP always included
+        ALLOWED_ORIGINS="http://localhost:3000,https://localhost,http://$server_ip:3000,https://$server_ip"
+        
+        # Add user-provided origins if any
+        if [ -n "$user_origins" ]; then
+            ALLOWED_ORIGINS="$ALLOWED_ORIGINS,$user_origins"
         fi
-        print_info "ALLOWED_ORIGINS set to: $ALLOWED_ORIGINS"
+        
+        print_info "ALLOWED_ORIGINS configured:"
+        echo "  Localhost: http://localhost:3000, https://localhost"
+        echo "  Server IP: http://$server_ip:3000, https://$server_ip"
+        if [ -n "$user_origins" ]; then
+            echo "  Custom: $user_origins"
+        fi
     else
         ALLOWED_ORIGINS=""
         print_info "Development mode: CORS allows all origins"

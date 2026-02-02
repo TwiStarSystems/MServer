@@ -2220,6 +2220,9 @@ async function loadAppSettings() {
       document.getElementById('require-mfa-all').checked = mfaSettings.requireMfaForAllUsers ?? false;
     }
     
+    // Load CORS settings
+    await loadCorsSettings();
+    
     // Load SMTP settings
     await loadSmtpSettings();
   } catch (err) {
@@ -2257,6 +2260,52 @@ function toggleSmtpFields() {
   
   if (smtpConfigSection) {
     smtpConfigSection.style.display = enabled ? 'block' : 'none';
+  }
+}
+
+async function loadCorsSettings() {
+  try {
+    const response = await fetch('/api/settings/cors');
+    if (response.ok) {
+      const corsSettings = await response.json();
+      document.getElementById('allowed-origins').value = corsSettings.allowedOrigins ?? '';
+    }
+  } catch (err) {
+    console.error('Failed to load CORS settings:', err);
+  }
+}
+
+async function saveCorsSettings() {
+  const allowedOrigins = document.getElementById('allowed-origins').value.trim();
+  const statusDiv = document.getElementById('cors-save-status');
+  
+  try {
+    statusDiv.innerHTML = '<span style="color: #007bff;">💾 Saving...</span>';
+    
+    const response = await fetch('/api/settings/cors', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowedOrigins })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to save CORS settings');
+    }
+    
+    const result = await response.json();
+    statusDiv.innerHTML = '<span style="color: #28a745;">✓ CORS settings saved successfully!</span>';
+    
+    if (result.requiresRestart) {
+      statusDiv.innerHTML += '<br><span style="color: #ffc107;">⚠️ Server restart required for changes to take effect</span>';
+    }
+    
+    setTimeout(() => {
+      statusDiv.innerHTML = '';
+    }, 5000);
+  } catch (err) {
+    console.error('Failed to save CORS settings:', err);
+    statusDiv.innerHTML = '<span style="color: #dc3545;">✗ Failed to save: ' + err.message + '</span>';
   }
 }
 

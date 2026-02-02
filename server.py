@@ -5972,6 +5972,74 @@ def update_mfa_settings():
     settings_manager.update_settings({'mfa': mfa_settings})
     return jsonify({'success': True, 'settings': mfa_settings})
 
+@app.route('/api/settings/cors', methods=['GET'])
+@admin_required
+def get_cors_settings():
+    """Get CORS settings (admin only)"""
+    # Read from .env file if exists
+    env_path = BASE_DIR / '.env'
+    allowed_origins = os.environ.get('ALLOWED_ORIGINS', '')
+    
+    return jsonify({'allowedOrigins': allowed_origins})
+
+@app.route('/api/settings/cors', methods=['PUT'])
+@admin_required
+def update_cors_settings():
+    """Update CORS settings by modifying .env file (admin only)"""
+    data = request.get_json()
+    allowed_origins = data.get('allowedOrigins', '').strip()
+    
+    try:
+        env_path = BASE_DIR / '.env'
+        
+        # Read existing .env file
+        env_content = ''
+        if env_path.exists():
+            with open(env_path, 'r') as f:
+                env_content = f.read()
+        
+        # Update or add ALLOWED_ORIGINS
+        lines = env_content.split('\n')
+        found = False
+        new_lines = []
+        
+        for line in lines:
+            if line.startswith('ALLOWED_ORIGINS='):
+                new_lines.append(f'ALLOWED_ORIGINS={allowed_origins}')
+                found = True
+            else:
+                new_lines.append(line)
+        
+        # If not found, add it after FLASK_ENV
+        if not found:
+            for i, line in enumerate(new_lines):
+                if line.startswith('FLASK_ENV='):
+                    new_lines.insert(i + 1, f'\nALLOWED_ORIGINS={allowed_origins}')
+                    found = True
+                    break
+        
+        # If still not found, append at the end
+        if not found:
+            new_lines.append(f'\nALLOWED_ORIGINS={allowed_origins}')
+        
+        # Write back to .env file
+        with open(env_path, 'w') as f:
+            f.write('\n'.join(new_lines))
+        
+        # Update current environment variable (for current session)
+        os.environ['ALLOWED_ORIGINS'] = allowed_origins
+        
+        print(f"[CORS] ALLOWED_ORIGINS updated to: {allowed_origins}")
+        
+        return jsonify({
+            'success': True,
+            'allowedOrigins': allowed_origins,
+            'requiresRestart': True  # Server needs restart for SocketIO to pick up changes
+        })
+    except Exception as e:
+        print(f"[ERROR] Failed to update CORS settings: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/settings/smtp', methods=['GET'])
 @admin_required
 def get_smtp_settings():
