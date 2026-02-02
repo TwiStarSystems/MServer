@@ -3500,16 +3500,29 @@ def settings_page():
 def static_files(path):
     """Serve static files"""
     # Allow certain files without auth (CSS, JS, and public pages)
-    public_files = ['styles.css', 'app.js', 'login.js', 'public.js', 'settings.js']
+    public_files = ['styles.css', 'app.js', 'login.js', 'public.js', 'settings.js', 'utils.js']
     if path in public_files or path.startswith('assets/'):
-        return send_from_directory('public', path)
+        response = send_from_directory('public', path)
+        # Add cache-control headers to prevent caching of JS/CSS files
+        # This ensures users get the latest version after updates
+        if path.endswith('.js') or path.endswith('.css'):
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+        return response
     
     # Check auth for other files
     user_id, user = get_current_user()
     if not user:
         return redirect('/login.html')
     
-    return send_from_directory('public', path)
+    response = send_from_directory('public', path)
+    # Add cache-control headers for authenticated files too
+    if path.endswith('.js') or path.endswith('.css'):
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 
 # ==================== Authentication API ====================

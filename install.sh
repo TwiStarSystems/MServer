@@ -846,28 +846,45 @@ do_update() {
     
     # Determine source directory (where install.sh is located)
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    print_info "Source directory: $SCRIPT_DIR"
     
     # Update application files
     if [ -f "$SCRIPT_DIR/server.py" ]; then
         print_info "Updating application files from source directory..."
         
         # Copy core application files
-        cp "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
-        cp "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
+        cp -f "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
+        print_success "  Updated: server.py"
+        
+        cp -f "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: server_core.py" || true
+        cp -f "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: api_manager.py" || true
+        cp -f "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
+        print_success "  Updated: requirements.txt"
         
         # Update version file
         if [ -f "$SCRIPT_DIR/version" ]; then
-            cp "$SCRIPT_DIR/version" "$INSTALL_DIR/"
+            cp -f "$SCRIPT_DIR/version" "$INSTALL_DIR/"
             print_success "  Updated: version"
         fi
         
-        # Update frontend files
+        # Update frontend files (THIS IS CRITICAL FOR YOUR CHANGES)
         if [ -d "$SCRIPT_DIR/public" ]; then
+            print_info "Removing old frontend files..."
             rm -rf "$INSTALL_DIR/public"
-            cp -r "$SCRIPT_DIR/public" "$INSTALL_DIR/"
-            print_success "  Updated: public/ (frontend files)"
+            print_info "Copying new frontend files..."
+            cp -rf "$SCRIPT_DIR/public" "$INSTALL_DIR/"
+            # Verify the copy succeeded and show file count
+            if [ -d "$INSTALL_DIR/public" ]; then
+                local file_count=$(find "$INSTALL_DIR/public" -type f | wc -l)
+                print_success "  Updated: public/ (frontend files) - $file_count files copied"
+                # Verify critical files
+                [ -f "$INSTALL_DIR/public/app.js" ] && print_success "    ✓ app.js updated" || print_warning "    ⚠ app.js not found!"
+                [ -f "$INSTALL_DIR/public/settings.js" ] && print_success "    ✓ settings.js updated" || print_warning "    ⚠ settings.js not found!"
+            else
+                print_error "  Failed to copy public/ directory!"
+            fi
+        else
+            print_warning "  Source public/ directory not found at $SCRIPT_DIR/public"
         fi
         
         # Update configs directory (templates only)
@@ -957,6 +974,17 @@ do_update() {
     # Fix permissions
     set_permissions
     
+    # Verify frontend files are readable
+    print_info "Verifying frontend file permissions..."
+    if [ -f "$INSTALL_DIR/public/app.js" ]; then
+        local perms=$(stat -c "%a" "$INSTALL_DIR/public/app.js")
+        print_success "  app.js permissions: $perms"
+    fi
+    if [ -f "$INSTALL_DIR/public/settings.js" ]; then
+        local perms=$(stat -c "%a" "$INSTALL_DIR/public/settings.js")
+        print_success "  settings.js permissions: $perms"
+    fi
+    
     # Update systemd service (in case of changes)
     print_info "Updating systemd service..."
     create_service
@@ -972,6 +1000,14 @@ do_update() {
         echo "  ✓ All configurations preserved"
         echo "  ✓ All user data preserved"
         echo "  ✓ Service restarted"
+        echo ""
+        print_warning "IMPORTANT: Clear your browser cache!"
+        echo "  To see the updated frontend changes:"
+        echo "  1. Press Ctrl+Shift+R (or Cmd+Shift+R on Mac) to hard refresh"
+        echo "  2. Or clear browser cache completely"
+        echo "  3. Or use Incognito/Private browsing mode"
+        echo ""
+        echo "  Updated timestamp: $(date)"
         echo ""
         show_completion "Update"
     else
