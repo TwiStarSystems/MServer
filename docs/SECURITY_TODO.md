@@ -173,38 +173,7 @@ os.chmod('admin_initial_password.txt', 0o600)
 
 ---
 
-### 4. Restrict CORS for SocketIO
-**Status:** Wide Open (`*`)  
-**Risk Level:** Medium  
-**Estimated Time:** 30 minutes
-
-**Implementation:**
-
-1. **Update server.py:**
-   ```python
-   # Get allowed origins from environment
-   ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
-   
-   # In production, set ALLOWED_ORIGINS to your domain
-   if os.environ.get('FLASK_ENV') == 'production':
-       socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, manage_session=False)
-   else:
-       # Allow all in development
-       socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
-   ```
-
-2. **Set environment variable:**
-   ```bash
-   export ALLOWED_ORIGINS="https://yourdomain.com,https://www.yourdomain.com"
-   ```
-
-3. **Test:**
-   - Verify WebSocket connections work from allowed origins
-   - Verify connections blocked from other origins
-
----
-
-### 5. Input Sanitization in Error Messages
+### 4. Input Sanitization in Error Messages
 **Status:** Some Direct Reflection  
 **Risk Level:** Low-Medium  
 **Estimated Time:** 2-3 hours
@@ -395,8 +364,7 @@ sessions = {
 
 ### Phase 2 (Within 2 Weeks):
 3. Hash MFA Recovery Codes ⭐⭐
-4. Restrict CORS Origins ⭐⭐
-5. Input Sanitization Review ⭐⭐
+4. Input Sanitization Review ⭐⭐
 
 ### Phase 3 (Within 1 Month):
 6. Enhanced API Rate Limiting ⭐

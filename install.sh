@@ -117,7 +117,6 @@ prompt_env_config() {
     if [ "$flask_choice" = "2" ]; then
         FLASK_ENV="development"
         print_info "Development mode selected"
-        print_warning "Development mode allows all CORS origins and disables some security features"
     else
         FLASK_ENV="production"
         print_info "Production mode selected"
@@ -128,47 +127,6 @@ prompt_env_config() {
     print_info "Generating secure secret key..."
     SECRET_KEY=$(generate_secret_key)
     print_success "Secret key generated"
-    echo ""
-    
-    # ALLOWED_ORIGINS (required for production)
-    if [ "$FLASK_ENV" = "production" ]; then
-        echo "CORS Configuration (ALLOWED_ORIGINS):"
-        echo "This controls which domains can access your API."
-        echo ""
-        echo "The following will be automatically included:"
-        echo "  - http://localhost:3000 and https://localhost (for local testing)"
-        echo "  - http://<server-ip>:3000 and https://<server-ip> (for IP access)"
-        echo ""
-        echo "You can add additional domains (comma-separated):"
-        echo "Examples:"
-        echo "  - https://example.com"
-        echo "  - https://example.com,https://www.example.com"
-        echo ""
-        
-        # Get server IP
-        local server_ip=$(hostname -I | awk '{print $1}')
-        local hostname=$(hostname)
-        
-        read -p "Enter additional allowed origins (comma-separated) [press Enter to skip]: " user_origins
-        
-        # Build ALLOWED_ORIGINS list with localhost and server IP always included
-        ALLOWED_ORIGINS="http://localhost:3000,https://localhost,http://$server_ip:3000,https://$server_ip"
-        
-        # Add user-provided origins if any
-        if [ -n "$user_origins" ]; then
-            ALLOWED_ORIGINS="$ALLOWED_ORIGINS,$user_origins"
-        fi
-        
-        print_info "ALLOWED_ORIGINS configured:"
-        echo "  Localhost: http://localhost:3000, https://localhost"
-        echo "  Server IP: http://$server_ip:3000, https://$server_ip"
-        if [ -n "$user_origins" ]; then
-            echo "  Custom: $user_origins"
-        fi
-    else
-        ALLOWED_ORIGINS=""
-        print_info "Development mode: CORS allows all origins"
-    fi
     echo ""
     
     # Port configuration
@@ -210,15 +168,6 @@ FLASK_ENV=$FLASK_ENV
 
 EOF
 
-    # Add ALLOWED_ORIGINS if in production
-    if [ "$FLASK_ENV" = "production" ] && [ -n "$ALLOWED_ORIGINS" ]; then
-        cat >> "$INSTALL_DIR/.env" <<EOF
-# Allowed CORS origins for SocketIO (comma-separated, required in production)
-ALLOWED_ORIGINS=$ALLOWED_ORIGINS
-
-EOF
-    fi
-
     cat >> "$INSTALL_DIR/.env" <<EOF
 # ==================== OPTIONAL CONFIGURATION ====================
 
@@ -248,8 +197,7 @@ EOF
 # 1. This file contains sensitive information - keep it secure
 # 2. Never commit this file to version control
 # 3. In production, always use FLASK_ENV=production
-# 4. Set ALLOWED_ORIGINS to your actual domain(s) in production
-# 5. Use HTTPS in production (SESSION_COOKIE_SECURE is auto-enabled)
+# 4. Use HTTPS in production (SESSION_COOKIE_SECURE is auto-enabled)
 EOF
 
     # Set proper permissions on .env file
@@ -1066,9 +1014,6 @@ SECRET_KEY=$dev_secret
 
 # Port (default for development)
 PORT=3000
-
-# Development mode allows all CORS origins
-# No need to set ALLOWED_ORIGINS
 EOF
         print_success ".env file created for development"
         echo "  FLASK_ENV=development"

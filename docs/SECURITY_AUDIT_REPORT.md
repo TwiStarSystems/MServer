@@ -163,20 +163,7 @@ check_password_hash(user['mfaRecoveryCode'], provided_code)
 
 ### **MEDIUM Priority**
 
-#### 3. **CORS Restriction for SocketIO** 🟡
-**Current:**
-```python
-socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
-```
-
-**Recommendation:**
-```python
-# In production
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'https://yourdomain.com').split(',')
-socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, manage_session=False)
-```
-
-#### 4. **Input Sanitization in Error Messages** 🟡
+#### 3. **Input Sanitization in Error Messages** 🟡
 Review all error messages that may reflect user input to prevent information disclosure.
 
 #### 5. **Enhanced API Rate Limiting** 🟡
@@ -215,7 +202,6 @@ Add comprehensive audit logging for:
 - [x] Rate limiting configured
 - [ ] CSRF protection implemented
 - [ ] MFA recovery codes hashed
-- [ ] CORS origins restricted
 - [ ] Change default admin password
 - [ ] Review error messages for info leakage
 - [ ] Setup HTTPS/TLS with valid certificates
@@ -229,7 +215,6 @@ Add comprehensive audit logging for:
 # Required for production
 export SECRET_KEY="<generate-strong-random-key>"
 export FLASK_ENV="production"
-export ALLOWED_ORIGINS="https://yourdomain.com,https://www.yourdomain.com"
 
 # Optional but recommended
 export SESSION_COOKIE_DOMAIN="yourdomain.com"
@@ -338,9 +323,8 @@ MServerController demonstrates **strong security practices** with comprehensive 
 **Key Recommendations:**
 1. Implement CSRF protection before production deployment
 2. Hash MFA recovery codes
-3. Restrict CORS origins for SocketIO
-4. Change default admin credentials immediately
-5. Deploy with HTTPS/TLS enabled
+3. Change default admin credentials immediately
+4. Deploy with HTTPS/TLS enabled
 
 With these recommendations implemented, MServerController provides a **secure platform** for managing Minecraft servers in a multi-user environment.
 

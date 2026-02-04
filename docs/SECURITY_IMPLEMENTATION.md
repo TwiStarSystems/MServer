@@ -71,42 +71,6 @@ if check_password_hash(stored_code_hash, provided_code):
 
 ---
 
-## 3. ✅ Restricted CORS Origins
-
-**Implementation:** Environment-based CORS configuration for SocketIO
-
-### Configuration:
-```python
-if os.environ.get('FLASK_ENV') == 'production':
-    ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '').split(',')
-    if ALLOWED_ORIGINS and ALLOWED_ORIGINS[0]:
-        socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, manage_session=False)
-    else:
-        # Warning if not set in production
-        socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
-else:
-    # Development: allow all
-    socketio = SocketIO(app, cors_allowed_origins="*", manage_session=False)
-```
-
-### Environment Setup:
-```bash
-# Production
-export FLASK_ENV="production"
-export ALLOWED_ORIGINS="https://yourdomain.com,https://www.yourdomain.com"
-
-# Development
-export FLASK_ENV="development"
-# ALLOWED_ORIGINS not needed (allows all)
-```
-
-### Protection Against:
-- Unauthorized WebSocket connections
-- Cross-origin WebSocket hijacking
-- Data exfiltration via WebSocket
-
----
-
 ## 📋 Complete Security Feature List
 
 ### ✅ Authentication & Authorization
@@ -133,7 +97,6 @@ export FLASK_ENV="development"
 - Policy enforcement
 
 ### ✅ Network Security (ENHANCED)
-- **Restricted CORS origins** (NEW)
 - Security headers (XSS, clickjacking, etc.)
 - HTTPS-only cookies in production
 - Rate limiting
@@ -176,7 +139,6 @@ export FLASK_ENV="development"
    ```bash
    export SECRET_KEY="<your-generated-key>"
    export FLASK_ENV="production"
-   export ALLOWED_ORIGINS="https://yourdomain.com"
    ```
 
 4. **Change Default Admin:**
@@ -192,7 +154,6 @@ export FLASK_ENV="development"
 6. **Test Security Features:**
    - Verify CSRF protection (try request without token)
    - Test MFA with recovery code
-   - Check CORS restrictions
    - Confirm rate limiting
 
 ---
@@ -214,11 +175,6 @@ curl -X POST http://localhost:3000/api/auth/password \
   -d '{"oldPassword":"test","newPassword":"test"}' \
   -b "session=<your-session-cookie>"
 ```
-
-### Test CORS Restrictions:
-1. Set `FLASK_ENV=production` and `ALLOWED_ORIGINS=https://example.com`
-2. Try connecting WebSocket from different origin
-3. Should be blocked
 
 ### Test Hashed Recovery Codes:
 1. Enable MFA for a user
@@ -247,7 +203,6 @@ curl -X POST http://localhost:3000/api/auth/password \
 | Brute-Force Protection | ✅ Implemented | ✅ Yes |
 | MFA System | ✅ **ENHANCED** | ✅ Yes |
 | Hashed Recovery Codes | ✅ **NEW** | ✅ Yes |
-| CORS Restrictions | ✅ **NEW** | ✅ Yes |
 | Rate Limiting | ✅ Implemented | ✅ Yes |
 | Security Headers | ✅ Implemented | ✅ Yes |
 | HTTPS-Only Cookies | ✅ Implemented | ✅ Yes |
@@ -269,11 +224,6 @@ curl -X POST http://localhost:3000/api/auth/password \
 - Existing plaintext recovery codes need regeneration
 - Users should re-enable MFA to get hashed codes
 - Old codes will still work but should be replaced
-
-### CORS Origins
-- **MUST** set `ALLOWED_ORIGINS` in production
-- Comma-separated list for multiple domains
-- Include protocol (https://)
 
 ### Environment Variables
 - `.env.example` provided as template
@@ -297,7 +247,6 @@ curl -X POST http://localhost:3000/api/auth/password \
    - Recommend re-enabling MFA for hashed codes
 
 3. **Environment Setup:**
-   - Add `ALLOWED_ORIGINS` to production config
    - Verify `FLASK_ENV=production` is set
    - `SECRET_KEY` should already exist
 
@@ -314,9 +263,6 @@ curl -X POST http://localhost:3000/api/auth/password \
 
 **Q: CSRF validation failed error?**
 A: Clear browser cache and reload page to get new CSRF token
-
-**Q: WebSocket not connecting in production?**
-A: Check `ALLOWED_ORIGINS` environment variable is set correctly
 
 **Q: Old MFA recovery code not working?**
 A: Old codes stored as plaintext will still work, but re-enable MFA for enhanced security

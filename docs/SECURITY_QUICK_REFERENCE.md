@@ -138,7 +138,6 @@ export FLASK_ENV="production"
 
 ### Recommended:
 ```bash
-export ALLOWED_ORIGINS="https://yourdomain.com"
 export SESSION_COOKIE_DOMAIN="yourdomain.com"
 export PORT="3000"
 ```
