@@ -1380,7 +1380,21 @@ async function pollDownloadProgress(progressId, serverType, version) {
       
       consecutiveErrors = 0; // Reset on successful poll
       
-      if (data.status === 'downloading') {
+      if (data.status === 'initializing') {
+        // Still initializing, keep polling
+        progressContent.innerHTML = `
+          <div class="download-item">
+            <div class="download-info">
+              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
+              <span class="download-status">${data.message || 'Initializing...'}</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
+        `;
+        setTimeout(checkProgress, 500);
+      } else if (data.status === 'downloading') {
         const percent = data.progress || 0;
         const downloaded = formatBytes(data.downloaded || 0);
         const total = formatBytes(data.total || 0);

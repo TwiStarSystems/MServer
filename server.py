@@ -3623,6 +3623,7 @@ def api_current_user():
         'id': user_id,
         'username': user['username'],
         'name': user.get('name', ''),
+        'displayName': user.get('name', ''),  # Alias for frontend compatibility
         'email': user.get('email', ''),
         'role': user['role'],
         'mfaEnabled': user.get('mfaEnabled', False)
@@ -6780,6 +6781,12 @@ def api_jar_bucket_download():
     
     # Generate progress ID
     progress_id = str(uuid.uuid4())
+    
+    # Initialize progress immediately to avoid race condition
+    jar_bucket.download_progress[progress_id] = {
+        'status': 'initializing',
+        'message': 'Starting download...'
+    }
     
     # Start download in background thread
     def do_download():

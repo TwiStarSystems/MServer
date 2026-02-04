@@ -100,8 +100,8 @@ function updateUserUI() {
   // Update user info in top bar
   const userInfo = document.getElementById('user-info');
   if (userInfo && currentUser) {
-    // Use displayName if available, otherwise fall back to username
-    const displayName = currentUser.displayName || currentUser.username;
+    // Use displayName (or name) if available, otherwise fall back to username
+    const displayName = currentUser.displayName || currentUser.name || currentUser.username;
     userInfo.innerHTML = `
       <div class="user-display">
         <span class="user-name">${escapeHtml(displayName)}</span>
@@ -1134,6 +1134,7 @@ let currentCreationType = null;
 let defaultServerPath = '';
 
 async function openAddServerModal() {
+  console.log('openAddServerModal called');
   editingServerId = null;
   currentCreationType = null;
   
@@ -1145,13 +1146,14 @@ async function openAddServerModal() {
   document.getElementById('import-server-form').style.display = 'none';
   document.getElementById('manual-server-form').style.display = 'none';
   
-  // Fetch the default server path
+  // Fetch the default server path (non-blocking - don't prevent modal from opening)
   try {
     const result = await apiRequest('/api/default-server-path');
     defaultServerPath = result.path || '';
   } catch (err) {
     console.error('Failed to get default server path:', err);
     defaultServerPath = '';
+    // Continue anyway - this shouldn't prevent the modal from opening
   }
   
   // Reset fresh server form
@@ -1224,9 +1226,10 @@ async function openAddServerModal() {
     pathHint.innerHTML = `Leave empty to auto-create in <code>${defaultServerPath}/</code>`;
   }
   
-  // Load server engines for fresh server option
-  loadServerEngines();
+  // Load server engines for fresh server option (non-blocking)
+  loadServerEngines().catch(err => console.error('Failed to load engines:', err));
   
+  // Show modal immediately (don't wait for async operations)
   document.getElementById('server-modal').classList.add('active');
 }
 
