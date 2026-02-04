@@ -20,10 +20,6 @@ window.fetch = async function(...args) {
       args[1].headers['X-CSRF-Token'] = window.csrfToken;
     }
   }
-    if (csrfToken && !args[1].headers['X-CSRF-Token']) {
-      args[1].headers['X-CSRF-Token'] = csrfToken;
-    }
-  }
   
   const response = await originalFetch.apply(this, args);
   
@@ -33,6 +29,7 @@ window.fetch = async function(...args) {
   }
   
   return response;
+};
 };
 
 document.addEventListener('DOMContentLoaded', async () => {
