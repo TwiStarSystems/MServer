@@ -305,21 +305,6 @@
           </div>
           
           <div class="settings-card">
-            <h3>🌐 CORS Configuration</h3>
-            <p style="margin-bottom: 15px; color: #666;">Configure allowed origins for Cross-Origin Resource Sharing (CORS). Only listed origins can access the API.</p>
-            <div class="form-group">
-              <label for="allowed-origins">Allowed Origins (comma-separated)</label>
-              <textarea id="allowed-origins" class="form-control" rows="4" placeholder="https://example.com,https://www.example.com,http://localhost:3000"></textarea>
-              <small style="display: block; margin-top: 5px; color: #666;">
-                Examples: https://example.com, http://192.168.1.100:3000<br>
-                Leave empty to allow all origins (not recommended for production)
-              </small>
-            </div>
-            <button type="button" class="btn btn-primary" onclick="saveCorsSettings()">💾 Save CORS Settings</button>
-            <div id="cors-save-status" style="margin-top: 10px;"></div>
-          </div>
-          
-          <div class="settings-card">
             <h3>📧 Email / SMTP Configuration</h3>
             <div class="settings-option">
               <div class="settings-option-info">
