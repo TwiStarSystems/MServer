@@ -7149,9 +7149,9 @@ def add_security_headers(response):
     # Content Security Policy - restrictive default, adjust for your needs
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.socket.io https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
+        "img-src 'self' data: https:; "
         "connect-src 'self' ws: wss:; "
         "font-src 'self'; "
         "object-src 'none'; "
