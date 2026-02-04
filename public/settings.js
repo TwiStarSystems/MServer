@@ -7,6 +7,8 @@ let statsChart = null;
 let currentUser = null;
 
 // Global fetch wrapper to handle authentication errors and CSRF
+// Store original fetch for utils.js to use when fetching CSRF token
+window.originalFetch = window.fetch;
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
   // Add CSRF token to POST, PUT, DELETE, PATCH requests
@@ -29,7 +31,6 @@ window.fetch = async function(...args) {
   }
   
   return response;
-};
 };
 
 document.addEventListener('DOMContentLoaded', async () => {

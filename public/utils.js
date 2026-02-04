@@ -40,7 +40,9 @@ window.csrfToken = null;
  */
 async function fetchCSRFToken() {
   try {
-    const response = await fetch('/api/csrf-token');
+    // Use window.fetch directly (before wrapper is applied) or store original fetch
+    const fetchFunc = window.originalFetch || window.fetch;
+    const response = await fetchFunc('/api/csrf-token');
     if (response.ok) {
       const data = await response.json();
       window.csrfToken = data.csrf_token;
