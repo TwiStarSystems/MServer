@@ -1,20 +1,6 @@
 // Login page JavaScript
 
-// CSRF token management
-let csrfToken = null;
-
-// Fetch CSRF token
-async function fetchCSRFToken() {
-  try {
-    const response = await fetch('/api/csrf-token');
-    if (response.ok) {
-      const data = await response.json();
-      csrfToken = data.csrf_token;
-    }
-  } catch (err) {
-    console.error('Failed to fetch CSRF token:', err);
-  }
-}
+// Note: CSRF token management is in utils.js (window.csrfToken and fetchCSRFToken)
 
 // Prevent multiple auth checks
 let authCheckDone = false;
@@ -64,7 +50,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrfToken
+                    'X-CSRF-Token': window.csrfToken
                 },
                 body: JSON.stringify({ username, password })
             });
@@ -125,7 +111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'X-CSRF-Token': csrfToken
+                    'X-CSRF-Token': window.csrfToken
                 },
                 body: JSON.stringify({ username, password })
             });
@@ -259,7 +245,7 @@ async function verifyMFACode() {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
-                'X-CSRF-Token': csrfToken
+                'X-CSRF-Token': window.csrfToken
             },
             body: JSON.stringify({ code, useRecovery: false })
         });
@@ -296,7 +282,7 @@ async function verifyMFARecovery() {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json',
-                'X-CSRF-Token': csrfToken
+                'X-CSRF-Token': window.csrfToken
             },
             body: JSON.stringify({ code, useRecovery: true })
         });

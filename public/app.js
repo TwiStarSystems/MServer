@@ -1,22 +1,6 @@
 // MServerController - Multi-Server Frontend Application
 
-// Global CSRF token management
-let csrfToken = null;
-
-// Fetch CSRF token on page load
-async function fetchCSRFToken() {
-  try {
-    const response = await fetch('/api/csrf-token');
-    if (response.ok) {
-      const data = await response.json();
-      csrfToken = data.csrf_token;
-      return true;
-    }
-  } catch (err) {
-    console.error('Failed to fetch CSRF token:', err);
-  }
-  return false;
-}
+// Note: CSRF token management is in utils.js (window.csrfToken and fetchCSRFToken)
 
 // Global fetch wrapper to handle authentication errors and CSRF tokens
 const originalFetch = window.fetch;
@@ -28,8 +12,8 @@ window.fetch = async function(...args) {
       args[1].headers = {};
     }
     // Add CSRF token if available and not already present
-    if (csrfToken && !args[1].headers['X-CSRF-Token']) {
-      args[1].headers['X-CSRF-Token'] = csrfToken;
+    if (window.csrfToken && !args[1].headers['X-CSRF-Token']) {
+      args[1].headers['X-CSRF-Token'] = window.csrfToken;
     }
   }
   
@@ -560,47 +544,7 @@ function connectWebSocket() {
 
 // ==================== API Functions ====================
 
-async function apiRequest(url, options = {}) {
-  try {
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-      }
-    });
-    
-    // Handle authentication errors
-    if (response.status === 401) {
-      window.location.href = '/login.html';
-      throw new Error('Session expired. Please login again.');
-    }
-    
-    // Check if response has JSON content before parsing
-    const contentType = response.headers.get('content-type');
-    if (!contentType || !contentType.includes('application/json')) {
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
-      }
-      throw new Error('Invalid response from server (not JSON)');
-    }
-    
-    const data = await response.json();
-    if (!response.ok && data.error) {
-      throw new Error(data.error);
-    }
-    return data;
-  } catch (error) {
-    console.error('API request failed:', error);
-    console.error('URL:', url);
-    console.error('Options:', options);
-    // Don't show alert for certain requests to avoid interrupting the UI
-    if (!url.includes('/api/servers') && !url.includes('/api/auth/me')) {
-      showNotification('Error: ' + error.message, 'error');
-    }
-    throw error;
-  }
-}
+// Note: apiRequest is in utils.js for shared use across all pages
 
 // ==================== Server List Management ====================
 
@@ -1919,15 +1863,7 @@ async function createFreshServer(e) {
   }
 }
 
-// Helper function to format bytes
-function formatBytes(bytes, decimals = 2) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
+// Note: formatBytes is in utils.js
 
 // Import server from ZIP
 async function importServer(e) {
@@ -3913,24 +3849,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Refresh servers periodically
   setInterval(loadServers, 10000);
   
-  // Add server buttons
-  document.getElementById('add-server-btn').onclick = openAddServerModal;
-  document.getElementById('welcome-add-btn').onclick = openAddServerModal;
+  // Add server buttons (with null checks)
+  const addServerBtn = document.getElementById('add-server-btn');
+  const welcomeAddBtn = document.getElementById('welcome-add-btn');
+  if (addServerBtn) addServerBtn.onclick = openAddServerModal;
+  if (welcomeAddBtn) welcomeAddBtn.onclick = openAddServerModal;
   
   // Server forms
-  document.getElementById('fresh-server-form').onsubmit = createFreshServer;
-  document.getElementById('import-server-form').onsubmit = importServer;
-  document.getElementById('manual-server-form').onsubmit = saveServer;
+  const freshForm = document.getElementById('fresh-server-form');
+  const importForm = document.getElementById('import-server-form');
+  const manualForm = document.getElementById('manual-server-form');
+  if (freshForm) freshForm.onsubmit = createFreshServer;
+  if (importForm) importForm.onsubmit = importServer;
+  if (manualForm) manualForm.onsubmit = saveServer;
   
   // Custom JAR upload toggle
-  document.getElementById('fresh-upload-jar').onchange = toggleCustomJarUpload;
+  const uploadJarToggle = document.getElementById('fresh-upload-jar');
+  if (uploadJarToggle) uploadJarToggle.onchange = toggleCustomJarUpload;
   
   // Server actions
-  document.getElementById('start-btn').onclick = startServer;
-  document.getElementById('stop-btn').onclick = stopServer;
-  document.getElementById('kill-btn').onclick = killServer;
-  document.getElementById('edit-server-btn').onclick = openEditServerModal;
-  document.getElementById('delete-server-btn').onclick = deleteServer;
+  const startBtn = document.getElementById('start-btn');
+  const stopBtn = document.getElementById('stop-btn');
+  const killBtn = document.getElementById('kill-btn');
+  const editBtn = document.getElementById('edit-server-btn');
+  const deleteBtn = document.getElementById('delete-server-btn');
+  if (startBtn) startBtn.onclick = startServer;
+  if (stopBtn) stopBtn.onclick = stopServer;
+  if (killBtn) killBtn.onclick = killServer;
+  if (editBtn) editBtn.onclick = openEditServerModal;
+  if (deleteBtn) deleteBtn.onclick = deleteServer;
   
   // Tab buttons
   document.querySelectorAll('.tab-button').forEach(btn => {
@@ -3938,79 +3885,119 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   
   // Terminal input
-  document.getElementById('terminal-input').onkeypress = (e) => {
-    if (e.key === 'Enter') {
-      sendCommand(e.target.value);
-      e.target.value = '';
-    }
-  };
+  const terminalInput = document.getElementById('terminal-input');
+  if (terminalInput) {
+    terminalInput.onkeypress = (e) => {
+      if (e.key === 'Enter') {
+        sendCommand(e.target.value);
+        e.target.value = '';
+      }
+    };
+  }
   
-  document.getElementById('send-btn').onclick = () => {
-    const input = document.getElementById('terminal-input');
-    sendCommand(input.value);
-    input.value = '';
-  };
+  const sendBtn = document.getElementById('send-btn');
+  if (sendBtn) {
+    sendBtn.onclick = () => {
+      const input = document.getElementById('terminal-input');
+      if (input) {
+        sendCommand(input.value);
+        input.value = '';
+      }
+    };
+  }
   
   // Logs controls
-  document.getElementById('refresh-logs-btn').onclick = loadLogs;
-  document.getElementById('clear-logs-view-btn').onclick = clearLogsView;
+  const refreshLogsBtn = document.getElementById('refresh-logs-btn');
+  const clearLogsBtn = document.getElementById('clear-logs-view-btn');
+  if (refreshLogsBtn) refreshLogsBtn.onclick = loadLogs;
+  if (clearLogsBtn) clearLogsBtn.onclick = clearLogsView;
   
   // File explorer controls
-  document.getElementById('new-file-btn').onclick = createNewFile;
-  document.getElementById('new-folder-btn').onclick = createNewFolder;
-  document.getElementById('refresh-files-btn').onclick = () => loadFiles(currentPath);
+  const newFileBtn = document.getElementById('new-file-btn');
+  const newFolderBtn = document.getElementById('new-folder-btn');
+  const refreshFilesBtn = document.getElementById('refresh-files-btn');
+  const fileUpload = document.getElementById('file-upload');
   
-  document.getElementById('file-upload').onchange = (e) => {
-    if (e.target.files.length > 0) {
-      uploadFile(e.target.files[0]);
-      e.target.value = '';
-    }
-  };
+  if (newFileBtn) newFileBtn.onclick = createNewFile;
+  if (newFolderBtn) newFolderBtn.onclick = createNewFolder;
+  if (refreshFilesBtn) refreshFilesBtn.onclick = () => loadFiles(currentPath);
+  if (fileUpload) {
+    fileUpload.onchange = (e) => {
+      if (e.target.files.length > 0) {
+        uploadFile(e.target.files[0]);
+        e.target.value = '';
+      }
+    };
+  }
   
   // Mods controls
-  document.getElementById('refresh-mods-btn').onclick = loadMods;
+  const refreshModsBtn = document.getElementById('refresh-mods-btn');
+  const modUpload = document.getElementById('mod-upload');
   
-  document.getElementById('mod-upload').onchange = async (e) => {
-    if (e.target.files.length > 0) {
-      // Ask user which folder to upload to
-      const choice = await showModUploadDialog();
-      if (choice) {
-        for (const file of e.target.files) {
-          await uploadMod(file, choice);
+  if (refreshModsBtn) refreshModsBtn.onclick = loadMods;
+  if (modUpload) {
+    modUpload.onchange = async (e) => {
+      if (e.target.files.length > 0) {
+        // Ask user which folder to upload to
+        const choice = await showModUploadDialog();
+        if (choice) {
+          for (const file of e.target.files) {
+            await uploadMod(file, choice);
+          }
         }
+        e.target.value = '';
       }
-      e.target.value = '';
-    }
-  };
+    };
+  }
   
   // File editor
-  document.getElementById('save-file-btn').onclick = saveFile;
+  const saveFileBtn = document.getElementById('save-file-btn');
+  if (saveFileBtn) saveFileBtn.onclick = saveFile;
   
   // Backup controls
-  document.getElementById('create-backup-btn').onclick = createBackup;
-  document.getElementById('schedule-backup-btn').onclick = openScheduleModal;
-  document.getElementById('refresh-backups-btn').onclick = loadBackups;
+  const createBackupBtn = document.getElementById('create-backup-btn');
+  const scheduleBackupBtn = document.getElementById('schedule-backup-btn');
+  const refreshBackupsBtn = document.getElementById('refresh-backups-btn');
+  
+  if (createBackupBtn) createBackupBtn.onclick = createBackup;
+  if (scheduleBackupBtn) scheduleBackupBtn.onclick = openScheduleModal;
+  if (refreshBackupsBtn) refreshBackupsBtn.onclick = loadBackups;
   
   // Task controls
-  document.getElementById('create-task-btn').onclick = openCreateTaskModal;
-  document.getElementById('refresh-tasks-btn').onclick = loadTasks;
+  const createTaskBtn = document.getElementById('create-task-btn');
+  const refreshTasksBtn = document.getElementById('refresh-tasks-btn');
+  
+  if (createTaskBtn) createTaskBtn.onclick = openCreateTaskModal;
+  if (refreshTasksBtn) refreshTasksBtn.onclick = loadTasks;
   
   // Close modals on background click
-  document.getElementById('server-modal').onclick = (e) => {
-    if (e.target.id === 'server-modal') closeServerModal();
-  };
+  const serverModal = document.getElementById('server-modal');
+  if (serverModal) {
+    serverModal.onclick = (e) => {
+      if (e.target.id === 'server-modal') closeServerModal();
+    };
+  }
   
-  document.getElementById('file-editor-modal').onclick = (e) => {
-    if (e.target.id === 'file-editor-modal') closeFileEditor();
-  };
+  const fileEditorModal = document.getElementById('file-editor-modal');
+  if (fileEditorModal) {
+    fileEditorModal.onclick = (e) => {
+      if (e.target.id === 'file-editor-modal') closeFileEditor();
+    };
+  }
   
-  document.getElementById('schedule-modal').onclick = (e) => {
-    if (e.target.id === 'schedule-modal') closeScheduleModal();
-  };
+  const scheduleModal = document.getElementById('schedule-modal');
+  if (scheduleModal) {
+    scheduleModal.onclick = (e) => {
+      if (e.target.id === 'schedule-modal') closeScheduleModal();
+    };
+  }
   
-  document.getElementById('task-modal').onclick = (e) => {
-    if (e.target.id === 'task-modal') closeTaskModal();
-  };
+  const taskModal = document.getElementById('task-modal');
+  if (taskModal) {
+    taskModal.onclick = (e) => {
+      if (e.target.id === 'task-modal') closeTaskModal();
+    };
+  }
 });
 
 // ==================== Properties Management ====================

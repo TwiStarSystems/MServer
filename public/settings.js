@@ -1,24 +1,10 @@
 // Settings page JavaScript
 
-// CSRF token management
-let csrfToken = null;
+// Note: CSRF token management is in utils.js (window.csrfToken and fetchCSRFToken)
 
 let socket = null;
 let statsChart = null;
 let currentUser = null;
-
-// Fetch CSRF token
-async function fetchCSRFToken() {
-  try {
-    const response = await fetch('/api/csrf-token');
-    if (response.ok) {
-      const data = await response.json();
-      csrfToken = data.csrf_token;
-    }
-  } catch (err) {
-    console.error('Failed to fetch CSRF token:', err);
-  }
-}
 
 // Global fetch wrapper to handle authentication errors and CSRF
 const originalFetch = window.fetch;
@@ -29,6 +15,11 @@ window.fetch = async function(...args) {
     if (!args[1].headers) {
       args[1].headers = {};
     }
+    // Add CSRF token if available and not already present
+    if (window.csrfToken && !args[1].headers['X-CSRF-Token']) {
+      args[1].headers['X-CSRF-Token'] = window.csrfToken;
+    }
+  }
     if (csrfToken && !args[1].headers['X-CSRF-Token']) {
       args[1].headers['X-CSRF-Token'] = csrfToken;
     }
