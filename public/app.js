@@ -1079,26 +1079,33 @@ let defaultServerPath = '';
 
 async function openAddServerModal() {
   console.log('openAddServerModal called');
-  editingServerId = null;
-  currentCreationType = null;
-  
-  document.getElementById('modal-title').textContent = 'Add Server';
-  
-  // Show creation type selection, hide all forms
-  document.getElementById('creation-type-section').style.display = 'block';
-  document.getElementById('fresh-server-form').style.display = 'none';
-  document.getElementById('import-server-form').style.display = 'none';
-  document.getElementById('manual-server-form').style.display = 'none';
-  
-  // Fetch the default server path (non-blocking - don't prevent modal from opening)
   try {
-    const result = await apiRequest('/api/default-server-path');
-    defaultServerPath = result.path || '';
-  } catch (err) {
-    console.error('Failed to get default server path:', err);
-    defaultServerPath = '';
-    // Continue anyway - this shouldn't prevent the modal from opening
-  }
+    editingServerId = null;
+    currentCreationType = null;
+    
+    const modalTitle = document.getElementById('modal-title');
+    if (modalTitle) modalTitle.textContent = 'Add Server';
+    
+    // Show creation type selection, hide all forms
+    const creationTypeSection = document.getElementById('creation-type-section');
+    const freshForm = document.getElementById('fresh-server-form');
+    const importForm = document.getElementById('import-server-form');
+    const manualForm = document.getElementById('manual-server-form');
+    
+    if (creationTypeSection) creationTypeSection.style.display = 'block';
+    if (freshForm) freshForm.style.display = 'none';
+    if (importForm) importForm.style.display = 'none';
+    if (manualForm) manualForm.style.display = 'none';
+    
+    // Fetch the default server path (non-blocking - don't prevent modal from opening)
+    try {
+      const result = await apiRequest('/api/default-server-path');
+      defaultServerPath = result.path || '';
+    } catch (err) {
+      console.error('Failed to get default server path:', err);
+      defaultServerPath = '';
+      // Continue anyway - this shouldn't prevent the modal from opening
+    }
   
   // Reset fresh server form
   document.getElementById('fresh-name').value = '';
@@ -1174,7 +1181,19 @@ async function openAddServerModal() {
   loadServerEngines().catch(err => console.error('Failed to load engines:', err));
   
   // Show modal immediately (don't wait for async operations)
-  document.getElementById('server-modal').classList.add('active');
+  const serverModal = document.getElementById('server-modal');
+  if (serverModal) {
+    serverModal.classList.add('active');
+  } else {
+    console.error('server-modal element not found');
+  }
+  
+  } catch (error) {
+    console.error('Error in openAddServerModal:', error);
+    // Try to show modal anyway
+    const serverModal = document.getElementById('server-modal');
+    if (serverModal) serverModal.classList.add('active');
+  }
 }
 
 function selectCreationType(type) {
