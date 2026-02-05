@@ -1215,8 +1215,9 @@ async function waitForDownload(progressId, maxWaitMs = 300000) {
       }
       
       // Still downloading, wait and check again
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (err) {
+      console.error('Progress check error:', err);
       throw err;
     }
   }

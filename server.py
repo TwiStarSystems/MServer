@@ -6248,9 +6248,15 @@ class JarBucketManager:
             url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}"
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
+                print(f"[JarBucket] {project} API returned status {response.status_code} for version {version}")
                 return None, None
             
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError as json_err:
+                print(f"[JarBucket] Invalid JSON from {project} API for version {version}: {json_err}")
+                print(f"[JarBucket] Response content: {response.text[:200]}")
+                return None, None
             builds = data.get('builds', [])
             if not builds:
                 return None, None
@@ -6261,9 +6267,14 @@ class JarBucketManager:
             build_url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}/builds/{latest_build}"
             build_response = requests.get(build_url, timeout=10)
             if build_response.status_code != 200:
+                print(f"[JarBucket] {project} API returned status {build_response.status_code} for build {latest_build}")
                 return None, None
             
-            build_data = build_response.json()
+            try:
+                build_data = build_response.json()
+            except ValueError as json_err:
+                print(f"[JarBucket] Invalid JSON from {project} API for build {latest_build}: {json_err}")
+                return None, None
             downloads = build_data.get('downloads', {})
             application = downloads.get('application', {})
             jar_name = application.get('name')
@@ -6725,6 +6736,7 @@ def api_jar_bucket_download():
     })
 
 @app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
+@limiter.exempt
 @admin_required
 def api_jar_bucket_progress(progress_id):
     """Get download progress"""
