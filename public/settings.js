@@ -120,8 +120,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Live preview for branding
   document.getElementById('branding-site-title').addEventListener('input', updateBrandingPreview);
-  document.getElementById('site-icon').addEventListener('input', updateBrandingPreview);
+  document.getElementById('site-icon').addEventListener('change', handleFaviconSelect);
   document.getElementById('footer-addition').addEventListener('input', updateBrandingPreview);
+  
+  // Favicon upload button
+  document.getElementById('upload-favicon-btn').addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('site-icon').click();
+  });
   
   // Initialize chart
   initChart();
@@ -164,7 +170,8 @@ async function loadPageBranding() {
           favicon.rel = 'icon';
           document.head.appendChild(favicon);
         }
-        favicon.href = branding.siteIcon;
+        // siteIcon is now a filename stored on the server
+        favicon.href = `/public/favicons/${branding.siteIcon}`;
       }
     }
   } catch (err) {
@@ -666,9 +673,17 @@ async function loadBranding() {
       const branding = await response.json();
       
       document.getElementById('branding-site-title').value = branding.siteTitle || '';
-      document.getElementById('site-icon').value = branding.siteIcon || '';
       document.getElementById('footer-addition').value = branding.footerAddition || '';
       document.getElementById('base-url').value = branding.baseUrl || '';
+      
+      // Handle favicon
+      if (branding.siteIcon) {
+        // siteIcon is a filename, update the display
+        document.getElementById('favicon-filename').textContent = branding.siteIcon;
+        const previewContainer = document.getElementById('favicon-preview');
+        previewContainer.style.display = 'block';
+        document.getElementById('favicon-preview-img').src = `/public/favicons/${branding.siteIcon}`;
+      }
       
       updateBrandingPreview();
     }
@@ -677,18 +692,61 @@ async function loadBranding() {
   }
 }
 
+function handleFaviconSelect(e) {
+  const file = e.target.files[0];
+  
+  if (!file) {
+    document.getElementById('favicon-filename').textContent = 'No file selected';
+    document.getElementById('favicon-preview').style.display = 'none';
+    return;
+  }
+  
+  // Validate file type
+  const validTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/x-icon'];
+  if (!validTypes.includes(file.type)) {
+    alert('Invalid file type. Please upload a PNG, JPEG, GIF, or ICO image.');
+    e.target.value = '';
+    document.getElementById('favicon-filename').textContent = 'No file selected';
+    document.getElementById('favicon-preview').style.display = 'none';
+    return;
+  }
+  
+  // Update filename display
+  document.getElementById('favicon-filename').textContent = file.name;
+  
+  // Show preview
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    document.getElementById('favicon-preview-img').src = event.target.result;
+    document.getElementById('favicon-preview').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+  
+  updateBrandingPreview();
+}
+
 function updateBrandingPreview() {
   const title = document.getElementById('branding-site-title').value || 'MServerController';
-  const icon = document.getElementById('site-icon').value;
   const footerAddition = document.getElementById('footer-addition').value;
+  const faviconFile = document.getElementById('site-icon').files[0];
   
   document.getElementById('preview-title').textContent = title;
   
   const iconEl = document.getElementById('preview-icon');
-  if (icon) {
-    iconEl.innerHTML = `<img src="${escapeHtml(icon)}" alt="icon" onerror="this.parentElement.innerHTML='🎮'">`;
+  if (faviconFile) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      iconEl.innerHTML = `<img src="${event.target.result}" alt="icon" onerror="this.parentElement.innerHTML='🎮'" style="max-width: 100%; max-height: 100%;">`;
+    };
+    reader.readAsDataURL(faviconFile);
   } else {
-    iconEl.innerHTML = '🎮';
+    // Check if there's an existing favicon from the server
+    const existingFaviconSrc = document.getElementById('favicon-preview-img').src;
+    if (existingFaviconSrc && document.getElementById('favicon-preview').style.display !== 'none') {
+      iconEl.innerHTML = `<img src="${existingFaviconSrc}" alt="icon" onerror="this.parentElement.innerHTML='🎮'" style="max-width: 100%; max-height: 100%;">`;
+    } else {
+      iconEl.innerHTML = '🎮';
+    }
   }
   
   const footerEl = document.getElementById('preview-footer-addition');
@@ -702,26 +760,36 @@ function updateBrandingPreview() {
 async function saveBranding(e) {
   e.preventDefault();
   
-  const data = {
-    siteTitle: document.getElementById('branding-site-title').value,
-    siteIcon: document.getElementById('site-icon').value,
-    footerAddition: document.getElementById('footer-addition').value,
-    baseUrl: document.getElementById('base-url').value
-  };
+  const faviconFile = document.getElementById('site-icon').files[0];
+  const siteTitle = document.getElementById('branding-site-title').value;
+  const footerAddition = document.getElementById('footer-addition').value;
+  const baseUrl = document.getElementById('base-url').value;
   
   try {
+    const formData = new FormData();
+    formData.append('siteTitle', siteTitle);
+    formData.append('footerAddition', footerAddition);
+    formData.append('baseUrl', baseUrl);
+    if (faviconFile) {
+      formData.append('favicon', faviconFile);
+    }
+    
     const response = await fetch('/api/settings/branding', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
+      body: formData
     });
     
     if (response.ok) {
+      const result = await response.json();
       alert('Branding saved successfully!');
+      
+      // Reload branding to get the updated favicon filename from server
+      await loadBranding();
+      
       // Update page title and header
-      const siteTitle = data.siteTitle || '🎮 MServerController';
-      document.getElementById('site-title').textContent = siteTitle;
-      document.title = `Settings - ${siteTitle.replace(/^🎮\s*/, '')}`;
+      const displayTitle = siteTitle || '🎮 MServerController';
+      document.getElementById('site-title').textContent = displayTitle;
+      document.title = `Settings - ${displayTitle.replace(/^🎮\s*/, '')}`;
     } else {
       const err = await response.json();
       alert('Failed to save branding: ' + (err.error || 'Unknown error'));

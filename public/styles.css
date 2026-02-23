@@ -2436,6 +2436,52 @@ select.form-control:disabled {
   text-align: center;
 }
 
+/* File Upload Styles */
+.file-upload-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.file-upload-wrapper input[type="file"] {
+  display: none;
+}
+
+#upload-favicon-btn {
+  min-width: 140px;
+}
+
+#favicon-filename {
+  color: #888;
+  font-size: 14px;
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border-radius: 4px;
+  flex: 1;
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+}
+
+.favicon-preview-container {
+  margin: 12px 0;
+  padding: 15px;
+  background: #1a1a2e;
+  border-radius: 8px;
+  border: 1px solid #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100px;
+}
+
+.favicon-preview-container img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 4px;
+}
+
 /* Tools Section */
 .tools-grid {
   display: grid;

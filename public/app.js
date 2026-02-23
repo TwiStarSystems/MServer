@@ -130,7 +130,8 @@ async function loadBranding() {
           favicon.rel = 'icon';
           document.head.appendChild(favicon);
         }
-        favicon.href = branding.siteIcon;
+        // siteIcon is now a filename stored on the server
+        favicon.href = `/public/favicons/${branding.siteIcon}`;
       }
       
       // Update footer
@@ -1126,6 +1127,10 @@ async function openAddServerModal() {
   document.getElementById('fresh-max-players').value = '20';
   document.getElementById('fresh-gamemode').value = 'survival';
   document.getElementById('fresh-difficulty').value = 'easy';
+  document.getElementById('fresh-level-seed').value = '';
+  document.getElementById('fresh-pvp').checked = true;
+  document.getElementById('fresh-white-list').checked = false;
+  document.getElementById('fresh-hardcore').checked = false;
   
   // Hide conditional fields
   document.getElementById('engine-group').style.display = 'none';
@@ -1577,6 +1582,10 @@ async function createFreshServer(e) {
   const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('fresh-max-players').value) || 20));
   const gamemode = document.getElementById('fresh-gamemode').value || 'survival';
   const difficulty = document.getElementById('fresh-difficulty').value || 'easy';
+  const levelSeed = document.getElementById('fresh-level-seed').value.trim();
+  const pvp = document.getElementById('fresh-pvp').checked;
+  const whiteList = document.getElementById('fresh-white-list').checked;
+  const hardcore = document.getElementById('fresh-hardcore').checked;
   
   // Check JAR availability - automatically download if not available
   const versionInfo = versionAvailability[version] || {};
@@ -1667,7 +1676,11 @@ async function createFreshServer(e) {
             'server-port': serverPort,
             'max-players': maxPlayers,
             'gamemode': gamemode,
-            'difficulty': difficulty
+            'difficulty': difficulty,
+            'level-seed': levelSeed,
+            'pvp': pvp,
+            'white-list': whiteList,
+            'hardcore': hardcore
           }
         })
       });
@@ -1790,7 +1803,11 @@ async function createFreshServer(e) {
               'server-port': serverPort,
               'max-players': maxPlayers,
               'gamemode': gamemode,
-              'difficulty': difficulty
+              'difficulty': difficulty,
+              'level-seed': levelSeed,
+              'pvp': pvp,
+              'white-list': whiteList,
+              'hardcore': hardcore
             }
           })
         });
@@ -1841,7 +1858,11 @@ async function createFreshServer(e) {
               'server-port': serverPort,
               'max-players': maxPlayers,
               'gamemode': gamemode,
-              'difficulty': difficulty
+              'difficulty': difficulty,
+              'level-seed': levelSeed,
+              'pvp': pvp,
+              'white-list': whiteList,
+              'hardcore': hardcore
             }
           })
         });

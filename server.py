@@ -5935,9 +5935,48 @@ def get_branding():
 @admin_required
 def update_branding():
     """Update branding settings (admin only)"""
-    data = request.get_json()
-    branding = settings_manager.update_branding(data)
-    return jsonify({'success': True, 'branding': branding})
+    # Extract form data
+    site_title = request.form.get('siteTitle', '')
+    footer_addition = request.form.get('footerAddition', '')
+    base_url = request.form.get('baseUrl', '')
+    favicon_file = request.files.get('favicon')
+    
+    # Prepare branding data
+    branding_data = {
+        'siteTitle': site_title,
+        'footerAddition': footer_addition,
+        'baseUrl': base_url
+    }
+    
+    # Handle favicon file upload
+    if favicon_file and favicon_file.filename != '':
+        # Validate file type
+        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'ico'}
+        file_ext = favicon_file.filename.rsplit('.', 1)[1].lower() if '.' in favicon_file.filename else ''
+        
+        if file_ext not in allowed_extensions:
+            return jsonify({'success': False, 'error': 'Invalid file type. Allowed: PNG, JPEG, GIF, ICO'}), 400
+        
+        # Create favicons directory if it doesn't exist
+        favicons_dir = os.path.join('public', 'favicons')
+        os.makedirs(favicons_dir, exist_ok=True)
+        
+        # Generate a unique filename to prevent overwriting
+        filename = f"{uuid.uuid4().hex}.{file_ext}"
+        filepath = os.path.join(favicons_dir, filename)
+        
+        try:
+            favicon_file.save(filepath)
+            branding_data['siteIcon'] = filename
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Failed to save favicon: {str(e)}'}), 500
+    
+    # Update branding
+    try:
+        branding = settings_manager.update_branding(branding_data)
+        return jsonify({'success': True, 'branding': branding})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Failed to update branding: {str(e)}'}), 500
 
 @app.route('/api/settings/app', methods=['GET'])
 @admin_required

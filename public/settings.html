@@ -100,9 +100,16 @@
             </div>
             
             <div class="form-group">
-              <label for="site-icon">Site Icon URL</label>
-              <input type="text" id="site-icon" name="siteIcon" placeholder="https://example.com/icon.png">
-              <small>URL to a favicon or icon image (32x32 recommended)</small>
+              <label for="site-icon">Favicon Image</label>
+              <div class="file-upload-wrapper">
+                <input type="file" id="site-icon" name="siteIcon" accept="image/png,image/jpeg,image/gif,image/x-icon,.ico" />
+                <button type="button" class="btn btn-secondary" id="upload-favicon-btn">Select Image</button>
+                <span id="favicon-filename">No file selected</span>
+              </div>
+              <div id="favicon-preview" class="favicon-preview-container" style="display: none;">
+                <img id="favicon-preview-img" src="" alt="Favicon preview" style="max-width: 64px; max-height: 64px;">
+              </div>
+              <small>Upload a favicon image (PNG, JPEG, GIF, or ICO). Recommended size: 32x32 pixels or larger</small>
             </div>
             
             <div class="form-group">
