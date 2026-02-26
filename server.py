@@ -3255,6 +3255,7 @@ class ServerInstance:
         try:
             buffer = b''
             fd = self.process.stdout.fileno()
+            last_partial_send = 0
             
             while self.process.poll() is None:
                 # Use select to check if data is available (timeout 0.01s for faster response)
@@ -3276,10 +3277,14 @@ class ServerInstance:
                                 line = line_bytes.decode('latin-1', errors='replace')
                             self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
                             self._add_to_buffer(line)
+                            last_partial_send = 0  # Reset partial send timer
                         
-                        # Send partial line immediately if buffer is non-empty
-                        # This ensures progress bars and non-newline terminated output appears
-                        if buffer and len(buffer) > 0:
+                        # Send partial line only if:
+                        # 1. Buffer has content AND
+                        # 2. Either buffer is large (>100 bytes) OR 0.1s has passed since last partial send
+                        # This prevents sending every single character while still showing progress
+                        current_time = time.time()
+                        if buffer and (len(buffer) > 100 or (last_partial_send and current_time - last_partial_send > 0.1)):
                             try:
                                 line = buffer.decode('utf-8', errors='replace')
                             except:
@@ -3287,6 +3292,7 @@ class ServerInstance:
                             self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
                             self._add_to_buffer(line)
                             buffer = b''
+                            last_partial_send = current_time
             
             # Read any remaining output after process exits
             remaining = self.process.stdout.read()

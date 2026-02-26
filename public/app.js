@@ -2212,31 +2212,37 @@ async function confirmDeleteServer(deleteFiles) {
 
 // ==================== Terminal Functions ====================
 
-// Use requestAnimationFrame to batch DOM updates and prevent flickering
+// Minimal latency terminal output with smart batching
 let terminalBuffer = '';
-let terminalUpdatePending = false;
+let terminalUpdateTimer = null;
 
 function appendTerminalOutput(text) {
   terminalBuffer += text;
   
-  if (!terminalUpdatePending) {
-    terminalUpdatePending = true;
-    requestAnimationFrame(() => {
-      const terminal = document.getElementById('terminal-output');
-      // Append text directly without re-rendering entire content
-      terminal.textContent += terminalBuffer;
-      terminal.scrollTop = terminal.scrollHeight;
-      terminalBuffer = '';
-      terminalUpdatePending = false;
-    });
+  // Clear any pending update
+  if (terminalUpdateTimer) {
+    clearTimeout(terminalUpdateTimer);
   }
+  
+  // Use very short timeout (1ms) to batch rapid updates while maintaining responsiveness
+  // This is much faster than requestAnimationFrame (16ms) but still prevents DOM thrashing
+  terminalUpdateTimer = setTimeout(() => {
+    const terminal = document.getElementById('terminal-output');
+    terminal.textContent += terminalBuffer;
+    terminal.scrollTop = terminal.scrollHeight;
+    terminalBuffer = '';
+    terminalUpdateTimer = null;
+  }, 1);
 }
 
 function clearTerminal() {
   const terminal = document.getElementById('terminal-output');
   terminal.textContent = '';
   terminalBuffer = '';
-  terminalUpdatePending = false;
+  if (terminalUpdateTimer) {
+    clearTimeout(terminalUpdateTimer);
+    terminalUpdateTimer = null;
+  }
 }
 
 // ==================== Logs Functions ====================
