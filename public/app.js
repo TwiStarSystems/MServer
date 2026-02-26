@@ -1115,7 +1115,6 @@ async function openAddServerModal() {
   document.getElementById('fresh-category').value = '';
   document.getElementById('fresh-version').value = '';
   document.getElementById('fresh-version').disabled = true;
-  document.getElementById('fresh-jar-name').value = 'server.jar';
   document.getElementById('fresh-min-ram').value = '1G';
   document.getElementById('fresh-max-ram').value = '2G';
   document.getElementById('fresh-jvm-args').value = '';
@@ -1135,7 +1134,6 @@ async function openAddServerModal() {
   // Hide conditional fields
   document.getElementById('engine-group').style.display = 'none';
   document.getElementById('version-group').style.display = 'none';
-  document.getElementById('jar-name-group').style.display = 'none';
   document.getElementById('ram-fields-group').style.display = 'none';
   document.getElementById('upload-jar-group').style.display = 'none';
   document.getElementById('server-properties-group').style.display = 'none';
@@ -1163,7 +1161,6 @@ async function openAddServerModal() {
   document.getElementById('import-name').value = '';
   document.getElementById('import-file').value = '';
   document.getElementById('import-category').value = 'unmodded';
-  document.getElementById('import-jar-name').value = 'server.jar';
   document.getElementById('import-min-ram').value = '1G';
   document.getElementById('import-max-ram').value = '2G';
   document.getElementById('import-jvm-args').value = '';
@@ -1173,7 +1170,6 @@ async function openAddServerModal() {
   document.getElementById('input-category').value = 'unmodded';
   document.getElementById('input-path').value = '';
   document.getElementById('input-path').placeholder = defaultServerPath ? `${defaultServerPath}/<server-id>` : '/path/to/minecraft/server';
-  document.getElementById('input-executable').value = 'server.jar';
   document.getElementById('input-min-ram').value = '1G';
   document.getElementById('input-max-ram').value = '2G';
   document.getElementById('input-jvm-args').value = '';
@@ -1241,7 +1237,6 @@ function onCategoryChange() {
   const category = document.getElementById('fresh-category').value;
   const engineGroup = document.getElementById('engine-group');
   const versionGroup = document.getElementById('version-group');
-  const jarNameGroup = document.getElementById('jar-name-group');
   const ramFieldsGroup = document.getElementById('ram-fields-group');
   const uploadJarGroup = document.getElementById('upload-jar-group');
   const downloadStatusGroup = document.getElementById('download-status-group');
@@ -1258,40 +1253,53 @@ function onCategoryChange() {
     // Hide all conditional fields
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'none';
-    jarNameGroup.style.display = 'none';
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
     document.getElementById('server-properties-group').style.display = 'none';
-    categoryDesc.textContent = 'Choose whether you want a vanilla or modded server';
+    categoryDesc.textContent = 'Choose whether you want a Java or Bedrock server';
     return;
   }
   
   if (category === 'unmodded') {
-    // Unmodded: Hide engine, show version directly
+    // Java Vanilla: Hide engine, show version directly
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'block';
-    jarNameGroup.style.display = 'block';
     ramFieldsGroup.style.display = 'block';
     uploadJarGroup.style.display = 'block';
     document.getElementById('server-properties-group').style.display = 'block';
-    categoryDesc.textContent = 'Official Minecraft server - no mods or plugins';
+    categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
+    
+    // Update server port default
+    document.getElementById('fresh-server-port').value = '25565';
     
     // Load vanilla versions from JAR Bucket
     loadVersionsForEngine('vanilla');
   } else if (category === 'modded') {
-    // Modded: Show engine selector
+    // Java Modded: Show engine selector
     engineGroup.style.display = 'block';
     versionGroup.style.display = 'none';
-    jarNameGroup.style.display = 'none';
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
     document.getElementById('server-properties-group').style.display = 'none';
-    categoryDesc.textContent = 'Supports plugins and/or mods';
+    categoryDesc.textContent = 'Java Edition server with plugin/mod support';
     
     // Reset engine and version
     document.getElementById('fresh-engine').value = '';
     versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
     versionSelect.disabled = true;
+  } else if (category === 'bedrock') {
+    // Bedrock: No engine/version selection, no Java args
+    engineGroup.style.display = 'none';
+    versionGroup.style.display = 'none';
+    ramFieldsGroup.style.display = 'none';
+    uploadJarGroup.style.display = 'none';
+    document.getElementById('server-properties-group').style.display = 'block';
+    categoryDesc.textContent = 'Official Minecraft Bedrock Edition server - latest version will be downloaded automatically';
+    
+    // Set Bedrock default port
+    document.getElementById('fresh-server-port').value = '19132';
+    // Bedrock default max players is 10
+    document.getElementById('fresh-max-players').value = '10';
   }
 }
 
@@ -1302,7 +1310,7 @@ async function loadServerEngines() {
     const allTypes = result.types || [];
     
     // Filter to server types (not proxies)
-    const serverTypes = allTypes.filter(t => t.category === 'servers' || t.category === 'modded');
+    const serverTypes = allTypes.filter(t => t.category === 'java_servers' || t.category === 'modded');
     
     // Filter to only modded engines (exclude vanilla)
     const moddedEngines = serverTypes.filter(e => e.id !== 'vanilla');
@@ -1339,7 +1347,6 @@ async function loadVersions() {
   const versionSelect = document.getElementById('fresh-version');
   const engineDesc = document.getElementById('engine-description');
   const versionGroup = document.getElementById('version-group');
-  const jarNameGroup = document.getElementById('jar-name-group');
   const ramFieldsGroup = document.getElementById('ram-fields-group');
   const uploadJarGroup = document.getElementById('upload-jar-group');
   const downloadStatusGroup = document.getElementById('download-status-group');
@@ -1356,7 +1363,6 @@ async function loadVersions() {
     versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
     versionSelect.disabled = true;
     versionGroup.style.display = 'none';
-    jarNameGroup.style.display = 'none';
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
     document.getElementById('server-properties-group').style.display = 'none';
@@ -1370,7 +1376,6 @@ async function loadVersions() {
   
   // Show remaining fields
   versionGroup.style.display = 'block';
-  jarNameGroup.style.display = 'block';
   ramFieldsGroup.style.display = 'block';
   uploadJarGroup.style.display = 'block';
   document.getElementById('server-properties-group').style.display = 'block';
@@ -1476,7 +1481,6 @@ async function openEditServerModal() {
     
     document.getElementById('input-name').value = server.name || '';
     document.getElementById('input-path').value = server.serverPath || '';
-    document.getElementById('input-executable').value = server.executable || 'server.jar';
     document.getElementById('input-category').value = server.category || 'unmodded';
     
     // Parse RAM values and extra JVM args from javaArgs
@@ -1516,11 +1520,14 @@ async function saveServer(e) {
   const extraJvmArgs = document.getElementById('input-jvm-args').value.trim();
   const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
   
+  const isBedrock = category === 'bedrock';
+  const executable = isBedrock ? 'server.sh' : 'server.jar';
+
   const serverData = {
     name: document.getElementById('input-name').value,
     serverPath: document.getElementById('input-path').value,
-    executable: document.getElementById('input-executable').value,
-    javaArgs: javaArgs,
+    executable: executable,
+    javaArgs: isBedrock ? '' : javaArgs,
     category: category
   };
   
@@ -1566,20 +1573,21 @@ async function createFreshServer(e) {
   
   const name = document.getElementById('fresh-name').value;
   const category = document.getElementById('fresh-category').value;
-  const serverEngine = category === 'modded' 
+  const isBedrock = category === 'bedrock';
+  const serverEngine = isBedrock ? 'bedrock' : (category === 'modded' 
     ? document.getElementById('fresh-engine').value 
-    : 'vanilla';
-  const version = document.getElementById('fresh-version').value;
-  const executable = document.getElementById('fresh-jar-name').value || 'server.jar';
+    : 'vanilla');
+  const version = isBedrock ? 'latest' : document.getElementById('fresh-version').value;
+  const executable = isBedrock ? 'server.sh' : 'server.jar';
   const minRam = document.getElementById('fresh-min-ram').value;
   const maxRam = document.getElementById('fresh-max-ram').value;
   const extraJvmArgs = document.getElementById('fresh-jvm-args').value.trim();
-  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
-  const uploadCustom = document.getElementById('fresh-upload-jar').checked;
+  const javaArgs = isBedrock ? '' : `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
+  const uploadCustom = !isBedrock && document.getElementById('fresh-upload-jar').checked;
   
   // Server properties
-  const serverPort = parseInt(document.getElementById('fresh-server-port').value) || 25565;
-  const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('fresh-max-players').value) || 20));
+  const serverPort = parseInt(document.getElementById('fresh-server-port').value) || (isBedrock ? 19132 : 25565);
+  const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('fresh-max-players').value) || (isBedrock ? 10 : 20)));
   const gamemode = document.getElementById('fresh-gamemode').value || 'survival';
   const difficulty = document.getElementById('fresh-difficulty').value || 'easy';
   const levelSeed = document.getElementById('fresh-level-seed').value.trim();
@@ -1587,9 +1595,9 @@ async function createFreshServer(e) {
   const whiteList = document.getElementById('fresh-white-list').checked;
   const hardcore = document.getElementById('fresh-hardcore').checked;
   
-  // Check JAR availability - automatically download if not available
+  // Check JAR availability - automatically download if not available (Java only)
   const versionInfo = versionAvailability[version] || {};
-  const needsDownload = !versionInfo.downloaded;
+  const needsDownload = !isBedrock && !versionInfo.downloaded;
   
   if (!category) {
     showNotification('Please select a category', 'error');
@@ -1601,7 +1609,7 @@ async function createFreshServer(e) {
     return;
   }
   
-  if (!uploadCustom && !version) {
+  if (!isBedrock && !uploadCustom && !version) {
     showNotification('Please select a version', 'error');
     return;
   }
@@ -1653,7 +1661,98 @@ async function createFreshServer(e) {
     submitBtn.disabled = true;
     if (backBtn) backBtn.disabled = true;
     
-    if (uploadCustom) {
+    if (isBedrock) {
+      // Bedrock server creation flow
+      updateProgress('Creating Bedrock server...', 5);
+      
+      // First create the server config
+      const result = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          executable: 'server.sh',
+          javaArgs: '',
+          category: 'bedrock',
+          serverEngine: 'bedrock',
+          serverType: 'bedrock',
+          version: 'latest',
+          serverProperties: {
+            'server-port': serverPort,
+            'max-players': maxPlayers,
+            'gamemode': gamemode,
+            'difficulty': difficulty,
+            'level-seed': levelSeed,
+            'white-list': whiteList,
+          }
+        })
+      });
+      
+      if (result.pendingApproval) {
+        showNotification('Server created and pending admin approval', 'info');
+        closeServerModal();
+        await loadServers();
+        return;
+      }
+      
+      // Now trigger Bedrock download + extraction
+      updateProgress('Downloading Bedrock server...', 10);
+      submitBtn.textContent = 'Downloading Bedrock...';
+      
+      let setupResult;
+      try {
+        setupResult = await apiRequest(`/api/servers/${result.serverId}/setup-bedrock`, {
+          method: 'POST'
+        });
+      } catch (setupErr) {
+        resetOnError(`Failed to start Bedrock download: ${setupErr.message}`);
+        return;
+      }
+      
+      if (!setupResult.progress_id) {
+        resetOnError('Failed to start Bedrock download - no progress ID returned');
+        return;
+      }
+      
+      // Poll for progress
+      const progressId = setupResult.progress_id;
+      let downloadComplete = false;
+      let pollCount = 0;
+      const maxPolls = 600; // 5 minutes
+      
+      while (!downloadComplete && pollCount < maxPolls) {
+        await new Promise(r => setTimeout(r, 500));
+        pollCount++;
+        
+        try {
+          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+          
+          if (progress.status === 'downloading') {
+            const pct = progress.progress || 0;
+            updateProgress(progress.message || 'Downloading...', pct);
+          } else if (progress.status === 'complete') {
+            downloadComplete = true;
+            updateProgress('Bedrock server ready!', 100);
+          } else if (progress.status === 'error') {
+            resetOnError(progress.error || 'Bedrock setup failed');
+            return;
+          }
+        } catch (pollErr) {
+          console.error('Progress poll error:', pollErr);
+        }
+      }
+      
+      if (!downloadComplete) {
+        resetOnError('Bedrock download timed out');
+        return;
+      }
+      
+      await new Promise(r => setTimeout(r, 1000));
+      await loadServers();
+      selectServer(result.serverId);
+      closeServerModal();
+      showNotification('Bedrock server created successfully!', 'success');
+      
+    } else if (uploadCustom) {
       // Custom JAR upload flow
       const fileInput = document.getElementById('fresh-jar-file');
       if (!fileInput.files.length) {
@@ -1913,7 +2012,7 @@ async function importServer(e) {
   
   const name = document.getElementById('import-name').value;
   const fileInput = document.getElementById('import-file');
-  const jarName = document.getElementById('import-jar-name').value || 'server.jar';
+  const jarName = 'server.jar';
   const category = document.getElementById('import-category').value;
   const minRam = document.getElementById('import-min-ram').value;
   const maxRam = document.getElementById('import-max-ram').value;

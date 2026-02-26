@@ -1956,10 +1956,10 @@ def server_access_required(f):
 class JarVersionManager:
     """Manager for Minecraft server JAR files and versions"""
     
-    # Server type metadata - now categorized as 'unmodded' or 'modded'
+    # Server type metadata - categorized as 'unmodded' (Java Vanilla), 'modded' (Java Modded), or 'bedrock'
     SERVER_TYPE_INFO = {
         'vanilla': {'name': 'Vanilla', 'description': 'Official Minecraft Java Edition server', 'category': 'unmodded'},
-        'bedrock': {'name': 'Bedrock', 'description': 'Official Minecraft Bedrock Edition server (not yet supported)', 'category': 'unmodded'},
+        'bedrock': {'name': 'Bedrock', 'description': 'Official Minecraft Bedrock Edition server', 'category': 'bedrock'},
         'paper': {'name': 'Paper', 'description': 'High-performance Spigot fork', 'category': 'modded'},
         'folia': {'name': 'Folia', 'description': 'Paper fork for multi-threaded regions', 'category': 'modded'},
         'purpur': {'name': 'Purpur', 'description': 'Paper fork with extra features', 'category': 'modded'},
@@ -2717,10 +2717,13 @@ class ServerManager:
         
         # Determine if modded based on category
         is_modded = category == 'modded'
+        is_bedrock = category == 'bedrock'
         
         # Determine engine name
         engine_name = 'Vanilla'
-        if is_modded and server_type:
+        if is_bedrock:
+            engine_name = 'Bedrock'
+        elif is_modded and server_type:
             engine_name = server_type.title()  # paper -> Paper, folia -> Folia, etc.
         
         # Create managed.conf file
@@ -2880,12 +2883,15 @@ class ServerManager:
         name = server_config.get('name', 'Unknown Server')
         category = server_config.get('category', 'unmodded')
         is_modded = category == 'modded'
+        is_bedrock = category == 'bedrock'
         server_type = server_config.get('serverType', '')
         owner = server_config.get('owner', 'admin')
         
         # Determine engine name
         engine_name = 'Vanilla'
-        if is_modded and server_type:
+        if is_bedrock:
+            engine_name = 'Bedrock'
+        elif is_modded and server_type:
             engine_name = server_type.title()
         
         self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
@@ -3019,6 +3025,10 @@ class ServerManager:
         if server_id not in self.config.get('servers', {}):
             return False
         
+        # Enforce executable name based on category
+        category = kwargs.get('category', self.config['servers'][server_id].get('category', 'unmodded'))
+        kwargs['executable'] = 'server.sh' if category == 'bedrock' else 'server.jar'
+        
         self.config['servers'][server_id].update(kwargs)
         self._save_config()
         
@@ -3084,6 +3094,7 @@ class ServerManager:
             server_path = Path(server_config.get('serverPath', ''))
             executable = server_config.get('executable', 'server.jar')
             java_args = server_config.get('javaArgs', '-Xmx2G -Xms1G')
+            is_bedrock = server_config.get('category') == 'bedrock'
             
             if not server_path.exists():
                 return False, "Server path does not exist"
@@ -3093,7 +3104,7 @@ class ServerManager:
                 return False, f"Server executable '{executable}' not found"
             
             try:
-                instance = ServerInstance(server_id, server_path, executable, java_args)
+                instance = ServerInstance(server_id, server_path, executable, java_args, is_bedrock=is_bedrock)
                 instance.start()
                 self.servers[server_id] = instance
                 return True, "Server started"
@@ -3181,11 +3192,12 @@ class ServerManager:
 class ServerInstance:
     """Represents a running Minecraft server instance"""
     
-    def __init__(self, server_id, server_path, executable, java_args):
+    def __init__(self, server_id, server_path, executable, java_args, is_bedrock=False):
         self.server_id = server_id
         self.server_path = Path(server_path)
         self.executable = executable
         self.java_args = java_args
+        self.is_bedrock = is_bedrock
         self.process = None
         self.output_buffer = []
         self.max_buffer_size = 1000
@@ -3203,11 +3215,17 @@ class ServerInstance:
         self.start_time = time.time()
         self.server_port = None  # Will be read from properties
         
-        args = ['java'] + self.java_args.split() + ['-jar', self.executable, 'nogui']
-        
-        # Set environment to reduce buffering
+        # Set environment
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
+        
+        if self.is_bedrock:
+            # Bedrock server: run the server.sh wrapper script
+            executable_path = self.server_path / self.executable
+            args = ['bash', str(executable_path)]
+        else:
+            # Java server: run java -jar
+            args = ['java'] + self.java_args.split() + ['-jar', self.executable, 'nogui']
         
         self.process = subprocess.Popen(
             args,
@@ -4184,9 +4202,9 @@ def create_server():
     data = request.get_json()
     name = data.get('name', 'New Server')
     server_path = data.get('serverPath', '')
-    executable = data.get('executable', 'server.jar')
     java_args = data.get('javaArgs', '-Xmx2G -Xms1G')
     category = data.get('category', 'unmodded')
+    executable = 'server.sh' if category == 'bedrock' else 'server.jar'
     server_engine = data.get('serverEngine')  # New: engine (paper, folia, etc.)
     server_type = data.get('serverType') or server_engine  # Backward compat
     version = data.get('version')
@@ -4228,7 +4246,40 @@ def create_server():
     server_config = server_manager.get_server_config(server_id)
     server_dir = Path(server_config['serverPath'])
     
-    # Copy JAR from serverexecutables if requested
+    # Handle Bedrock server setup
+    if category == 'bedrock':
+        # Bedrock servers don't need eula.txt or server.properties created manually
+        # They will be set up when the bedrock server is downloaded
+        
+        # Create server.properties with Bedrock defaults if provided
+        if server_properties:
+            properties_path = server_dir / 'server.properties'
+            # Bedrock uses different defaults
+            bedrock_defaults = {
+                'server-name': name,
+                'server-port': server_properties.get('server-port', 19132),
+                'server-portv6': server_properties.get('server-portv6', 19133),
+                'max-players': server_properties.get('max-players', 10),
+                'gamemode': server_properties.get('gamemode', 'survival'),
+                'difficulty': server_properties.get('difficulty', 'easy'),
+                'level-seed': server_properties.get('level-seed', ''),
+                'allow-cheats': 'false',
+                'online-mode': 'true',
+                'white-list': 'true' if server_properties.get('white-list') else 'false',
+            }
+            lines = ['# Bedrock server properties', f'# Generated by MServerController', '']
+            for key, value in bedrock_defaults.items():
+                lines.append(f'{key}={value}')
+            properties_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        
+        response = {'success': True, 'serverId': server_id}
+        if not approved:
+            response['pendingApproval'] = True
+            response['message'] = 'Server created and pending admin approval'
+        
+        return jsonify(response)
+    
+    # Copy JAR from serverexecutables if requested (Java servers only)
     if download_jar and server_type and version:
         jar_path = server_dir / executable
         
@@ -4257,6 +4308,144 @@ def create_server():
         response['message'] = 'Server created and pending admin approval'
     
     return jsonify(response)
+
+
+@app.route('/api/servers/<server_id>/setup-bedrock', methods=['POST'])
+@login_required
+def setup_bedrock_server(server_id):
+    """Download and set up a Bedrock server - downloads zip, extracts, and sets permissions"""
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    if server_config.get('category') != 'bedrock':
+        return jsonify({'error': 'Server is not a Bedrock server'}), 400
+    
+    server_dir = Path(server_config['serverPath'])
+    progress_id = str(uuid.uuid4())
+    
+    # Initialize progress
+    jar_bucket.download_progress[progress_id] = {
+        'status': 'initializing',
+        'message': 'Starting Bedrock server download...',
+        'progress': 0
+    }
+    
+    def do_bedrock_setup():
+        try:
+            # Get download URL
+            jar_bucket.download_progress[progress_id] = {
+                'status': 'downloading',
+                'message': 'Fetching Bedrock server download URL...',
+                'progress': 5
+            }
+            
+            download_url, _ = jar_bucket._fetch_bedrock_download_url()
+            if not download_url:
+                jar_bucket.download_progress[progress_id] = {
+                    'status': 'error',
+                    'error': 'Could not get Bedrock server download URL'
+                }
+                return
+            
+            # Download the zip
+            zip_path = server_dir / 'bedrock_server.zip'
+            jar_bucket.download_progress[progress_id] = {
+                'status': 'downloading',
+                'message': 'Downloading Bedrock server...',
+                'progress': 10
+            }
+            
+            response = requests.get(download_url, stream=True, timeout=300, headers={
+                'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+            })
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(zip_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size:
+                            pct = 10 + int((downloaded / total_size) * 70)  # 10-80%
+                            jar_bucket.download_progress[progress_id] = {
+                                'status': 'downloading',
+                                'message': f'Downloading... ({downloaded // 1024 // 1024}MB / {total_size // 1024 // 1024}MB)',
+                                'progress': pct,
+                                'total': total_size,
+                                'downloaded': downloaded
+                            }
+            
+            # Extract the zip
+            jar_bucket.download_progress[progress_id] = {
+                'status': 'downloading',
+                'message': 'Extracting Bedrock server files...',
+                'progress': 85
+            }
+            
+            # Check if this is a server update (preserve config files)
+            is_update = (server_dir / 'bedrock_server').exists() or (server_dir / 'bedrock_server.exe').exists()
+            preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds'}
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                for member in zip_ref.namelist():
+                    # Skip preserved files during updates
+                    if is_update and any(member.startswith(pf) for pf in preserve_files):
+                        continue
+                    zip_ref.extract(member, server_dir)
+            
+            # Set executable permissions on Linux
+            if os.name != 'nt':
+                bedrock_exe = server_dir / 'bedrock_server'
+                if bedrock_exe.exists():
+                    os.chmod(str(bedrock_exe), 0o744)
+            
+            # Create server.sh wrapper script
+            server_sh = server_dir / 'server.sh'
+            with open(str(server_sh), 'w') as f:
+                f.write('#!/bin/bash\n')
+                f.write('cd "$(dirname "$0")"\n')
+                f.write('LD_LIBRARY_PATH=. ./bedrock_server\n')
+            if os.name != 'nt':
+                os.chmod(str(server_sh), 0o755)
+            
+            # Delete the zip
+            zip_path.unlink()
+            
+            # Update server config with the correct executable
+            server_config['executable'] = 'server.sh'
+            server_config['version'] = 'latest'
+            server_manager._save_config()
+            
+            jar_bucket.download_progress[progress_id] = {
+                'status': 'complete',
+                'message': 'Bedrock server setup complete!',
+                'progress': 100,
+                'success': True
+            }
+            
+        except Exception as e:
+            # Clean up zip if it exists
+            zip_path = server_dir / 'bedrock_server.zip'
+            if zip_path.exists():
+                zip_path.unlink()
+            
+            jar_bucket.download_progress[progress_id] = {
+                'status': 'error',
+                'error': f'Bedrock setup failed: {str(e)}'
+            }
+    
+    thread = threading.Thread(target=do_bedrock_setup, daemon=True)
+    thread.start()
+    
+    return jsonify({
+        'progress_id': progress_id,
+        'message': 'Starting Bedrock server setup...'
+    })
+
 
 @app.route('/api/servers/import', methods=['POST'])
 @login_required
@@ -4348,7 +4537,7 @@ def download_server_jar(server_id):
     data = request.get_json()
     server_type = data.get('serverType')
     version = data.get('version')
-    executable = data.get('executable', 'server.jar')
+    executable = 'server.jar'  # Always use server.jar for Java server JARs
     
     if not server_type or not version:
         return jsonify({'error': 'Server type and version required'}), 400
@@ -4476,6 +4665,10 @@ def update_managed_conf(server_id):
 @server_access_required
 def check_eula(server_id):
     """Check if EULA has been accepted for a server"""
+    # Bedrock servers don't require EULA acceptance
+    server_config = server_manager.get_server_config(server_id)
+    if server_config and server_config.get('category') == 'bedrock':
+        return jsonify({'accepted': True})
     accepted = server_manager.check_eula_accepted(server_id)
     return jsonify({'accepted': accepted})
 
@@ -6122,7 +6315,8 @@ class JarBucketManager:
         'forge': 'https://maven.minecraftforge.net/net/minecraftforge/forge/',
         'neoforge': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/',
         'spigot': 'https://hub.spigotmc.org/versions/',
-        'bungeecord': 'https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar'
+        'bungeecord': 'https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar',
+        'bedrock': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links'
     }
     
     # Server type metadata with descriptions
@@ -6130,31 +6324,37 @@ class JarBucketManager:
         'vanilla': {
             'name': 'Vanilla',
             'description': 'Official Minecraft Java Edition server',
-            'category': 'servers',
+            'category': 'java_servers',
             'icon': '🎮'
+        },
+        'bedrock': {
+            'name': 'Bedrock',
+            'description': 'Official Minecraft Bedrock Edition server',
+            'category': 'bedrock',
+            'icon': '🪨'
         },
         'paper': {
             'name': 'Paper',
             'description': 'High-performance Spigot fork with optimizations',
-            'category': 'servers',
+            'category': 'java_servers',
             'icon': '📄'
         },
         'purpur': {
             'name': 'Purpur',
             'description': 'Paper fork with extra features and configuration',
-            'category': 'servers',
+            'category': 'java_servers',
             'icon': '💜'
         },
         'folia': {
             'name': 'Folia',
             'description': 'Paper fork for multi-threaded regions',
-            'category': 'servers',
+            'category': 'java_servers',
             'icon': '🌿'
         },
         'spigot': {
             'name': 'Spigot',
             'description': 'Modified Minecraft server with Bukkit plugin support',
-            'category': 'servers',
+            'category': 'java_servers',
             'icon': '🔧'
         },
         'fabric': {
@@ -6257,10 +6457,10 @@ class JarBucketManager:
     
     def get_server_types(self):
         """Get list of available server types with metadata"""
-        types_by_category = {'servers': [], 'modded': [], 'proxies': []}
+        types_by_category = {'java_servers': [], 'bedrock': [], 'modded': [], 'proxies': []}
         
         for type_id, info in self.SERVER_TYPES.items():
-            category = info.get('category', 'servers')
+            category = info.get('category', 'java_servers')
             types_by_category.setdefault(category, []).append({
                 'id': type_id,
                 **info
@@ -6431,6 +6631,46 @@ class JarBucketManager:
             print(f"[JarBucket] Error getting Fabric download URL: {e}")
         return None, None
     
+    def _fetch_bedrock_download_url(self):
+        """Get the latest Bedrock server download URL from Minecraft services API"""
+        try:
+            response = requests.get(
+                self.API_URLS['bedrock'],
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            links = {}
+            for link in data.get('result', {}).get('links', []):
+                dtype = link.get('downloadType', '')
+                url = link.get('downloadUrl', '')
+                
+                import re as _re
+                match = _re.match(r'serverBedrock(Preview)?(Windows|Linux)', dtype)
+                if match:
+                    is_preview = match.group(1) is not None
+                    platform = match.group(2).lower()
+                    key = f"{platform}_{'preview' if is_preview else 'stable'}"
+                    links[key] = url
+            
+            # Return Linux stable URL (since this runs on Linux)
+            if os.name == 'nt':
+                return links.get('windows_stable'), None
+            else:
+                return links.get('linux_stable'), None
+                
+        except Exception as e:
+            print(f"[JarBucket] Error fetching Bedrock download URL: {e}")
+        return None, None
+    
+    def _fetch_bedrock_versions(self):
+        """Bedrock only has 'latest' version available"""
+        return ['latest']
+    
     def get_versions(self, server_type, force_refresh=False):
         """Get available versions for a server type"""
         # Check cache first
@@ -6468,6 +6708,8 @@ class JarBucketManager:
                        '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2']
         elif server_type == 'bungeecord':
             versions = ['latest']
+        elif server_type == 'bedrock':
+            versions = self._fetch_bedrock_versions()
         
         # Update cache
         if versions:
@@ -6525,6 +6767,9 @@ class JarBucketManager:
                 'message': 'Spigot requires BuildTools to compile. Download BuildTools and run: java -jar BuildTools.jar --rev ' + version,
                 'buildtools_url': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
             }
+        elif server_type == 'bedrock':
+            download_url, file_hash = self._fetch_bedrock_download_url()
+            filename = "bedrock_server.zip"
         
         if download_url:
             return {

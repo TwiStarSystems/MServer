@@ -503,10 +503,11 @@
                 <label for="fresh-category">Category:</label>
                 <select id="fresh-category" class="form-control" onchange="onCategoryChange()">
                   <option value="">Select category...</option>
-                  <option value="unmodded">Unmodded (Vanilla)</option>
-                  <option value="modded">Modded (Paper, Folia, Purpur, etc.)</option>
+                  <option value="unmodded">Java (Vanilla)</option>
+                  <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
+                  <option value="bedrock">Bedrock</option>
                 </select>
-                <small id="category-description" class="type-desc">Choose whether you want a vanilla or modded server</small>
+                <small id="category-description" class="type-desc">Choose whether you want a Java or Bedrock server</small>
               </div>
               <div class="form-group" id="engine-group" style="display: none;">
                 <label for="fresh-engine">Server Engine:</label>
@@ -534,11 +535,7 @@
                   </div>
                 </div>
               </div>
-              <div class="form-group" id="jar-name-group" style="display: none;">
-                <label for="fresh-jar-name">JAR File Name:</label>
-                <input type="text" id="fresh-jar-name" class="form-control" value="server.jar">
-                <small>Name for the server JAR file</small>
-              </div>
+
               <div id="ram-fields-group" style="display: none;">
                 <div class="form-group">
                   <label>Memory Allocation:</label>
@@ -673,8 +670,9 @@
           <div class="form-group">
             <label for="import-category">Category:</label>
             <select id="import-category" class="form-control">
-              <option value="unmodded">Unmodded (Vanilla)</option>
-              <option value="modded">Modded (Paper, Folia, Purpur, etc.)</option>
+              <option value="unmodded">Java (Vanilla)</option>
+              <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
+              <option value="bedrock">Bedrock</option>
             </select>
             <small>Select the type of server you're importing</small>
           </div>
@@ -685,11 +683,7 @@
             <small>Upload a ZIP file containing your existing server files</small>
           </div>
           
-          <div class="form-group">
-            <label for="import-jar-name">JAR File Name:</label>
-            <input type="text" id="import-jar-name" class="form-control" value="server.jar">
-            <small>Name of the server JAR file in the ZIP</small>
-          </div>
+
           
           <div class="form-group">
             <label>Memory Allocation:</label>
@@ -749,8 +743,9 @@
           <div class="form-group">
             <label for="input-category">Category:</label>
             <select id="input-category" class="form-control">
-              <option value="unmodded">Unmodded (Vanilla)</option>
-              <option value="modded">Modded (Paper, Folia, Purpur, etc.)</option>
+              <option value="unmodded">Java (Vanilla)</option>
+              <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
+              <option value="bedrock">Bedrock</option>
             </select>
           </div>
           
@@ -760,11 +755,7 @@
             <small id="path-hint">Leave empty to auto-create in the default servers directory</small>
           </div>
           
-          <div class="form-group">
-            <label for="input-executable">Server Executable:</label>
-            <input type="text" id="input-executable" class="form-control" placeholder="server.jar" value="server.jar">
-            <small>Name of the server JAR file</small>
-          </div>
+
           
           <div class="form-group">
             <label>Memory Allocation:</label>

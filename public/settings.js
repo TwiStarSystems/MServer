@@ -1049,16 +1049,28 @@ function refreshJarBucketTypes() {
 }
 
 function renderJarBucketTypes() {
-  // Render servers category
+  // Render Java servers category
   const serversContainer = document.getElementById('jar-bucket-servers');
-  if (serversContainer && jarBucketTypes.servers) {
-    serversContainer.innerHTML = jarBucketTypes.servers.map(type => `
+  if (serversContainer && jarBucketTypes.java_servers) {
+    serversContainer.innerHTML = jarBucketTypes.java_servers.map(type => `
       <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
         <span class="type-icon">${type.icon || '📦'}</span>
         <span class="type-name">${escapeHtml(type.name)}</span>
         <small class="type-desc">${escapeHtml(type.description)}</small>
       </div>
-    `).join('') || '<div class="no-data">No servers available</div>';
+    `).join('') || '<div class="no-data">No Java servers available</div>';
+  }
+  
+  // Render Bedrock category
+  const bedrockContainer = document.getElementById('jar-bucket-bedrock');
+  if (bedrockContainer && jarBucketTypes.bedrock) {
+    bedrockContainer.innerHTML = jarBucketTypes.bedrock.map(type => `
+      <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
+        <span class="type-icon">${type.icon || '📦'}</span>
+        <span class="type-name">${escapeHtml(type.name)}</span>
+        <small class="type-desc">${escapeHtml(type.description)}</small>
+      </div>
+    `).join('') || '<div class="no-data">No Bedrock servers available</div>';
   }
   
   // Render modded category
