@@ -476,7 +476,9 @@ body {
   background: #0d0d0d;
   border-radius: 0px;
   overflow: hidden;
-  height: calc(100vh - 250px);
+  height: calc(100vh - 200px);
+  min-height: 300px;
+  max-height: calc(100vh - 180px);
   display: flex;
   flex-direction: column;
 }

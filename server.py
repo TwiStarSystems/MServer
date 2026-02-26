@@ -3257,8 +3257,8 @@ class ServerInstance:
             fd = self.process.stdout.fileno()
             
             while self.process.poll() is None:
-                # Use select to check if data is available (timeout 0.1s for responsiveness)
-                ready, _, _ = select.select([fd], [], [], 0.1)
+                # Use select to check if data is available (timeout 0.01s for faster response)
+                ready, _, _ = select.select([fd], [], [], 0.01)
                 
                 if ready:
                     # Data is available, read it
@@ -3277,7 +3277,7 @@ class ServerInstance:
                             self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
                             self._add_to_buffer(line)
                         
-                        # Send partial line immediately if it's been sitting in buffer
+                        # Send partial line immediately if buffer is non-empty
                         # This ensures progress bars and non-newline terminated output appears
                         if buffer and len(buffer) > 0:
                             try:
@@ -5291,6 +5291,14 @@ def unban_player(server_id, uuid):
 @server_access_required
 def get_playerdata(server_id):
     """Get list of player data files"""
+    # Check if this is a Bedrock server
+    server_config = server_manager.get_server_config(server_id)
+    if server_config and server_config.get('category') == 'bedrock':
+        return jsonify({
+            'players': [], 
+            'message': 'Bedrock servers store player data in LevelDB format (worlds/db/). Individual player data files are not accessible. Use permissions.json and allowlist.json to manage players.'
+        })
+    
     server_path = server_manager.get_server_path(server_id)
     
     # Try different world folder names

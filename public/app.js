@@ -3680,25 +3680,44 @@ async function loadPlayerData() {
   tbody.innerHTML = '<tr><td colspan="4" class="empty-message">Loading...</td></tr>';
   
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/players/playerdata`);
-    const players = data.players || [];
+    // Load both player data and ops list
+    const [playerDataResponse, opsResponse] = await Promise.all([
+      apiRequest(`/api/servers/${currentServerId}/players/playerdata`),
+      apiRequest(`/api/servers/${currentServerId}/players/ops`)
+    ]);
+    
+    const players = playerDataResponse.players || [];
+    const ops = opsResponse.operators || [];
+    
+    if (playerDataResponse.message) {
+      tbody.innerHTML = `<tr><td colspan="4" class="empty-message">${escapeHtml(playerDataResponse.message)}</td></tr>`;
+      return;
+    }
     
     if (players.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-message">No player data found</td></tr>';
       return;
     }
     
-    tbody.innerHTML = players.map(player => `
-      <tr>
-        <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
-        <td>${new Date(player.modified).toLocaleString()}</td>
-        <td>${formatBytes(player.size)}</td>
-        <td class="actions-cell">
-          <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}')">Edit NBT</button>
-          <button class="btn btn-small btn-success" onclick="makePlayerOp('${player.uuid}')">Make OP</button>
-        </td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = players.map(player => {
+      // Check if player is an operator
+      const op = ops.find(o => o.uuid === player.uuid);
+      const opButton = op 
+        ? `<button class="btn btn-small btn-danger" onclick="removeOperator('${player.uuid}', '${escapeHtml(op.name)}')">Remove OP</button>`
+        : `<button class="btn btn-small btn-success" onclick="makePlayerOp('${player.uuid}')">Make OP</button>`;
+      
+      return `
+        <tr>
+          <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
+          <td>${new Date(player.modified).toLocaleString()}</td>
+          <td>${formatBytes(player.size)}</td>
+          <td class="actions-cell">
+            <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}')">Edit NBT</button>
+            ${opButton}
+          </td>
+        </tr>
+      `;
+    }).join('');
   } catch (error) {
     tbody.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load player data</td></tr>';
   }
