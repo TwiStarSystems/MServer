@@ -478,7 +478,7 @@ body {
   overflow: hidden;
   height: calc(100vh - 200px);
   min-height: 300px;
-  max-height: calc(100vh - 180px);
+  max-height: 800px;
   display: flex;
   flex-direction: column;
 }
@@ -869,7 +869,7 @@ body {
 
 .property-textarea {
   width: 100%;
-  min-width: 350px;
+  min-width: 500px;
   max-width: none;
   padding: 10px;
   background: #0b1929;
@@ -882,7 +882,6 @@ body {
   resize: none;
   min-height: 50px;
   align-self: flex-end;
-  margin-left: 40px;
 }
 
 .property-textarea:focus {
