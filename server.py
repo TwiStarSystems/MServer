@@ -3365,32 +3365,58 @@ class ServerInstance:
             
             # Process is running, check state
             elapsed = time.time() - self.start_time if self.start_time else 0
-            port = self._get_server_port()
-            tcp_responsive = self._check_tcp_port(port)
             
-            new_status = None
-            
-            if tcp_responsive:
-                # Server is responding on TCP port
-                if self.status != ServerStatus.RUNNING:
-                    new_status = ServerStatus.RUNNING
-            elif elapsed < 30:
-                # Within startup grace period
-                if self.status != ServerStatus.STARTING:
-                    new_status = ServerStatus.STARTING
+            # Bedrock servers: simplified status detection (process-based only)
+            # Bedrock uses UDP for queries which is more complex, so we just check if process is running
+            if self.is_bedrock:
+                if elapsed < 10:
+                    # Short startup grace period for Bedrock
+                    if self.status != ServerStatus.STARTING:
+                        self.status = ServerStatus.STARTING
+                        self._broadcast({
+                            'type': 'status',
+                            'serverId': self.server_id,
+                            'status': self.status.value,
+                            'running': True
+                        })
+                else:
+                    # Process is running, assume server is ready
+                    if self.status != ServerStatus.RUNNING:
+                        self.status = ServerStatus.RUNNING
+                        self._broadcast({
+                            'type': 'status',
+                            'serverId': self.server_id,
+                            'status': self.status.value,
+                            'running': True
+                        })
             else:
-                # Process running but not responding after 30s
-                if self.status != ServerStatus.UNRESPONSIVE:
-                    new_status = ServerStatus.UNRESPONSIVE
-            
-            if new_status and new_status != self.status:
-                self.status = new_status
-                self._broadcast({
-                    'type': 'status',
-                    'serverId': self.server_id,
-                    'status': self.status.value,
-                    'running': self.status in [ServerStatus.STARTING, ServerStatus.RUNNING, ServerStatus.UNRESPONSIVE]
-                })
+                # Java servers: TCP port-based detection
+                port = self._get_server_port()
+                tcp_responsive = self._check_tcp_port(port)
+                
+                new_status = None
+                
+                if tcp_responsive:
+                    # Server is responding on TCP port
+                    if self.status != ServerStatus.RUNNING:
+                        new_status = ServerStatus.RUNNING
+                elif elapsed < 30:
+                    # Within startup grace period
+                    if self.status != ServerStatus.STARTING:
+                        new_status = ServerStatus.STARTING
+                else:
+                    # Process running but not responding after 30s
+                    if self.status != ServerStatus.UNRESPONSIVE:
+                        new_status = ServerStatus.UNRESPONSIVE
+                
+                if new_status and new_status != self.status:
+                    self.status = new_status
+                    self._broadcast({
+                        'type': 'status',
+                        'serverId': self.server_id,
+                        'status': self.status.value,
+                        'running': self.status in [ServerStatus.STARTING, ServerStatus.RUNNING, ServerStatus.UNRESPONSIVE]
+                    })
             
             time.sleep(2)  # Check every 2 seconds
     
@@ -4812,6 +4838,17 @@ def write_server_file(server_id):
 @server_access_required
 def read_server_logs(server_id):
     """Read latest.log from the logs folder"""
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'content': 'Server not found.', 'success': False})
+    
+    # Bedrock servers don't have log files - they only output to console
+    if server_config.get('category') == 'bedrock':
+        return jsonify({
+            'content': 'Bedrock servers do not store log files.\n\nConsole output is available in the Console tab while the server is running.',
+            'success': False
+        })
+    
     server_path = server_manager.get_server_path(server_id)
     logs_path = server_path / 'logs' / 'latest.log'
     
@@ -5652,6 +5689,10 @@ def save_properties(server_id):
 @server_access_required
 def get_resourcepack_info(server_id):
     """Get resource pack information for a server"""
+    server_config = server_manager.get_server_config(server_id)
+    if server_config and server_config.get('category') == 'bedrock':
+        return jsonify({'error': 'Resource packs are not supported for Bedrock servers'}), 400
+    
     server_path = server_manager.get_server_path(server_id)
     resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
     
@@ -5686,6 +5727,10 @@ def get_resourcepack_info(server_id):
 @server_access_required
 def upload_resourcepack(server_id):
     """Upload a resource pack for a server"""
+    server_config = server_manager.get_server_config(server_id)
+    if server_config and server_config.get('category') == 'bedrock':
+        return jsonify({'error': 'Resource packs are not supported for Bedrock servers'}), 400
+    
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     
@@ -5776,6 +5821,10 @@ def upload_resourcepack(server_id):
 @server_access_required
 def delete_resourcepack(server_id):
     """Delete resource pack for a server"""
+    server_config = server_manager.get_server_config(server_id)
+    if server_config and server_config.get('category') == 'bedrock':
+        return jsonify({'error': 'Resource packs are not supported for Bedrock servers'}), 400
+    
     resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
     
     if not resourcepack_path.exists():

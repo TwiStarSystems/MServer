@@ -666,6 +666,18 @@ async function loadServerDetails() {
       }
     }
     
+    // Hide Resource Pack tab for Bedrock servers
+    const resourcepackTabBtn = document.getElementById('resourcepack-tab-btn');
+    if (server.category === 'bedrock') {
+      resourcepackTabBtn.style.display = 'none';
+      // If currently on resourcepack tab, switch to terminal
+      if (document.querySelector('.tab-button.active[data-tab="resourcepack"]')) {
+        switchTab('terminal');
+      }
+    } else {
+      resourcepackTabBtn.style.display = '';
+    }
+    
     // Check if server.properties exists and show/hide Properties tab
     const propertiesTabBtn = document.getElementById('properties-tab-btn');
     try {
