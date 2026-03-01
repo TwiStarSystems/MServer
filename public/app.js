@@ -324,8 +324,6 @@ async function changePassword() {
 let currentMFASecret = null;
 let currentRecoveryCode = null;
 
-console.log('MFA Functions loaded - v2.0'); // Debug marker
-
 function updateMFAStatus() {
   if (!currentUser) {
     console.warn('currentUser not defined yet');
@@ -1046,7 +1044,7 @@ async function acceptEulaAndStart() {
       const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
       if (result.success) {
         appendTerminalOutput('EULA accepted. Starting server...\n');
-        updateServerStatus(true);
+        updateServerStatus('running', true);
       }
     }
   } catch (error) {
@@ -1079,7 +1077,7 @@ async function killServer() {
     const result = await apiRequest(`/api/servers/${currentServerId}/kill`, { method: 'POST' });
     if (result.success) {
       appendTerminalOutput('Server process killed.\n');
-      updateServerStatus(false);
+      updateServerStatus('stopped', false);
     }
   } catch (error) {
     // Error already shown by apiRequest
@@ -1088,12 +1086,10 @@ async function killServer() {
 
 // ==================== Server CRUD ====================
 
-let serverTypes = [];
 let currentCreationType = null;
 let defaultServerPath = '';
 
 async function openAddServerModal() {
-  console.log('openAddServerModal called');
   try {
     editingServerId = null;
     currentCreationType = null;

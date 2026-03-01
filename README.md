@@ -2,7 +2,7 @@
 
 A Web-Based Multi-Server Minecraft Manager
 
-MServerController is a modern, user-friendly web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python and Flask, it provides a clean interface for server administration with real-time monitoring, file management, and automated backups.
+MServerController is a modern, feature-rich web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python/Flask and Socket.IO, it provides a responsive dark-themed interface with real-time monitoring, role-based access control, automated backups, task scheduling, and a full public REST API.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
@@ -10,50 +10,133 @@ MServerController is a modern, user-friendly web application for creating, runni
 
 ## Features
 
-### 🎮 Multi-Server Support
-- Manage unlimited Minecraft servers from a single dashboard
-- Start, stop, and monitor multiple servers simultaneously
-- Each server has isolated configuration, files, and backups
-- Real-time status indicators for all servers
+### 🎮 Multi-Server Management
+- Create, start, stop, kill, and monitor unlimited Minecraft servers from a single dashboard
+- Per-server isolated configuration, files, backups, and scheduled tasks
+- Real-time status indicators (Running, Stopped, Starting, Stopping, Unresponsive)
+- Server import from ZIP archive or custom JAR upload
+- Managed server mode with automatic JAR update tracking
+- Server approval workflow (optional admin gating for new servers)
+- Bedrock server support
 
-### 🖥️ Real-Time Terminal
+### 🖥️ Real-Time Terminal & Logs
 - Live server console output via WebSocket (Socket.IO)
-- Execute commands on any running server
-- Color-coded output for easy reading
+- Execute commands on any running server in real time
 - Persistent output buffer for recent history
+- Dedicated logs tab with separate log viewer
+- Terminal input with command history
 
 ### 📁 File Explorer
-- Browse server files and directories
-- Create, edit, and delete files
-- Upload files to any server
-- Download files and directories
-- Syntax-highlighted text editor
+- Browse, create, edit, rename, and delete server files and directories
+- Upload and download files
+- Built-in syntax-highlighted text editor
+- Breadcrumb navigation with path display
+
+### 🧩 Mod & Plugin Manager
+- Dedicated tab for managing server mods and plugins
+- Upload, enable, disable, and remove JAR files
+- Separate sections for plugins (Bukkit/Spigot/Paper) and mods (Forge/NeoForge/Fabric)
+- Drag-and-drop multi-file upload support
+
+### 📋 NBT Editor
+- Read and write Minecraft NBT binary files directly from the web UI
+- Add, edit, and delete NBT tags
+- Supports all NBT tag types (compound, list, string, int, etc.)
+- GZip and uncompressed format support
+
+### ⚙️ Server Properties Editor
+- Visual editor for `server.properties` with categorized fields
+- Input validation and type-appropriate controls
+- Apply changes without manually editing config files
+
+### 🎨 Resource Pack Hosting
+- Upload resource packs per server
+- Automatic SHA-1 hash computation for `server.properties` integration
+- Built-in resource pack URL generation
+- Automatic `server.properties` updates with resource pack settings
 
 ### 💾 Backup System
-- One-click backup creation per server
-- Automatic ZIP compression
-- Download backups to your local machine
-- **Restore backups** with a single click
-- Manage and delete old backups
+- One-click backup creation per server with ZIP compression
+- Download, restore, and delete backups
+- **Automated backup scheduling** with cron expressions
+- Configurable backup retention (max count and auto-cleanup)
+- SMTP email notifications for backup success/failure
 - Backups organized by server
 
-### 🆕 Easy Server Creation
-- **Create Fresh Server** with automatic JAR download:
-  - Vanilla (Official Minecraft Server)
-  - Paper (High-performance Spigot fork)
-  - Purpur (Paper fork with extra features)
-  - BungeeCord (Proxy server)
-  - Forge (Mod loader)
-  - NeoForge (Modern Forge fork)
-- **Upload Custom JAR** - Use your own server JAR file
-- **Import Existing Server** - Import from ZIP file
-- Automatic version selection with latest builds
+### ⏰ Task Scheduler
+- Schedule server actions: start, stop, reboot, and custom commands
+- Cron-based scheduling (specific times, intervals, days of week)
+- Run-limited tasks (execute N times then auto-disable)
+- Per-server task management with enable/disable toggle
 
-### ⚙️ Server Configuration
-- Configure server executable path
-- Set Java memory allocation per server
-- Customize JVM arguments
-- Easy-to-use web interface
+### 👥 User Management & RBAC
+- Role-based access control with three roles: **Admin**, **Moderator**, **User**
+- User registration with optional admin approval workflow
+- Per-server access control (users see only their assigned servers)
+- Admin user management panel (create, edit, delete, approve users)
+- Account lockout after failed login attempts with automatic anti-lockout emergency admin
+- Username, display name, and email profile management
+
+### 🔐 Security
+- Multi-Factor Authentication (MFA/2FA) with TOTP (Google Authenticator, Authy, etc.)
+- Hashed recovery codes for MFA account recovery
+- CSRF protection on all state-changing endpoints
+- Rate limiting per IP (login, uploads, backups, API)
+- Session-based authentication with secure cookie settings
+- Password hashing with Werkzeug
+- Path traversal protection on all file operations
+- Configurable MFA enforcement for admins or all users
+- SSL/TLS support with certificate arguments
+
+### 🌐 Public API (v1)
+- RESTful API with API key authentication
+- Key management with permissions (read, write, admin, console)
+- Per-key rate limiting and expiration
+- API usage statistics and request tracking
+- Endpoints for server listing, status, start/stop, and command execution
+- Auto-generated API documentation endpoint
+
+### 📊 System Monitoring
+- Real-time CPU, RAM, and disk usage charts (admin dashboard)
+- Historical stats with 7-day retention
+- Per-server resource monitoring
+- Live stats broadcast via WebSocket every 10 seconds
+
+### 🔧 Admin Settings Panel
+- **Branding**: Custom site title, favicon upload, and footer text
+- **App Settings**: Toggle registration, require approval, server approval workflow
+- **MFA Settings**: Require MFA for admins or all users
+- **SMTP Configuration**: Email notifications with test email support
+- **JAR Bucket Manager**: Download server JARs from official APIs (Paper, Purpur, Folia, Forge, NeoForge, Fabric, Vanilla, Spigot, BungeeCord)
+- **Tools Manager**: Upload and execute custom Python scripts (admin only)
+- **User Management**: Full CRUD with role assignment and password reset
+- **API Key Management**: Create, revoke, and manage public API keys
+
+### 🆕 Server Type Support
+- **Java Edition**: Vanilla, Paper, Purpur, Folia, Spigot, BungeeCord
+- **Modded**: Forge, NeoForge, Fabric
+- **Bedrock Edition**: Bedrock Dedicated Server
+- Automatic version detection and JAR download from official APIs
+- Local JAR library with bucket management
+
+### 🔄 Version Management
+- Version file tracking with automatic update checks
+- Remote version comparison against Git repository
+- In-app version display
+
+### 📱 Responsive Design
+- Dark-themed modern UI
+- Sidebar server list with collapsible navigation
+- Tabbed interface per server (Terminal, Logs, Files, Mods, Properties, Resource Pack, Players, Backups, Tasks)
+- Profile modal with password change and MFA setup
+- Mobile-friendly responsive layout
+
+### 👤 Player Management
+- View and manage operator (ops) list with permission levels
+- Whitelist management (add/remove players)
+- Ban list management with reasons
+- Player data viewer (inventory, stats from NBT)
+- Mojang UUID lookup integration
 
 ## Requirements
 
@@ -276,37 +359,91 @@ This only copies the application files (server.py, public/) without reinstalling
 
 ## API Reference
 
-### Server Types & Versions
+### Authentication
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/server-types` | List available server types |
-| GET | `/api/server-types/<type>/versions` | List versions for a server type |
+| POST | `/api/auth/login` | Login with username/password |
+| POST | `/api/auth/logout` | Logout current session |
+| POST | `/api/auth/register` | Register new account |
+| GET | `/api/auth/me` | Get current user info |
+| POST | `/api/auth/password` | Change password |
+| PUT | `/api/auth/profile/username` | Update username |
+| PUT | `/api/auth/profile/name` | Update display name |
+| PUT | `/api/auth/profile/email` | Update email |
+
+### MFA
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/auth/mfa/setup` | Begin MFA setup (returns QR code) |
+| POST | `/api/auth/mfa/verify` | Verify MFA code to complete setup |
+| POST | `/api/auth/mfa/disable` | Disable MFA |
+| POST | `/api/auth/mfa/verify-login` | Verify MFA during login |
 
 ### Server Management
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/servers` | List all servers |
-| POST | `/api/servers` | Create new server (with optional JAR download) |
-| POST | `/api/servers/import` | Import server from ZIP file |
+| POST | `/api/servers` | Create new server |
+| POST | `/api/servers/import` | Import server from ZIP |
 | GET | `/api/servers/<id>` | Get server details |
 | PUT | `/api/servers/<id>` | Update server config |
-| DELETE | `/api/servers/<id>` | Delete server config |
+| DELETE | `/api/servers/<id>` | Delete server |
 | POST | `/api/servers/<id>/start` | Start server |
-| POST | `/api/servers/<id>/stop` | Stop server |
+| POST | `/api/servers/<id>/stop` | Stop server gracefully |
+| POST | `/api/servers/<id>/kill` | Force kill server process |
+| POST | `/api/servers/<id>/command` | Send console command |
+| GET | `/api/servers/<id>/output` | Get console output buffer |
 | POST | `/api/servers/<id>/upload-jar` | Upload custom JAR file |
-| POST | `/api/servers/<id>/download-jar` | Download JAR for existing server |
+| POST | `/api/servers/<id>/download-jar` | Download JAR for server |
+| GET | `/api/servers/<id>/eula` | Check EULA status |
+| POST | `/api/servers/<id>/eula/accept` | Accept EULA |
 
 ### File Management
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/servers/<id>/files` | List files |
+| GET | `/api/servers/<id>/files` | List files in directory |
 | GET | `/api/servers/<id>/files/read` | Read file content |
 | POST | `/api/servers/<id>/files/write` | Write file content |
+| POST | `/api/servers/<id>/files/create` | Create file or folder |
 | POST | `/api/servers/<id>/files/upload` | Upload file |
 | GET | `/api/servers/<id>/files/download` | Download file |
-| DELETE | `/api/servers/<id>/files/delete` | Delete file |
+| DELETE | `/api/servers/<id>/files/delete` | Delete file or folder |
+| GET | `/api/servers/<id>/logs` | Get server log content |
 
-### Backup Management
+### Mods & Plugins
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/mods` | List mods and plugins |
+| POST | `/api/servers/<id>/mods/upload` | Upload mod/plugin JAR |
+| POST | `/api/servers/<id>/mods/<type>/<file>/enable` | Enable a mod |
+| POST | `/api/servers/<id>/mods/<type>/<file>/disable` | Disable a mod |
+| DELETE | `/api/servers/<id>/mods/<type>/<file>` | Delete a mod |
+
+### NBT Editor
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/nbt/read` | Read NBT file |
+| POST | `/api/servers/<id>/nbt/write` | Write NBT file |
+| POST | `/api/servers/<id>/nbt/update` | Update NBT tag |
+| POST | `/api/servers/<id>/nbt/add` | Add NBT tag |
+| POST | `/api/servers/<id>/nbt/delete` | Delete NBT tag |
+
+### Player Management
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/players/ops` | List operators |
+| POST | `/api/servers/<id>/players/ops` | Add operator |
+| PUT | `/api/servers/<id>/players/ops/<uuid>` | Update op level |
+| DELETE | `/api/servers/<id>/players/ops/<uuid>` | Remove operator |
+| GET | `/api/servers/<id>/players/whitelist` | List whitelist |
+| POST | `/api/servers/<id>/players/whitelist` | Add to whitelist |
+| DELETE | `/api/servers/<id>/players/whitelist/<uuid>` | Remove from whitelist |
+| GET | `/api/servers/<id>/players/banned` | List bans |
+| POST | `/api/servers/<id>/players/banned` | Ban player |
+| DELETE | `/api/servers/<id>/players/banned/<uuid>` | Unban player |
+| GET | `/api/servers/<id>/players/playerdata` | List player data files |
+
+### Backups
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/servers/<id>/backups` | List backups |
@@ -314,18 +451,59 @@ This only copies the application files (server.py, public/) without reinstalling
 | GET | `/api/servers/<id>/backups/download` | Download backup |
 | POST | `/api/servers/<id>/backups/restore` | Restore backup |
 | DELETE | `/api/servers/<id>/backups/delete` | Delete backup |
+| GET | `/api/servers/<id>/backups/schedule` | Get backup schedule |
+| POST | `/api/servers/<id>/backups/schedule` | Set backup schedule |
+| DELETE | `/api/servers/<id>/backups/schedule` | Remove backup schedule |
+
+### Task Scheduler
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/tasks` | List tasks |
+| POST | `/api/servers/<id>/tasks` | Create task |
+| GET | `/api/servers/<id>/tasks/<tid>` | Get task details |
+| PUT | `/api/servers/<id>/tasks/<tid>` | Update task |
+| DELETE | `/api/servers/<id>/tasks/<tid>` | Delete task |
+
+### Admin
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/admin/users` | List all users |
+| POST | `/api/admin/users` | Create user |
+| GET | `/api/admin/users/<id>` | Get user details |
+| DELETE | `/api/admin/users/<id>` | Delete user |
+| POST | `/api/admin/users/<id>/approve` | Approve user |
+| PUT | `/api/admin/users/<id>/role` | Change role |
+| POST | `/api/admin/users/<id>/password` | Reset password |
+| DELETE | `/api/admin/users/<id>/mfa` | Reset user MFA |
+| POST | `/api/admin/users/<id>/enable` | Enable account |
+
+### Public API (v1) — API Key Auth
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/status` | Service status |
+| GET | `/api/v1/servers` | List servers |
+| GET | `/api/v1/servers/<id>` | Server details |
+| GET | `/api/v1/servers/<id>/status` | Server status |
+| POST | `/api/v1/servers/<id>/command` | Send command |
+| POST | `/api/v1/servers/<id>/start` | Start server |
+| POST | `/api/v1/servers/<id>/stop` | Stop server |
+| POST | `/api/v1/servers/<id>/restart` | Restart server |
+| GET | `/api/v1/docs` | API documentation |
 
 ## Security Considerations
 
-- The application runs on localhost by default and should be accessed through Nginx
-- File operations are restricted to configured server directories
-- Path traversal attacks are prevented with security checks
-- Rate limiting is enabled on all API endpoints:
-  - General API: 100 requests per 15 minutes per IP
-  - Upload endpoint: 10 requests per 15 minutes per IP
-  - Backup creation: 5 requests per 15 minutes per IP
-- Consider setting up SSL/TLS certificates for production use
-- Implement firewall rules to restrict access to the web interface
+- **Authentication**: Session-based with secure HTTP-only cookies and configurable SameSite policy
+- **CSRF Protection**: All state-changing requests require a valid CSRF token
+- **Password Policy**: Minimum 12 characters with uppercase, lowercase, and digit requirements for registration
+- **MFA/2FA**: Optional TOTP-based multi-factor authentication with hashed recovery codes
+- **Rate Limiting**: Configurable per-endpoint limits (login, uploads, backups, API)
+- **Path Traversal Protection**: All file operations validated against server directories
+- **Reverse Proxy**: Designed to run behind Nginx with ProxyFix for correct IP detection
+- **API Keys**: Hashed storage with SHA-256, per-key permissions and expiration
+- **Account Lockout**: Automatic disable after repeated failed login attempts
+- **Anti-Lockout**: Emergency admin account auto-created when all admins are locked out
+- **SSL/TLS**: Native support via `--ssl-cert` and `--ssl-key` arguments
+- Set `SECRET_KEY` environment variable in production to persist sessions across restarts
 
 ## Troubleshooting
 
@@ -366,21 +544,35 @@ sudo tail -f /var/log/nginx/error.log
 
 ```
 MServerController/
-├── server.py                 # Main Python/Flask server
-├── server_core.py            # Core utilities
+├── server.py                 # Main Python/Flask backend (API, WebSocket, managers)
+├── api_manager.py            # Public API v1 blueprint (key auth endpoints)
 ├── requirements.txt          # Python dependencies
-├── nginx.conf                # Nginx configuration
-├── install.sh                # Installation script
+├── version                   # Application version file
+├── nginx.conf                # Nginx reverse proxy configuration
+├── install.sh                # Interactive installation script
+├── git-release.sh            # Git release/versioning helper
+├── users.json                # User accounts (generated)
 ├── config.json               # Server configurations (generated)
+├── configs/
+│   └── jarurls.conf          # JAR download URL configuration
 ├── public/                   # Frontend files
-│   ├── index.html            # Main HTML page
-│   ├── styles.css            # Styles
-│   └── app.js                # Frontend JavaScript
+│   ├── index.html            # Main dashboard page
+│   ├── login.html            # Login/registration page
+│   ├── settings.html         # Admin settings panel
+│   ├── public.html           # Public server status page
+│   ├── app.js                # Dashboard frontend logic
+│   ├── settings.js           # Settings panel logic
+│   ├── login.js              # Login/registration logic
+│   ├── public.js             # Public page logic
+│   ├── utils.js              # Shared utility functions
+│   ├── styles.css            # Application styles
+│   ├── favicons/             # Uploaded favicon files
+│   └── resourcepacks/        # Hosted resource packs
 ├── docs/                     # Documentation
-│   └── DEVELOPMENT_GUIDE.md  # Development reference
-├── venv/                     # Python virtual environment
 ├── servers/                  # Minecraft server files (per-server subdirectories)
+├── serverexecutables/        # Downloaded server JARs (by type)
 ├── backups/                  # Server backups (per-server subdirectories)
+├── tools/                    # Admin-uploaded Python tools
 └── uploads/                  # Temporary upload directory
 ```
 

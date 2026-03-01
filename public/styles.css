@@ -2179,38 +2179,6 @@ select.form-control:disabled {
   margin-bottom: 0;
 }
 
-#password-form h3 {
-  margin-bottom: 15px;
-  font-size: 16px;
-  color: #fff;
-}
-
-#password-form .form-group {
-  margin-bottom: 15px;
-}
-
-#password-form label {
-  display: block;
-  margin-bottom: 6px;
-  color: #aaa;
-  font-size: 13px;
-}
-
-#password-form input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: #1a1a2e;
-  color: #e0e0e0;
-  font-size: 14px;
-}
-
-#password-form input:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
 /* ==================== App Footer ==================== */
 
 .app-footer {

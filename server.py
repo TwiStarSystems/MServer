@@ -296,6 +296,18 @@ class SettingsManager:
         self._save_settings()
         return self.settings['app']
     
+    def update_mfa_settings(self, mfa_data):
+        """Update MFA settings"""
+        if 'mfa' not in self.settings:
+            self.settings['mfa'] = {}
+        
+        for key in ['requireMfaForAdmins', 'requireMfaForAllUsers']:
+            if key in mfa_data:
+                self.settings['mfa'][key] = mfa_data[key]
+        
+        self._save_settings()
+        return self.settings['mfa']
+    
     def get_smtp_settings(self):
         """Get SMTP settings (without password for security)"""
         smtp = self.settings.get('smtp', self.DEFAULT_SETTINGS['smtp']).copy()
@@ -1012,10 +1024,15 @@ class TaskScheduler:
         except Exception as e:
             print(f"[TaskScheduler] Task execution failed for {task_id}: {e}")
     
+    def _is_server_running(self, server_id):
+        """Check if a server is running via its ServerInstance"""
+        instance = self.server_manager.servers.get(server_id)
+        return instance is not None and instance.is_running()
+
     def _execute_start(self, server_id, task):
         """Start the server"""
         try:
-            if not self.server_manager.is_running(server_id):
+            if not self._is_server_running(server_id):
                 self.server_manager.start_server(server_id)
                 print(f"[TaskScheduler] Started server {server_id}")
             else:
@@ -1026,7 +1043,7 @@ class TaskScheduler:
     def _execute_stop(self, server_id, task):
         """Stop the server"""
         try:
-            if self.server_manager.is_running(server_id):
+            if self._is_server_running(server_id):
                 self.server_manager.stop_server(server_id)
                 print(f"[TaskScheduler] Stopped server {server_id}")
             else:
@@ -1037,17 +1054,16 @@ class TaskScheduler:
     def _execute_reboot(self, server_id, task):
         """Reboot the server (stop, wait, start)"""
         try:
-            if self.server_manager.is_running(server_id):
+            if self._is_server_running(server_id):
                 print(f"[TaskScheduler] Rebooting server {server_id}...")
                 
                 # Stop the server
                 self.server_manager.stop_server(server_id)
                 
                 # Wait for process to end
-                import time
                 max_wait = 60  # Maximum 60 seconds wait
                 waited = 0
-                while self.server_manager.is_running(server_id) and waited < max_wait:
+                while self._is_server_running(server_id) and waited < max_wait:
                     time.sleep(1)
                     waited += 1
                 
@@ -1068,7 +1084,7 @@ class TaskScheduler:
         """Execute a custom server command"""
         try:
             command = task.get('command', '')
-            if command and self.server_manager.is_running(server_id):
+            if command and self._is_server_running(server_id):
                 self.server_manager.send_command(server_id, command)
                 print(f"[TaskScheduler] Executed command '{command}' on server {server_id}")
             elif not command:
@@ -1352,109 +1368,6 @@ class UserManager:
             if require_approval:
                 return user_id, "Registration successful. Please wait for admin approval."
             return user_id, "Registration successful. You can now log in."
-    
-    def _has_active_admin(self):
-        """Check if there are any active (non-disabled) admin accounts"""
-        for user in self.users.get('users', {}).values():
-            if (user['role'] == 'admin' and 
-                not user.get('accountDisabled', False) and 
-                user.get('approved', False)):
-                return True
-        return False
-    
-    def _check_and_create_anti_lockout(self):
-        """Create anti-lockout account if no active admins exist"""
-        if not self._has_active_admin():
-            # Remove any existing anti-lockout accounts first
-            self._remove_anti_lockout_accounts()
-            
-            # Generate random credentials
-            import secrets
-            import string
-            
-            username = 'emergency_admin_' + ''.join(secrets.choice(string.digits) for _ in range(4))
-            password = ''.join(secrets.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(16))
-            
-            user_id = str(uuid.uuid4())[:8]
-            self.users['users'][user_id] = {
-                'username': username,
-                'password': generate_password_hash(password),
-                'role': 'admin',
-                'name': 'Emergency Anti-Lockout Account',
-                'mfaEnabled': False,
-                'mfaSecret': None,
-                'mfaRecoveryCode': None,
-                'approved': True,
-                'created': datetime.now().isoformat(),
-                'lastLogin': None,
-                'failedLoginAttempts': 0,
-                'accountDisabled': False,
-                'disabledAt': None,
-                'isAntiLockout': True
-            }
-            self._save_users()
-            
-            # Log to console and file
-            log_message = f"""
-{'='*80}
-⚠️  ANTI-LOCKOUT ACCOUNT CREATED ⚠️
-{'='*80}
-All admin accounts have been disabled due to failed login attempts.
-An emergency admin account has been created:
-
-  USERNAME: {username}
-  PASSWORD: {password}
-
-⚠️  IMPORTANT:
-  1. Use these credentials to log in immediately
-  2. Re-enable or create a permanent admin account
-  3. This account will be automatically removed when a regular admin is active
-  4. Store these credentials securely - they will not be shown again
-{'='*80}
-"""
-            print(log_message)
-            
-            # Also write to a log file
-            try:
-                with open('anti_lockout_credentials.log', 'a') as f:
-                    f.write(f"\n{datetime.now().isoformat()} - {log_message}\n")
-            except Exception as e:
-                print(f"Failed to write to log file: {e}")
-            
-            return username, password
-        return None, None
-    
-    def _remove_anti_lockout_accounts(self):
-        """Remove all anti-lockout accounts"""
-        to_remove = []
-        for user_id, user in self.users.get('users', {}).items():
-            if user.get('isAntiLockout', False):
-                to_remove.append(user_id)
-        
-        for user_id in to_remove:
-            del self.users['users'][user_id]
-        
-        if to_remove:
-            self._save_users()
-            print(f"Removed {len(to_remove)} anti-lockout account(s)")
-    
-    def enable_account(self, user_id):
-        """Enable a disabled user account and reset failed attempts"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            user['accountDisabled'] = False
-            user['failedLoginAttempts'] = 0
-            user['disabledAt'] = None
-            self._save_users()
-            
-            # Check if we can remove anti-lockout accounts
-            if self._has_active_admin():
-                self._remove_anti_lockout_accounts()
-            
-            return True, "Account enabled successfully"
     
     def create_user(self, username, password, role='user', email=''):
         """Create a user directly (admin function, auto-approved)"""
@@ -1852,15 +1765,6 @@ An emergency admin account has been created:
                 self.disable_mfa(user_id)
                 return True
             
-            return False
-            
-            if user.get('mfaRecoveryCode') == recovery_code:
-                # Disable MFA after recovery code is used
-                self.users['users'][user_id]['mfaEnabled'] = False
-                self.users['users'][user_id]['mfaSecret'] = None
-                self.users['users'][user_id]['mfaRecoveryCode'] = None
-                self._save_users()
-                return True
             return False
     
     def get_role_level(self, role):
@@ -3773,11 +3677,7 @@ def api_mfa_setup():
     img_buffer = io.BytesIO()
     img.save(img_buffer, format='PNG')
     img_buffer.seek(0)
-    img_base64 = 'data:image/png;base64,' + hashlib.sha256(img_buffer.getvalue()).hexdigest()[:20]  # Placeholder
-    
-    # Actually encode as base64
     import base64
-    img_buffer.seek(0)
     img_base64 = 'data:image/png;base64,' + base64.b64encode(img_buffer.getvalue()).decode()
     
     return jsonify({
@@ -6266,7 +6166,7 @@ def update_mfa_settings():
         'requireMfaForAllUsers': data.get('requireMfaForAllUsers', False)
     }
     
-    settings_manager.update_settings({'mfa': mfa_settings})
+    settings_manager.update_mfa_settings(mfa_settings)
     return jsonify({'success': True, 'settings': mfa_settings})
 
 @app.route('/api/settings/smtp', methods=['GET'])
@@ -7691,10 +7591,6 @@ if __name__ == '__main__':
     if (args.ssl_cert and not args.ssl_key) or (args.ssl_key and not args.ssl_cert):
         print('ERROR: Both --ssl-cert and --ssl-key are required for SSL')
         sys.exit(1)
-    
-    # Update PORT global if custom port specified
-    if args.port != PORT:
-        globals()['PORT'] = args.port
     
     # Run the server
     run_server(

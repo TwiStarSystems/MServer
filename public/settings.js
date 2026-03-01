@@ -820,8 +820,6 @@ async function loadTools() {
       throw new Error(`Server returned ${response.status}: ${data.error || response.statusText}`);
     }
     
-    console.log('Tools API response:', data);
-    
     if (data.tools && data.tools.length > 0) {
       container.innerHTML = data.tools.map(tool => `
         <div class="tool-item" data-tool="${tool.name}">
@@ -1500,7 +1498,7 @@ async function pollDownloadProgress(progressId, serverType, version) {
           if (selectedServerType === serverType) {
             // Update the version panel to show new downloaded status
             downloadedVersions[version] = true;
-            renderVersions(cachedVersions[serverType] || []);
+            renderVersions(allVersions || []);
           }
         } else {
           progressContent.innerHTML = `
@@ -1981,25 +1979,6 @@ async function approveUser(userId) {
     console.error('Failed to approve user:', err);
     alert('Failed to approve user: ' + err.message);
   }
-}
-
-async function changeUserRole(userId, role) {
-  try {
-    const response = await fetch(`/api/admin/users/${userId}/role`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role })
-    });
-    if (!response.ok) throw new Error('Failed to change role');
-    loadUsers();
-  } catch (err) {
-    console.error('Failed to change role:', err);
-    alert('Failed to change role: ' + err.message);
-  }
-}
-
-async function resetUserPassword(userId) {
-  openPasswordResetModal(userId);
 }
 
 function openPasswordResetModal(userId) {

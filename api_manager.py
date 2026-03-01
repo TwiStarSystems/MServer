@@ -4,7 +4,6 @@ MServerController - Public API Manager
 Handles API key management, authentication, rate limiting, and public API endpoints.
 """
 
-import os
 import json
 import secrets
 import hashlib
@@ -192,12 +191,6 @@ def validate_api_key(provided_key):
             return key_data
     
     return None
-
-
-def get_api_key(key_id):
-    """Get API key data by ID."""
-    keys = load_api_keys()
-    return keys.get(key_id)
 
 
 def update_api_key(key_id, updates):
@@ -479,7 +472,6 @@ def api_docs():
 def api_status():
     """Get MServerController status."""
     from server import read_version_file
-    import time
     
     version = read_version_file() or 'unknown'
     

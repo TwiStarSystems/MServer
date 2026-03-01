@@ -105,3 +105,30 @@ async function apiRequest(url, options = {}) {
   
   return data;
 }
+
+/**
+ * Show a notification toast message
+ * @param {string} message - The message to display
+ * @param {string} type - The type of notification (info, success, warning, error)
+ */
+function showNotification(message, type = 'info') {
+  // Remove existing notification
+  const existing = document.querySelector('.notification');
+  if (existing) existing.remove();
+  
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.innerHTML = `
+    <span class="notification-message">${escapeHtml(message)}</span>
+    <button class="notification-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Auto-remove after 5 seconds
+  setTimeout(() => {
+    if (notification.parentElement) {
+      notification.remove();
+    }
+  }, 5000);
+}
