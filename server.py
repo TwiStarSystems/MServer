@@ -2631,7 +2631,7 @@ class ServerManager:
             engine_name = server_type.title()  # paper -> Paper, folia -> Folia, etc.
         
         # Create managed.conf file
-        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
+        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner, version=version)
         
         self.config['servers'][server_id] = {
             'name': name,
@@ -2662,7 +2662,7 @@ class ServerManager:
         'EULAAccepted'
     ]
     
-    def _create_managed_conf(self, server_dir, server_id, name, modded=False, engine=None, owner=None):
+    def _create_managed_conf(self, server_dir, server_id, name, modded=False, engine=None, owner=None, version=None):
         """Create or update the managed.conf file for a server"""
         managed_conf_path = Path(server_dir) / 'managed.conf'
         
@@ -2681,6 +2681,10 @@ class ServerManager:
             'EULAAccepted': 'false'
         }
         
+        # Add version if provided
+        if version:
+            config['Version'] = version
+        
         # If file exists, preserve existing settings
         if managed_conf_path.exists():
             existing = self._read_managed_conf(server_dir)
@@ -2691,6 +2695,9 @@ class ServerManager:
             config['Engine'] = engine
             if owner:
                 config['Owner'] = owner
+            # Update version if provided
+            if version:
+                config['Version'] = version
         
         self._write_managed_conf(server_dir, config)
     
@@ -2790,6 +2797,7 @@ class ServerManager:
         is_bedrock = category == 'bedrock'
         server_type = server_config.get('serverType', '')
         owner = server_config.get('owner', 'admin')
+        version = server_config.get('version', '')
         
         # Determine engine name
         engine_name = 'Vanilla'
@@ -2798,7 +2806,7 @@ class ServerManager:
         elif is_modded and server_type:
             engine_name = server_type.title()
         
-        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
+        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner, version=version)
         
         return True, "Management enabled"
     
@@ -4586,12 +4594,98 @@ def update_managed_conf(server_id):
     
     # Update provided fields
     for field, value in data.items():
-        if field in server_manager.MANAGED_CONF_REQUIRED_FIELDS or field == 'EULAAcceptedAt':
+        if field in server_manager.MANAGED_CONF_REQUIRED_FIELDS or field == 'EULAAcceptedAt' or field == 'Version':
             managed_conf[field] = value
     
     server_manager._write_managed_conf(server_dir, managed_conf)
     
     return jsonify({'success': True, 'message': 'Configuration updated'})
+
+@app.route('/api/servers/<server_id>/change-version', methods=['POST'])
+@server_access_required
+def change_server_version(server_id):
+    """Change the server version"""
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    new_version = data.get('version')
+    create_backup = data.get('createBackup', False)
+    
+    if not new_version:
+        return jsonify({'error': 'Version is required'}), 400
+    
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'error': 'Server not found'}), 404
+    
+    # Get current version from managed.conf
+    server_dir = Path(server_config.get('serverPath', ''))
+    managed_conf = server_manager._read_managed_conf(server_dir)
+    current_version = managed_conf.get('Version', server_config.get('version', ''))
+    
+    # Check if current version is below 1.26
+    def is_version_below_126(version_str):
+        \"\"\"Check if version is below 1.26\"\"\"
+        import re
+        match = re.match(r'(\\d+)\\.(\\d+)', str(version_str))
+        if not match:
+            return True  # Assume old if can't parse
+        major, minor = int(match.group(1)), int(match.group(2))
+        return major < 1 or (major == 1 and minor < 26)
+    
+    if is_version_below_126(current_version):
+        return jsonify({
+            'error': 'Version changes are not supported for servers below Minecraft 1.26 due to technical changes in version numbering and world storage format. Please create a new server for the desired version.'
+        }), 400
+    
+    if is_version_below_126(new_version):
+        return jsonify({
+            'error': 'Downgrading to versions below Minecraft 1.26 is not supported due to incompatible world storage formats. Please create a new server if you need an older version.'
+        }), 400
+    
+    # Check if server is running
+    instance = server_manager.servers.get(server_id)
+    if instance and instance.is_running():
+        return jsonify({'error': 'Server must be stopped before changing version'}), 400
+    
+    # Create backup if requested
+    if create_backup:
+        try:
+            # Create backup directory for this server
+            backup_dir = BACKUPS_DIR / server_id
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+            backup_name = f'pre-version-change-{timestamp}.zip'
+            backup_path = backup_dir / backup_name
+            
+            # Create the backup
+            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(server_dir):
+                    for file in files:
+                        file_path = Path(root) / file
+                        arcname = file_path.relative_to(server_dir)
+                        zipf.write(file_path, arcname)
+        except Exception as e:
+            return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
+    
+    # Update version in config.json
+    if 'servers' in server_manager.config and server_id in server_manager.config['servers']:
+        server_manager.config['servers'][server_id]['version'] = new_version
+        server_manager._save_config()
+    
+    # Update version in managed.conf
+    managed_conf['Version'] = new_version
+    server_manager._write_managed_conf(server_dir, managed_conf)
+    
+    return jsonify({
+        'success': True, 
+        'message': f'Version updated from {current_version} to {new_version}',
+        'oldVersion': current_version,
+        'newVersion': new_version
+    })
 
 @app.route('/api/servers/<server_id>/eula', methods=['GET'])
 @server_access_required
@@ -6920,6 +7014,27 @@ def api_jar_bucket_types():
     """Get available server types organized by category"""
     return jsonify(jar_bucket.get_server_types())
 
+def is_stable_version(version_string):
+    """Check if a version is a stable release (not snapshot or RC)"""
+    version_lower = str(version_string).lower()
+    
+    # Filter out snapshots, pre-releases, and release candidates
+    excluded_patterns = [
+        'snapshot', 'snap', '-pre', 'pre-', 'rc', 'release candidate',
+        'beta', 'alpha', 'experimental', 'w', # Weekly snapshots like "24w14a"
+    ]
+    
+    for pattern in excluded_patterns:
+        if pattern in version_lower:
+            return False
+    
+    # Check for weekly snapshot pattern (e.g., "24w14a")
+    import re
+    if re.match(r'^\d{2}w\d{2}[a-z]$', version_lower):
+        return False
+    
+    return True
+
 @app.route('/api/jar-bucket/versions/<server_type>', methods=['GET'])
 @admin_required
 def api_jar_bucket_versions(server_type):
@@ -6931,9 +7046,13 @@ def api_jar_bucket_versions(server_type):
     normalized = []
     for v in versions:
         if isinstance(v, dict):
-            normalized.append(v.get('version', str(v)))
+            version_str = v.get('version', str(v))
         else:
-            normalized.append(str(v))
+            version_str = str(v)
+        
+        # Filter out non-stable versions (snapshots, RC, etc.)
+        if is_stable_version(version_str):
+            normalized.append(version_str)
     
     return jsonify({
         'server_type': server_type,
@@ -7085,14 +7204,17 @@ def api_jar_bucket_all_versions(server_type):
         for jar in jars[server_type].get('files', []):
             downloaded.add(jar.get('version'))
     
-    # Normalize version format and add download status
+    # Normalize version format and add download status - filter out non-stable versions
     result = []
     for v in versions:
         version_str = v.get('version', str(v)) if isinstance(v, dict) else str(v)
-        result.append({
-            'version': version_str,
-            'downloaded': version_str in downloaded
-        })
+        
+        # Filter out non-stable versions (snapshots, RC, etc.)
+        if is_stable_version(version_str):
+            result.append({
+                'version': version_str,
+                'downloaded': version_str in downloaded
+            })
     
     return jsonify({
         'server_type': server_type,

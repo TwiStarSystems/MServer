@@ -755,6 +755,16 @@
             <small id="path-hint">Leave empty to auto-create in the default servers directory</small>
           </div>
           
+          <!-- Version Management Section (only shown in edit mode) -->
+          <div id="version-management-section" class="form-group" style="display: none;">
+            <label>Server Version:</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span id="current-version-display" style="font-weight: bold; color: #4CAF50;">Loading...</span>
+              <button type="button" class="btn btn-small" onclick="openVersionChangeModal()">🔄 Update/Change Version</button>
+            </div>
+            <small>Change the Minecraft server version (e.g., upgrade or downgrade)</small>
+          </div>
+          
 
           
           <div class="form-group">
@@ -819,6 +829,54 @@
         <div class="modal-footer">
           <button id="save-file-btn" class="btn btn-success">Save</button>
           <button class="btn" onclick="closeFileEditor()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Version Change Modal -->
+    <div id="version-change-modal" class="modal">
+      <div class="modal-content modal-medium">
+        <div class="modal-header">
+          <h2>🔄 Update/Change Server Version</h2>
+          <button class="close-btn" onclick="closeVersionChangeModal()">&times;</button>
+        </div>
+        <div class="version-change-content">
+          <div class="current-version-info">
+            <label>Current Version:</label>
+            <span id="vc-current-version" style="font-weight: bold; color: #4CAF50;">Loading...</span>
+          </div>
+          
+          <div class="current-version-info">
+            <label>Server Engine:</label>
+            <span id="vc-server-engine" style="font-weight: bold;">Loading...</span>
+          </div>
+          
+          <form id="version-change-form" onsubmit="submitVersionChange(event)">
+            <div class="form-group">
+              <label for="vc-new-version">New Version:</label>
+              <select id="vc-new-version" class="form-control" required onchange="onVersionChangeSelection()">
+                <option value="">Loading versions...</option>
+              </select>
+              <small>Select a version of the same server engine</small>
+            </div>
+            
+            <div id="vc-warning" class="version-warning" style="display: none;">
+              <!-- Warning will be inserted here -->
+            </div>
+            
+            <div id="vc-backup-option" class="form-group" style="display: none;">
+              <label>
+                <input type="checkbox" id="vc-create-backup" checked>
+                Create backup before updating
+              </label>
+              <small>Recommended: Creates a backup before changing the version</small>
+            </div>
+            
+            <div class="modal-footer">
+              <button type="button" class="btn" onclick="closeVersionChangeModal()">Cancel</button>
+              <button type="submit" class="btn btn-success" id="vc-submit-btn" disabled>Change Version</button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

@@ -6244,4 +6244,51 @@ select.form-control:disabled {
 .api-docs-info p {
   color: #aaa;
   margin: 0;
+}}
+
+/* ==================== Version Change Modal ==================== */
+
+.version-change-content {
+  padding: 20px;
+}
+
+.current-version-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 15px;
+  padding: 10px;
+  background: rgba(0, 0, 200, 0.1);
+  border-radius: 5px;
+}
+
+.current-version-info label {
+  font-weight: 600;
+  color: #fff;
+  min-width: 120px;
+}
+
+.version-warning {
+  padding: 15px;
+  border-radius: 5px;
+  margin: 15px 0;
+  font-size: 0.9rem;
+}
+
+.version-warning.upgrade {
+  background: rgba(76, 175, 80, 0.1);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  color: #4CAF50;
+}
+
+.version-warning.downgrade {
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  color: #FF9800;
+}
+
+.version-warning strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 1rem;
 }

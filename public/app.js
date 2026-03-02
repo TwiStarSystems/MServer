@@ -1108,6 +1108,10 @@ async function openAddServerModal() {
     if (importForm) importForm.style.display = 'none';
     if (manualForm) manualForm.style.display = 'none';
     
+    // Hide version management section (only for editing)
+    const versionSection = document.getElementById('version-management-section');
+    if (versionSection) versionSection.style.display = 'none';
+    
     // Fetch the default server path (non-blocking - don't prevent modal from opening)
     try {
       const result = await apiRequest('/api/default-server-path');
@@ -1506,6 +1510,34 @@ async function openEditServerModal() {
     document.getElementById('input-max-ram').value = maxRamMatch ? maxRamMatch[1] : '2G';
     document.getElementById('input-jvm-args').value = extraArgs;
     
+    // Show version management section and load current version
+    const versionSection = document.getElementById('version-management-section');
+    const versionDisplay = document.getElementById('current-version-display');
+    
+    if (versionSection && versionDisplay) {
+      versionSection.style.display = 'block';
+      versionDisplay.textContent = 'Loading...';
+      
+      // Load current version from managed.conf
+      try {
+        const managedData = await apiRequest(`/api/servers/${currentServerId}/managed`);
+        if (managedData.managed && managedData.data && managedData.data.Version) {
+          versionDisplay.textContent = managedData.data.Version;
+          versionDisplay.style.color = '#4CAF50';
+        } else if (server.version) {
+          versionDisplay.textContent = server.version;
+          versionDisplay.style.color = '#FF9800';
+        } else {
+          versionDisplay.textContent = 'Unknown';
+          versionDisplay.style.color = '#888';
+        }
+      } catch (err) {
+        console.error('Failed to load version:', err);
+        versionDisplay.textContent = server.version || 'Unknown';
+        versionDisplay.style.color = '#FF9800';
+      }
+    }
+    
     document.getElementById('server-modal').classList.add('active');
   } catch (error) {
     console.error('Failed to load server for editing:', error);
@@ -1516,7 +1548,284 @@ function closeServerModal() {
   document.getElementById('server-modal').classList.remove('active');
   editingServerId = null;
   currentCreationType = null;
+  
+  // Hide version management section when closing
+  const versionSection = document.getElementById('version-management-section');
+  if (versionSection) {
+    versionSection.style.display = 'none';
+  }
 }
+
+// ==================== Version Change Modal ====================
+
+let versionChangeData = {
+  currentVersion: null,
+  currentEngine: null,
+  availableVersions: []
+};
+
+async function openVersionChangeModal() {
+  if (!currentServerId) return;
+  
+  try {
+    // Get server info
+    const server = await apiRequest(`/api/servers/${currentServerId}`);
+    const managedData = await apiRequest(`/api/servers/${currentServerId}/managed`);
+    
+    // Get current version and engine
+    const currentVersion = managedData.data?.Version || server.version || 'Unknown';
+    const currentEngine = managedData.data?.Engine || server.serverType || 'Unknown';
+    
+    versionChangeData.currentVersion = currentVersion;
+    versionChangeData.currentEngine = currentEngine;
+    
+    // Display current info
+    document.getElementById('vc-current-version').textContent = currentVersion;
+    document.getElementById('vc-server-engine').textContent = currentEngine;
+    
+    // Load available versions for the current engine
+    const versionSelect = document.getElementById('vc-new-version');
+    versionSelect.innerHTML = '<option value="">Loading versions...</option>';
+    versionSelect.disabled = true;
+    
+    // Reset warning and backup option
+    document.getElementById('vc-warning').style.display = 'none';
+    document.getElementById('vc-backup-option').style.display = 'none';
+    document.getElementById('vc-submit-btn').disabled = true;
+    
+    // Determine the engine key for API call
+    let engineKey = currentEngine.toLowerCase();
+    if (engineKey === 'vanilla') engineKey = 'vanilla';
+    
+    // Load versions from JAR Bucket
+    try {
+      const versionsResult = await apiRequest(`/api/jar-bucket/versions?type=${engineKey}`);
+      const versions = versionsResult.versions || [];
+      
+      versionChangeData.availableVersions = versions;
+      
+      versionSelect.innerHTML = '<option value="">Select a version...</option>';
+      versions.forEach(ver => {
+        const option = document.createElement('option');
+        option.value = ver;
+        option.textContent = ver;
+        if (ver === currentVersion) {
+          option.textContent += ' (Current)';
+          option.disabled = true;
+        }
+        versionSelect.appendChild(option);
+      });
+      versionSelect.disabled = false;
+    } catch (err) {
+      console.error('Failed to load versions:', err);
+      versionSelect.innerHTML = '<option value="">Error loading versions</option>';
+    }
+    
+    // Show modal
+    document.getElementById('version-change-modal').classList.add('active');
+  } catch (error) {
+    console.error('Failed to open version change modal:', error);
+    showNotification('Failed to load version information', 'error');
+  }
+}
+
+function closeVersionChangeModal() {
+  document.getElementById('version-change-modal').classList.remove('active');
+  versionChangeData = {
+    currentVersion: null,
+    currentEngine: null,
+    availableVersions: []
+  };
+}
+
+function onVersionChangeSelection() {
+  const newVersion = document.getElementById('vc-new-version').value;
+  const warningDiv = document.getElementById('vc-warning');
+  const backupOption = document.getElementById('vc-backup-option');
+  const submitBtn = document.getElementById('vc-submit-btn');
+  
+  if (!newVersion) {
+    warningDiv.style.display = 'none';
+    backupOption.style.display = 'none';
+    submitBtn.disabled = true;
+    return;
+  }
+  
+  const current = versionChangeData.currentVersion;
+  
+  // Check if current version is below 1.26
+  if (isVersionBelow126(current)) {
+    warningDiv.className = 'version-warning downgrade';
+    warningDiv.innerHTML = `
+      <strong>⚠️ Version Change Not Supported</strong>
+      <p>Your current version (${current}) is below Minecraft 1.26.</p>
+      <p><strong>Technical Limitation:</strong> Due to Minecraft's new version numbering system and world storage changes introduced in 1.26, version updates from pre-1.26 servers are not supported through this feature.</p>
+      <p>To update this server, you will need to manually migrate the world data.</p>
+    `;
+    warningDiv.style.display = 'block';
+    backupOption.style.display = 'none';
+    submitBtn.disabled = true;
+    return;
+  }
+  
+  // Check if trying to downgrade below 1.26
+  if (isVersionBelow126(newVersion)) {
+    warningDiv.className = 'version-warning downgrade';
+    warningDiv.innerHTML = `
+      <strong>⚠️ Downgrade to Pre-1.26 Not Supported</strong>
+      <p>You cannot downgrade from ${current} to ${newVersion}.</p>
+      <p><strong>Reason:</strong> Minecraft 1.26 introduced significant changes to world storage and version numbering. Downgrading to versions below 1.26 is not supported and may cause severe world corruption.</p>
+      <p>If you need an older version, create a new server instead.</p>
+    `;
+    warningDiv.style.display = 'block';
+    backupOption.style.display = 'none';
+    submitBtn.disabled = true;
+    return;
+  }
+  
+  // Compare versions to determine if upgrade or downgrade
+  const isUpgrade = compareVersions(newVersion, current) > 0;
+  const isDowngrade = compareVersions(newVersion, current) < 0;
+  
+  // Check for 1.26.1+ world storage changes
+  const is126OrHigher = !isVersionBelow126(current);
+  const newIs126OrHigher = !isVersionBelow126(newVersion);
+  
+  if (isUpgrade) {
+    let warningHtml = `
+      <strong>⬆️ Upgrading Version</strong>
+      <p>You are upgrading from ${current} to ${newVersion}.</p>
+    `;
+    
+    // Add world storage warning for 1.26+ versions
+    if (is126OrHigher && newIs126OrHigher) {
+      warningHtml += `
+        <p><strong>📦 World Storage Changes:</strong> Minecraft 1.26+ uses a new world storage format. Your world will be automatically converted, but this process is one-way.</p>
+      `;
+    }
+    
+    warningHtml += `<p>It's recommended to create a backup before upgrading.</p>`;
+    
+    warningDiv.className = 'version-warning upgrade';
+    warningDiv.innerHTML = warningHtml;
+    warningDiv.style.display = 'block';
+    backupOption.style.display = 'block';
+    document.getElementById('vc-create-backup').checked = true;
+  } else if (isDowngrade) {
+    warningDiv.className = 'version-warning downgrade';
+    warningDiv.innerHTML = `
+      <strong>⚠️ Downgrading Version</strong>
+      <p>You are downgrading from ${current} to ${newVersion}.</p>
+      <p><strong>Warning:</strong> Downgrading is not recommended and may cause issues with your world data. Use with caution!</p>
+      <p>A backup is strongly recommended before proceeding.</p>
+    `;
+    warningDiv.style.display = 'block';
+    backupOption.style.display = 'block';
+    document.getElementById('vc-create-backup').checked = true;
+  }
+  
+  submitBtn.disabled = false;
+}
+
+function compareVersions(v1, v2) {
+  // Enhanced version comparison for Minecraft versioning
+  // Handles both old (1.20.4) and new (1.26.1) numbering systems
+  
+  // Remove any non-numeric prefixes
+  const cleanVersion = (v) => {
+    const match = v.match(/([\d.]+)/);
+    return match ? match[1] : v;
+  };
+  
+  const clean1 = cleanVersion(v1);
+  const clean2 = cleanVersion(v2);
+  
+  const parts1 = clean1.split('.').map(p => parseInt(p) || 0);
+  const parts2 = clean2.split('.').map(p => parseInt(p) || 0);
+  
+  // Ensure at least 3 parts for comparison
+  while (parts1.length < 3) parts1.push(0);
+  while (parts2.length < 3) parts2.push(0);
+  
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
+}
+
+function isVersionBelow126(version) {
+  // Check if a version is below 1.26
+  const cleanVersion = (v) => {
+    const match = v.match(/([\d.]+)/);
+    return match ? match[1] : v;
+  };
+  
+  const clean = cleanVersion(version);
+  const parts = clean.split('.').map(p => parseInt(p) || 0);
+  
+  if (parts.length === 0) return true;
+  
+  // Major version check
+  if (parts[0] < 1) return true;
+  if (parts[0] > 1) return false;
+  
+  // Minor version check (1.x)
+  if (parts.length < 2) return true;
+  if (parts[1] < 26) return true;
+  
+  return false;
+}
+
+async function submitVersionChange(e) {
+  e.preventDefault();
+  
+  const newVersion = document.getElementById('vc-new-version').value;
+  const createBackup = document.getElementById('vc-create-backup').checked;
+  
+  if (!newVersion) {
+    showNotification('Please select a version', 'error');
+    return;
+  }
+  
+  const submitBtn = document.getElementById('vc-submit-btn');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Changing Version...';
+  
+  try {
+    // Call API to change version
+    const result = await apiRequest(`/api/servers/${currentServerId}/change-version`, {
+      method: 'POST',
+      body: JSON.stringify({
+        version: newVersion,
+        createBackup: createBackup
+      })
+    });
+    
+    if (result.success) {
+      showNotification(`Version changed successfully from ${result.oldVersion} to ${result.newVersion}`, 'success');
+      closeVersionChangeModal();
+      
+      // Refresh server info to show new version
+      if (editingServerId) {
+        openEditServerModal();
+      }
+      
+      // Reload server list
+      loadServers();
+    }
+  } catch (error) {
+    console.error('Failed to change version:', error);
+    showNotification(error.message || 'Failed to change version', 'error');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Change Version';
+  }
+}
+
+// ==================== End Version Change Modal ====================
+
 
 // Save server (manual configuration / edit mode)
 async function saveServer(e) {
