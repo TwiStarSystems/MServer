@@ -500,8 +500,8 @@
                 <input type="text" id="fresh-name" class="form-control" placeholder="My Minecraft Server" required>
               </div>
               <div class="form-group">
-                <label for="fresh-category">Category:</label>
-                <select id="fresh-category" class="form-control" onchange="onCategoryChange()">
+                <label for="fresh-category">Category: <span style="color: #ff6b6b;">*</span></label>
+                <select id="fresh-category" class="form-control" required onchange="onCategoryChange()">
                   <option value="">Select category...</option>
                   <option value="unmodded">Java (Vanilla)</option>
                   <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
@@ -510,16 +510,16 @@
                 <small id="category-description" class="type-desc">Choose whether you want a Java or Bedrock server</small>
               </div>
               <div class="form-group" id="engine-group" style="display: none;">
-                <label for="fresh-engine">Server Engine:</label>
-                <select id="fresh-engine" class="form-control" onchange="loadVersions()">
+                <label for="fresh-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
+                <select id="fresh-engine" class="form-control" required onchange="loadVersions()">
                   <option value="">Select server engine...</option>
                 </select>
                 <small id="engine-description" class="type-desc">Select a server type</small>
               </div>
               <div class="form-group" id="version-group" style="display: none;">
-                <label for="fresh-version">Version:</label>
+                <label for="fresh-version">Version: <span style="color: #ff6b6b;">*</span></label>
                 <div class="version-selector">
-                  <select id="fresh-version" class="form-control" disabled onchange="onVersionChange()">
+                  <select id="fresh-version" class="form-control" disabled required onchange="onVersionChange()">
                     <option value="">Select category first...</option>
                   </select>
                   <span id="version-status" class="version-status"></span>

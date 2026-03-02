@@ -2659,7 +2659,8 @@ class ServerManager:
         'Engine',
         'Owner',
         'CreatedAt',
-        'EULAAccepted'
+        'EULAAccepted',
+        'Version'
     ]
     
     def _create_managed_conf(self, server_dir, server_id, name, modded=False, engine=None, owner=None, version=None):
@@ -2670,20 +2671,21 @@ class ServerManager:
         if engine is None:
             engine = 'Vanilla' if not modded else 'Unknown'
         
+        # Version is now required - default to 'Unknown' if not provided
+        if not version:
+            version = 'Unknown'
+        
         config = {
             'ManagedBy': 'MServerController',
             'ServerId': server_id,
             'ServerName': name,
             'Modded': 'true' if modded else 'false',
             'Engine': engine,
+            'Version': version,
             'Owner': owner or 'admin',
             'CreatedAt': datetime.now().isoformat(),
             'EULAAccepted': 'false'
         }
-        
-        # Add version if provided
-        if version:
-            config['Version'] = version
         
         # If file exists, preserve existing settings
         if managed_conf_path.exists():
@@ -2693,11 +2695,9 @@ class ServerManager:
             config['ServerName'] = name
             config['Modded'] = 'true' if modded else 'false'
             config['Engine'] = engine
+            config['Version'] = version  # Always update version
             if owner:
                 config['Owner'] = owner
-            # Update version if provided
-            if version:
-                config['Version'] = version
         
         self._write_managed_conf(server_dir, config)
     
@@ -2797,7 +2797,7 @@ class ServerManager:
         is_bedrock = category == 'bedrock'
         server_type = server_config.get('serverType', '')
         owner = server_config.get('owner', 'admin')
-        version = server_config.get('version', '')
+        version = server_config.get('version', 'Unknown')  # Default to 'Unknown' if not set
         
         # Determine engine name
         engine_name = 'Vanilla'
@@ -4594,7 +4594,7 @@ def update_managed_conf(server_id):
     
     # Update provided fields
     for field, value in data.items():
-        if field in server_manager.MANAGED_CONF_REQUIRED_FIELDS or field == 'EULAAcceptedAt' or field == 'Version':
+        if field in server_manager.MANAGED_CONF_REQUIRED_FIELDS or field == 'EULAAcceptedAt':
             managed_conf[field] = value
     
     server_manager._write_managed_conf(server_dir, managed_conf)
