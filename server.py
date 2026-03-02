@@ -4627,9 +4627,9 @@ def change_server_version(server_id):
     
     # Check if current version is below 1.26
     def is_version_below_126(version_str):
-        \"\"\"Check if version is below 1.26\"\"\"
+        """Check if version is below 1.26"""
         import re
-        match = re.match(r'(\\d+)\\.(\\d+)', str(version_str))
+        match = re.match(r'(\d+)\.(\d+)', str(version_str))
         if not match:
             return True  # Assume old if can't parse
         major, minor = int(match.group(1)), int(match.group(2))
