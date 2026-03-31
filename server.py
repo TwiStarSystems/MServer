@@ -6353,6 +6353,7 @@ def api_get_current_version():
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
 JAR_CACHE_FILE = BASE_DIR / 'jar_cache.json'
 JAR_CACHE_MAX_AGE_HOURS = 6  # Refresh cache every 6 hours
+JAR_URL_CACHE_MAX_AGE_HOURS = 12  # How long to keep cached download URLs (hours)
 
 class JarBucketManager:
     """
@@ -6360,117 +6361,72 @@ class JarBucketManager:
     Inspired by Crafty Controller's Big Bucket system.
     """
     
-    # API URLs for various server types
-    API_URLS = {
-        'paper': 'https://api.papermc.io/v2/',
-        'velocity': 'https://api.papermc.io/v2/',
-        'waterfall': 'https://api.papermc.io/v2/',
-        'folia': 'https://api.papermc.io/v2/',
-        'purpur': 'https://api.purpurmc.org/v2/purpur/',
-        'vanilla': 'https://launchermeta.mojang.com/mc/game/version_manifest.json',
-        'fabric': 'https://meta.fabricmc.net/v2/',
-        'forge': 'https://maven.minecraftforge.net/net/minecraftforge/forge/',
-        'neoforge': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/',
-        'spigot': 'https://hub.spigotmc.org/versions/',
-        'bungeecord': 'https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar',
-        'bedrock': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links'
-    }
-    
     # Server type metadata with descriptions
     SERVER_TYPES = {
         'vanilla': {
             'name': 'Vanilla',
             'description': 'Official Minecraft Java Edition server',
             'category': 'java_servers',
+            'api_url': 'https://launchermeta.mojang.com/mc/game/version_manifest.json',
             'icon': '🎮'
         },
         'bedrock': {
             'name': 'Bedrock',
             'description': 'Official Minecraft Bedrock Edition server',
             'category': 'bedrock',
+            'api_url': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links',
             'icon': '🪨'
         },
         'paper': {
             'name': 'Paper',
             'description': 'High-performance Spigot fork with optimizations',
             'category': 'java_servers',
+            'api_url': 'https://api.papermc.io/v2/',
             'icon': '📄'
         },
         'purpur': {
             'name': 'Purpur',
             'description': 'Paper fork with extra features and configuration',
             'category': 'java_servers',
+            'api_url': 'https://api.purpurmc.org/v2/purpur/',
             'icon': '💜'
         },
         'folia': {
             'name': 'Folia',
             'description': 'Paper fork for multi-threaded regions',
             'category': 'java_servers',
+            'api_url': 'https://api.papermc.io/v2/',
             'icon': '🌿'
         },
         'spigot': {
             'name': 'Spigot',
             'description': 'Modified Minecraft server with Bukkit plugin support',
             'category': 'java_servers',
+            'api_url': 'https://hub.spigotmc.org/versions/',
             'icon': '🔧'
         },
         'fabric': {
             'name': 'Fabric',
             'description': 'Lightweight mod loader for Minecraft',
             'category': 'modded',
+            'api_url': 'https://meta.fabricmc.net/v2/',
             'icon': '🧵'
         },
         'forge': {
             'name': 'Forge',
             'description': 'Popular mod loader for Minecraft mods',
             'category': 'modded',
+            'api_url': 'https://maven.minecraftforge.net/net/minecraftforge/forge/',
+
             'icon': '⚒️'
         },
         'neoforge': {
             'name': 'NeoForge',
             'description': 'Modern community-driven Forge fork',
             'category': 'modded',
+            'api_url': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/',
             'icon': '🔨'
-        },
-        'velocity': {
-            'name': 'Velocity',
-            'description': 'Modern, high-performance Minecraft proxy',
-            'category': 'proxies',
-            'icon': '⚡'
-        },
-        'waterfall': {
-            'name': 'Waterfall',
-            'description': 'BungeeCord fork with improvements',
-            'category': 'proxies',
-            'icon': '💧'
-        },
-        'bungeecord': {
-            'name': 'BungeeCord',
-            'description': 'Minecraft server proxy for multiple servers',
-            'category': 'proxies',
-            'icon': '🔗'
         }
-    }
-    
-    # Known Forge versions mapping (MC version -> Forge version)
-    FORGE_VERSIONS = {
-        '1.21.5': '55.1.6', '1.21.4': '54.1.12', '1.21.3': '53.1.6',
-        '1.21.1': '52.1.9', '1.21': '51.0.33', '1.20.6': '50.2.4',
-        '1.20.4': '49.2.4', '1.20.3': '49.0.2', '1.20.2': '48.1.0',
-        '1.20.1': '47.4.15', '1.20': '46.0.14', '1.19.4': '45.4.3',
-        '1.19.3': '44.1.23', '1.19.2': '43.5.2', '1.19.1': '42.0.9',
-        '1.19': '41.1.0', '1.18.2': '40.3.12', '1.18.1': '39.1.2',
-        '1.18': '38.0.17', '1.17.1': '37.1.1', '1.16.5': '36.2.42',
-        '1.16.4': '35.1.37', '1.16.3': '34.1.42', '1.16.2': '33.0.61',
-        '1.16.1': '32.0.108', '1.15.2': '31.2.60', '1.14.4': '28.2.28',
-        '1.12.2': '14.23.5.2864'
-    }
-    
-    # Known NeoForge versions mapping (MC version -> NeoForge version)
-    NEOFORGE_VERSIONS = {
-        '1.21.5': '21.5.96', '1.21.4': '21.4.156', '1.21.3': '21.3.95',
-        '1.21.1': '21.1.218', '1.21': '21.0.167', '1.20.6': '20.6.139',
-        '1.20.4': '20.4.251', '1.20.3': '20.3.8-beta', '1.20.2': '20.2.93'
     }
     
     def __init__(self):
@@ -6526,9 +6482,9 @@ class JarBucketManager:
         return types_by_category
     
     def _fetch_paper_versions(self, project='paper'):
-        """Fetch versions from Paper API (Paper, Folia, Velocity, Waterfall)"""
+        """Fetch versions from Paper API (Paper, Folia)"""
         try:
-            url = f"{self.API_URLS['paper']}projects/{project}"
+            url = f"{self.SERVER_TYPES[project]['api_url']}projects/{project}"
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
@@ -6541,7 +6497,8 @@ class JarBucketManager:
         """Get download URL for Paper-based project"""
         try:
             # Get builds for version
-            url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}"
+            base = self.SERVER_TYPES[project]['api_url']
+            url = f"{base}projects/{project}/versions/{version}"
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
                 print(f"[JarBucket] {project} API returned status {response.status_code} for version {version}")
@@ -6560,7 +6517,7 @@ class JarBucketManager:
             latest_build = max(builds)
             
             # Get download info
-            build_url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}/builds/{latest_build}"
+            build_url = f"{base}projects/{project}/versions/{version}/builds/{latest_build}"
             build_response = requests.get(build_url, timeout=10)
             if build_response.status_code != 200:
                 print(f"[JarBucket] {project} API returned status {build_response.status_code} for build {latest_build}")
@@ -6577,7 +6534,7 @@ class JarBucketManager:
             sha256 = application.get('sha256')
             
             if jar_name:
-                download_url = f"{self.API_URLS['paper']}projects/{project}/versions/{version}/builds/{latest_build}/downloads/{jar_name}"
+                download_url = f"{base}projects/{project}/versions/{version}/builds/{latest_build}/downloads/{jar_name}"
                 return download_url, sha256
         except Exception as e:
             print(f"[JarBucket] Error getting {project} download URL: {e}")
@@ -6586,7 +6543,7 @@ class JarBucketManager:
     def _fetch_purpur_versions(self):
         """Fetch versions from Purpur API"""
         try:
-            response = requests.get(self.API_URLS['purpur'], timeout=15)
+            response = requests.get(self.SERVER_TYPES['purpur']['api_url'], timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 return list(reversed(data.get('versions', [])))
@@ -6597,14 +6554,15 @@ class JarBucketManager:
     def _fetch_purpur_download_url(self, version):
         """Get download URL for Purpur"""
         try:
-            url = f"{self.API_URLS['purpur']}{version}"
+            base = self.SERVER_TYPES['purpur']['api_url']
+            url = f"{base}{version}"
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 builds = data.get('builds', {})
                 latest = builds.get('latest')
                 if latest:
-                    return f"{self.API_URLS['purpur']}{version}/{latest}/download", None
+                    return f"{base}{version}/{latest}/download", None
         except Exception as e:
             print(f"[JarBucket] Error getting Purpur download URL: {e}")
         return None, None
@@ -6612,7 +6570,7 @@ class JarBucketManager:
     def _fetch_vanilla_versions(self):
         """Fetch versions from Mojang manifest"""
         try:
-            response = requests.get(self.API_URLS['vanilla'], timeout=15)
+            response = requests.get(self.SERVER_TYPES['vanilla']['api_url'], timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 versions = []
@@ -6649,7 +6607,7 @@ class JarBucketManager:
         """Fetch Fabric loader versions and game versions"""
         try:
             # Get supported game versions
-            game_url = f"{self.API_URLS['fabric']}game"
+            game_url = f"{self.SERVER_TYPES['fabric']['api_url']}game"
             response = requests.get(game_url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
@@ -6665,7 +6623,7 @@ class JarBucketManager:
     def _get_fabric_loader_version(self):
         """Get latest stable Fabric loader version"""
         try:
-            url = f"{self.API_URLS['fabric']}loader"
+            url = f"{self.SERVER_TYPES['fabric']['api_url']}loader"
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
@@ -6674,14 +6632,30 @@ class JarBucketManager:
                         return loader['version']
         except Exception as e:
             print(f"[JarBucket] Error getting Fabric loader version: {e}")
-        return '0.16.10'  # Fallback
-    
+        return None
+
+    def _get_fabric_installer_version(self):
+        """Get latest stable Fabric installer version"""
+        try:
+            url = f"{self.SERVER_TYPES['fabric']['api_url']}installer"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                for installer in data:
+                    if installer.get('stable'):
+                        return installer['version']
+        except Exception as e:
+            print(f"[JarBucket] Error getting Fabric installer version: {e}")
+        return None
+
     def _fetch_fabric_download_url(self, game_version):
-        """Get download URL for Fabric server"""
+        """Get download URL for Fabric server (uses latest stable loader + installer)"""
         try:
             loader_version = self._get_fabric_loader_version()
-            installer_version = '1.0.1'  # Stable installer
-            # Server JAR URL format
+            installer_version = self._get_fabric_installer_version()
+            if not loader_version or not installer_version:
+                print(f"[JarBucket] Could not resolve Fabric loader/installer versions from API")
+                return None, None
             download_url = f"https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/{installer_version}/server/jar"
             return download_url, None
         except Exception as e:
@@ -6692,7 +6666,7 @@ class JarBucketManager:
         """Get the latest Bedrock server download URL from Minecraft services API"""
         try:
             response = requests.get(
-                self.API_URLS['bedrock'],
+                self.SERVER_TYPES['bedrock']['api_url'],
                 headers={
                     'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
                 },
@@ -6727,7 +6701,133 @@ class JarBucketManager:
     def _fetch_bedrock_versions(self):
         """Bedrock only has 'latest' version available"""
         return ['latest']
-    
+
+    def _fetch_forge_versions(self):
+        """Dynamically fetch Forge versions from Maven metadata (mc_version -> forge_version map)"""
+        import re
+        import xml.etree.ElementTree as ET
+        try:
+            url = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml'
+            response = requests.get(url, timeout=20)
+            if response.status_code == 200:
+                root = ET.fromstring(response.text)
+                versions_elem = root.find('.//versioning/versions')
+                if versions_elem is None:
+                    return {}
+                forge_map = {}
+                for v in versions_elem.findall('version'):
+                    ver_str = v.text.strip()
+                    ver_lower = ver_str.lower()
+                    # Skip non-stable (rc, beta, pre, alpha)
+                    if any(x in ver_lower for x in ['rc', 'beta', 'pre', 'alpha']):
+                        continue
+                    # Modern format: "1.21.5-55.1.6"
+                    if '-' not in ver_str:
+                        continue
+                    mc_ver, forge_ver = ver_str.split('-', 1)
+                    # Validate clean MC version format
+                    if not re.match(r'^\d+\.\d+(?:\.\d+)?$', mc_ver):
+                        continue
+                    # Limit to MC 1.12+
+                    try:
+                        mc_parts = [int(x) for x in mc_ver.split('.')]
+                        if mc_parts[1] < 12:
+                            continue
+                    except (ValueError, IndexError):
+                        continue
+                    # Last write wins — Maven lists ascending, so latest forge build per MC survives
+                    forge_map[mc_ver] = forge_ver
+                return forge_map
+        except Exception as e:
+            print(f'[JarBucket] Error fetching Forge versions from Maven: {e}')
+        return {}
+
+    def _fetch_neoforge_versions(self):
+        """Dynamically fetch NeoForge versions from Maven metadata (mc_version -> neoforge_version map)"""
+        import xml.etree.ElementTree as ET
+        try:
+            url = 'https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml'
+            response = requests.get(url, timeout=20)
+            if response.status_code == 200:
+                root = ET.fromstring(response.text)
+                versions_elem = root.find('.//versioning/versions')
+                if versions_elem is None:
+                    return {}
+                neo_map = {}
+                for v in versions_elem.findall('version'):
+                    ver_str = v.text.strip()
+                    ver_lower = ver_str.lower()
+                    # Skip non-stable (rc, beta, pre, alpha)
+                    if any(x in ver_lower for x in ['rc', 'beta', 'pre', 'alpha']):
+                        continue
+                    # NeoForge format: "21.5.96" -> MC "1.21.5"; "21.0.167" -> MC "1.21"
+                    parts = ver_str.split('.')
+                    if len(parts) < 2:
+                        continue
+                    mc_ver = f'1.{parts[0]}' if parts[1] == '0' else f'1.{parts[0]}.{parts[1]}'
+                    # Last write wins — latest NeoForge build per MC version survives
+                    neo_map[mc_ver] = ver_str
+                return neo_map
+        except Exception as e:
+            print(f'[JarBucket] Error fetching NeoForge versions from Maven: {e}')
+        return {}
+
+    def _fetch_spigot_versions(self):
+        """Fetch available Spigot build versions from hub.spigotmc.org directory listing"""
+        import re
+        try:
+            response = requests.get(self.SERVER_TYPES['spigot']['api_url'], timeout=15)
+            if response.status_code == 200:
+                # Parse HTML directory listing for version JSON file links (e.g. "1.21.5.json")
+                matches = re.findall(r'href="(\d+\.\d+(?:\.\d+)?)\.json"', response.text)
+                if matches:
+                    # Filter to stable versions only
+                    versions = [v for v in matches if not any(
+                        x in v.lower() for x in ['rc', 'beta', 'pre', 'alpha', 'snapshot']
+                    )]
+                    # Sort newest first
+                    def _ver_key(ver):
+                        try:
+                            return tuple(int(x) for x in ver.split('.'))
+                        except Exception:
+                            return (0,)
+                    versions.sort(key=_ver_key, reverse=True)
+                    return versions
+        except Exception as e:
+            print(f'[JarBucket] Error fetching Spigot versions: {e}')
+        # Fallback to known stable versions
+        return [
+            '1.21.4', '1.21.3', '1.21.1', '1.21', '1.20.6', '1.20.4',
+            '1.20.2', '1.20.1', '1.19.4', '1.19.3', '1.19.2', '1.18.2',
+            '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2'
+        ]
+
+    def _get_cached_url(self, server_type, version):
+        """Return a cached download URL entry if it is still within the max-age window"""
+        cache_key = f'{server_type}::{version}'
+        entry = self.cache.get('download_urls', {}).get(cache_key)
+        if not entry or not entry.get('cached_at'):
+            return None
+        try:
+            cached_at = datetime.fromisoformat(entry['cached_at'])
+            age_hours = (datetime.now() - cached_at).total_seconds() / 3600
+            if age_hours < JAR_URL_CACHE_MAX_AGE_HOURS:
+                return entry
+        except Exception:
+            pass
+        return None
+
+    def _store_cached_url(self, server_type, version, url_info):
+        """Persist a resolved download URL into the cache file"""
+        cache_key = f'{server_type}::{version}'
+        if 'download_urls' not in self.cache:
+            self.cache['download_urls'] = {}
+        self.cache['download_urls'][cache_key] = {
+            **url_info,
+            'cached_at': datetime.now().isoformat()
+        }
+        self._save_cache()
+
     def get_versions(self, server_type, force_refresh=False):
         """Get available versions for a server type"""
         # Check cache first
@@ -6743,10 +6843,6 @@ class JarBucketManager:
             versions = self._fetch_paper_versions('paper')
         elif server_type == 'folia':
             versions = self._fetch_paper_versions('folia')
-        elif server_type == 'velocity':
-            versions = self._fetch_paper_versions('velocity')
-        elif server_type == 'waterfall':
-            versions = self._fetch_paper_versions('waterfall')
         elif server_type == 'purpur':
             versions = self._fetch_purpur_versions()
         elif server_type == 'vanilla':
@@ -6755,16 +6851,32 @@ class JarBucketManager:
         elif server_type == 'fabric':
             versions = self._fetch_fabric_versions()
         elif server_type == 'forge':
-            versions = list(self.FORGE_VERSIONS.keys())
+            forge_map = self._fetch_forge_versions()
+            def _mc_key(v):
+                try:
+                    return tuple(int(x) for x in v.split('.'))
+                except Exception:
+                    return (0,)
+            if forge_map:
+                versions = sorted(forge_map.keys(), key=_mc_key, reverse=True)
+                # Persist the resolved map so get_download_info can use it without re-fetching
+                if 'versions' not in self.cache:
+                    self.cache['versions'] = {}
+                self.cache['versions'].setdefault('forge', {})['forge_map'] = forge_map
         elif server_type == 'neoforge':
-            versions = list(self.NEOFORGE_VERSIONS.keys())
+            neo_map = self._fetch_neoforge_versions()
+            def _mc_key(v):
+                try:
+                    return tuple(int(x) for x in v.split('.'))
+                except Exception:
+                    return (0,)
+            if neo_map:
+                versions = sorted(neo_map.keys(), key=_mc_key, reverse=True)
+                if 'versions' not in self.cache:
+                    self.cache['versions'] = {}
+                self.cache['versions'].setdefault('neoforge', {})['neoforge_map'] = neo_map
         elif server_type == 'spigot':
-            # Spigot requires BuildTools, return common versions
-            versions = ['1.21.4', '1.21.3', '1.21.1', '1.21', '1.20.6', '1.20.4', 
-                       '1.20.2', '1.20.1', '1.19.4', '1.19.3', '1.19.2', '1.18.2', 
-                       '1.17.1', '1.16.5', '1.15.2', '1.14.4', '1.13.2', '1.12.2']
-        elif server_type == 'bungeecord':
-            versions = ['latest']
+            versions = self._fetch_spigot_versions()
         elif server_type == 'bedrock':
             versions = self._fetch_bedrock_versions()
         
@@ -6783,11 +6895,29 @@ class JarBucketManager:
     
     def get_download_info(self, server_type, version):
         """Get download URL and hash for a specific version"""
+        # Spigot has no downloadable JAR — short-circuit before cache check
+        if server_type == 'spigot':
+            return {
+                'requires_build': True,
+                'message': 'Spigot requires BuildTools to compile. Download BuildTools and run: java -jar BuildTools.jar --rev ' + version,
+                'buildtools_url': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
+            }
+
+        # Return cached URL if still fresh
+        cached = self._get_cached_url(server_type, version)
+        if cached:
+            return {
+                'url': cached['url'],
+                'hash': cached.get('hash'),
+                'filename': cached['filename'],
+                'hash_type': cached.get('hash_type', 'sha256')
+            }
+
         download_url = None
         file_hash = None
         filename = None
-        
-        if server_type in ['paper', 'folia', 'velocity', 'waterfall']:
+
+        if server_type in ['paper', 'folia']:
             download_url, file_hash = self._fetch_paper_download_url(server_type, version)
             filename = f"{server_type}-{version}.jar"
         elif server_type == 'purpur':
@@ -6805,37 +6935,33 @@ class JarBucketManager:
             download_url, file_hash = self._fetch_fabric_download_url(version)
             filename = f"fabric-{version}.jar"
         elif server_type == 'forge':
-            forge_ver = self.FORGE_VERSIONS.get(version)
+            # Prefer the dynamically fetched map stored during get_versions(); re-fetch on cache miss
+            forge_map = self.cache.get('versions', {}).get('forge', {}).get('forge_map') or self._fetch_forge_versions()
+            forge_ver = forge_map.get(version) if forge_map else None
             if forge_ver:
-                download_url = f"{self.API_URLS['forge']}{version}-{forge_ver}/forge-{version}-{forge_ver}-installer.jar"
+                download_url = f"{self.SERVER_TYPES['forge']['api_url']}{version}-{forge_ver}/forge-{version}-{forge_ver}-installer.jar"
                 filename = f"forge-{version}-{forge_ver}-installer.jar"
         elif server_type == 'neoforge':
-            neo_ver = self.NEOFORGE_VERSIONS.get(version)
+            neo_map = self.cache.get('versions', {}).get('neoforge', {}).get('neoforge_map') or self._fetch_neoforge_versions()
+            neo_ver = neo_map.get(version) if neo_map else None
             if neo_ver:
-                download_url = f"{self.API_URLS['neoforge']}{neo_ver}/neoforge-{neo_ver}-installer.jar"
+                download_url = f"{self.SERVER_TYPES['neoforge']['api_url']}{neo_ver}/neoforge-{neo_ver}-installer.jar"
                 filename = f"neoforge-{neo_ver}-installer.jar"
-        elif server_type == 'bungeecord':
-            download_url = self.API_URLS['bungeecord']
-            filename = "BungeeCord.jar"
-        elif server_type == 'spigot':
-            # Spigot requires BuildTools - return info about that
-            return {
-                'requires_build': True,
-                'message': 'Spigot requires BuildTools to compile. Download BuildTools and run: java -jar BuildTools.jar --rev ' + version,
-                'buildtools_url': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
-            }
         elif server_type == 'bedrock':
             download_url, file_hash = self._fetch_bedrock_download_url()
-            filename = "bedrock_server.zip"
-        
+            filename = 'bedrock_server.zip'
+
         if download_url:
-            return {
+            result = {
                 'url': download_url,
                 'hash': file_hash,
                 'filename': filename,
                 'hash_type': 'sha256' if file_hash and len(file_hash) == 64 else 'sha1'
             }
-        
+            # Cache the resolved URL so the next request doesn't need to poll the API
+            self._store_cached_url(server_type, version, result)
+            return result
+
         return None
     
     def download_jar(self, server_type, version, progress_id=None):
@@ -6983,6 +7109,54 @@ class JarBucketManager:
         
         return 'unknown'
     
+    def refresh_all_versions(self, progress_callback=None):
+        """
+        Fetch fresh version lists from every upstream API and pre-cache download URLs.
+        This keeps the local jar_cache.json up-to-date so the UI never needs to wait
+        on external API calls.  Runs synchronously; call from a background thread.
+        """
+        results = {}
+        all_types = list(self.SERVER_TYPES.keys())
+
+        for idx, server_type in enumerate(all_types):
+            if progress_callback:
+                progress_callback(server_type, idx, len(all_types))
+
+            try:
+                versions = self.get_versions(server_type, force_refresh=True)
+                urls_cached = 0
+                errors = []
+
+                # Pre-cache download URLs.  For types backed purely by a static map
+                # (forge, neoforge) or with trivially cheap URLs (bedrock, spigot)
+                # cache every version; for API-heavy types limit to the 10
+                # most-recent releases to avoid hammering upstream servers.
+                if server_type in ('forge', 'neoforge', 'bedrock'):
+                    versions_to_cache = versions
+                elif server_type == 'spigot':
+                    versions_to_cache = []  # BuildTools only; nothing to cache
+                else:
+                    versions_to_cache = versions[:10] if len(versions) > 10 else versions
+
+                for v in versions_to_cache:
+                    version_str = v.get('version', str(v)) if isinstance(v, dict) else str(v)
+                    try:
+                        info = self.get_download_info(server_type, version_str)
+                        if info and info.get('url'):
+                            urls_cached += 1
+                    except Exception as exc:
+                        errors.append(str(exc))
+
+                results[server_type] = {
+                    'versions': len(versions),
+                    'urls_cached': urls_cached,
+                    'errors': errors
+                }
+            except Exception as exc:
+                results[server_type] = {'error': str(exc)}
+
+        return results
+
     def delete_jar(self, server_type, filename):
         """Delete a downloaded JAR file"""
         filepath = SERVER_EXECUTABLES_DIR / server_type / filename
@@ -7015,24 +7189,26 @@ def api_jar_bucket_types():
     return jsonify(jar_bucket.get_server_types())
 
 def is_stable_version(version_string):
-    """Check if a version is a stable release (not snapshot or RC)"""
+    """Check if a version is a stable release (not snapshot, RC, pre-release, or beta)"""
     version_lower = str(version_string).lower()
-    
-    # Filter out snapshots, pre-releases, and release candidates
-    excluded_patterns = [
-        'snapshot', 'snap', '-pre', 'pre-', 'rc', 'release candidate',
-        'beta', 'alpha', 'experimental', 'w', # Weekly snapshots like "24w14a"
+
+    # Substring-based exclusions for clearly unstable labels
+    excluded_substrings = [
+        'snapshot', '-pre', 'pre-', '-rc', 'rc-', 'release candidate',
+        'beta', 'alpha', 'experimental',
     ]
-    
-    for pattern in excluded_patterns:
+    for pattern in excluded_substrings:
         if pattern in version_lower:
             return False
-    
-    # Check for weekly snapshot pattern (e.g., "24w14a")
+
+    # Weekly snapshot pattern like "24w14a" or "1.21-rc1"
     import re
     if re.match(r'^\d{2}w\d{2}[a-z]$', version_lower):
         return False
-    
+    # RC suffix attached to a version number, e.g. "1.21-rc1", "1.21.1-pre3"
+    if re.search(r'-(rc|pre)\d+$', version_lower):
+        return False
+
     return True
 
 @app.route('/api/jar-bucket/versions/<server_type>', methods=['GET'])
@@ -7145,18 +7321,61 @@ def api_jar_bucket_info(server_type, version):
 @app.route('/api/jar-bucket/refresh', methods=['POST'])
 @admin_required
 def api_jar_bucket_refresh():
-    """Force refresh the version cache"""
+    """Force refresh the version cache for one or all server types"""
     data = request.get_json() or {}
     server_type = data.get('type')
-    
+
     if server_type:
         jar_bucket.get_versions(server_type, force_refresh=True)
         return jsonify({'message': f'Refreshed {server_type} versions'})
     else:
-        # Refresh all
         for st in jar_bucket.SERVER_TYPES.keys():
             jar_bucket.get_versions(st, force_refresh=True)
         return jsonify({'message': 'Refreshed all versions'})
+
+@app.route('/api/jar-bucket/refresh-all', methods=['POST'])
+@admin_required
+def api_jar_bucket_refresh_all():
+    """
+    Refresh every upstream API version list AND pre-cache download URLs.
+    Runs in a background thread; poll /api/jar-bucket/progress/<refresh_id> for status.
+    """
+    refresh_id = 'refresh_' + str(uuid.uuid4())
+
+    jar_bucket.download_progress[refresh_id] = {
+        'status': 'running',
+        'current': None,
+        'completed': 0,
+        'total': len(jar_bucket.SERVER_TYPES)
+    }
+
+    def do_refresh():
+        def on_progress(server_type, index, total):
+            jar_bucket.download_progress[refresh_id].update({
+                'current': server_type,
+                'completed': index
+            })
+
+        try:
+            results = jar_bucket.refresh_all_versions(progress_callback=on_progress)
+            jar_bucket.download_progress[refresh_id] = {
+                'status': 'complete',
+                'completed': len(jar_bucket.SERVER_TYPES),
+                'total': len(jar_bucket.SERVER_TYPES),
+                'results': results
+            }
+        except Exception as exc:
+            jar_bucket.download_progress[refresh_id] = {
+                'status': 'error',
+                'error': str(exc)
+            }
+
+    threading.Thread(target=do_refresh, daemon=True).start()
+
+    return jsonify({
+        'refresh_id': refresh_id,
+        'message': 'Full version refresh started — poll /api/jar-bucket/progress/' + refresh_id
+    })
 
 @app.route('/api/jar-bucket/check/<server_type>/<version>', methods=['GET'])
 @login_required
