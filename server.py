@@ -6409,7 +6409,7 @@ class JarBucketManager:
             'name': 'Fabric',
             'description': 'Lightweight mod loader for Minecraft',
             'category': 'modded',
-            'api_url': 'https://meta.fabricmc.net/v2/',
+            'api_url': 'https://meta.fabricmc.net/v2/versions',
             'icon': '🧵'
         },
         'forge': {
@@ -6470,15 +6470,17 @@ class JarBucketManager:
     
     def get_server_types(self):
         """Get list of available server types with metadata"""
-        types_by_category = {'java_servers': [], 'bedrock': [], 'modded': [], 'proxies': []}
-        
+        types_by_category = {'java_servers': [], 'bedrock': [], 'modded': []}
+
         for type_id, info in self.SERVER_TYPES.items():
             category = info.get('category', 'java_servers')
+            if category == 'proxies':
+                continue
             types_by_category.setdefault(category, []).append({
                 'id': type_id,
                 **info
             })
-        
+
         return types_by_category
     
     def _fetch_paper_versions(self, project='paper'):
@@ -6576,16 +6578,10 @@ class JarBucketManager:
                 versions = []
                 for ver in data.get('versions', []):
                     if ver.get('type') == 'release':
-                        try:
-                            # Filter versions 1.10+
-                            minor = int(ver['id'].split('.')[1])
-                            if minor >= 10:
-                                versions.append({
-                                    'id': ver['id'],
-                                    'url': ver['url']
-                                })
-                        except (ValueError, IndexError):
-                            continue
+                        versions.append({
+                            'id': ver['id'],
+                            'url': ver['url']
+                        })
                 return versions
         except Exception as e:
             print(f"[JarBucket] Error fetching Vanilla versions: {e}")

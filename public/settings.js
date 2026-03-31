@@ -1082,18 +1082,6 @@ function renderJarBucketTypes() {
       </div>
     `).join('') || '<div class="no-data">No modded servers available</div>';
   }
-  
-  // Render proxies category
-  const proxiesContainer = document.getElementById('jar-bucket-proxies');
-  if (proxiesContainer && jarBucketTypes.proxies) {
-    proxiesContainer.innerHTML = jarBucketTypes.proxies.map(type => `
-      <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
-        <span class="type-icon">${type.icon || '📦'}</span>
-        <span class="type-name">${escapeHtml(type.name)}</span>
-        <small class="type-desc">${escapeHtml(type.description)}</small>
-      </div>
-    `).join('') || '<div class="no-data">No proxies available</div>';
-  }
 }
 
 async function selectServerType(typeId, typeInfo) {
