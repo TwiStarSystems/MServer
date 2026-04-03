@@ -487,14 +487,20 @@ async function disableMFA() {
 // ==================== Socket.IO Connection ====================
 
 function connectWebSocket() {
-  socket = io();
+  socket = io({
+    transports: ['websocket'],       // Skip polling, go straight to WebSocket
+    reconnection: true,
+    reconnectionDelay: 1000,          // Wait 1s before first reconnect attempt
+    reconnectionDelayMax: 5000,       // Cap reconnect delay at 5s
+    reconnectionAttempts: Infinity,
+    timeout: 15000,                   // 15s connection timeout
+    upgrade: false                    // Don't try to upgrade from polling
+  });
   
   socket.on('connect', () => {
     console.log('Socket.IO connected');
-    // Subscribe to current server if selected
+    // Re-subscribe to current server on reconnect (don't clear terminal)
     if (currentServerId) {
-      // Clear terminal before re-subscribing to avoid duplicate logs
-      clearTerminal();
       socket.emit('subscribe', { serverId: currentServerId });
     }
   });
@@ -517,8 +523,8 @@ function connectWebSocket() {
     }
   });
   
-  socket.on('disconnect', () => {
-    console.log('Socket.IO disconnected');
+  socket.on('disconnect', (reason) => {
+    console.log('Socket.IO disconnected:', reason);
   });
   
   socket.on('connect_error', (error) => {

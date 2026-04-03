@@ -4,6 +4,13 @@ MServerController - A web-based Minecraft server controller and manager
 Python/Flask implementation with multi-server support and RBAC
 """
 
+# Monkey-patch stdlib for gevent BEFORE any other imports
+# This is required for Flask-SocketIO gevent async mode to work properly.
+# Without it, blocking I/O in threads starves the event loop, causing
+# Socket.IO ping timeouts and constant disconnect/reconnect cycles.
+from gevent import monkey
+monkey.patch_all()
+
 import os
 import io
 import re
@@ -63,8 +70,15 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # Initialize CSRF Protection
 csrf = CSRFProtect(app)
 
-# Initialize SocketIO without CORS restrictions
-socketio = SocketIO(app, manage_session=False)
+# Initialize SocketIO with gevent async mode and tuned ping settings
+socketio = SocketIO(
+    app,
+    manage_session=False,
+    async_mode='gevent',
+    ping_interval=25,
+    ping_timeout=60,
+    cors_allowed_origins='*'
+)
 
 # Rate limiting
 limiter = Limiter(
