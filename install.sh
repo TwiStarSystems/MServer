@@ -9,11 +9,6 @@ set -e
 INSTALL_DIR="/opt/mservercontroller"
 REPO_URL="https://github.com/TwiStarSystems/MServerController.git"
 SERVICE_NAME="mservercontroller"
-SSL_DIR="$INSTALL_DIR/ssl"
-
-# SSL configuration
-USE_SSL="false"
-USE_NGINX="false"
 
 # Colors for output
 RED='\033[0;31m'
@@ -197,7 +192,6 @@ EOF
 # 1. This file contains sensitive information - keep it secure
 # 2. Never commit this file to version control
 # 3. In production, always use FLASK_ENV=production
-# 4. Use HTTPS in production (SESSION_COOKIE_SECURE is auto-enabled)
 EOF
 
     # Set proper permissions on .env file
@@ -210,105 +204,7 @@ EOF
     echo ""
 }
 
-# Prompt for SSL configuration
-prompt_ssl_config() {
-    print_header "SSL/TLS Configuration"
-    
-    echo "Would you like to enable SSL/TLS encryption (HTTPS)?"
-    echo ""
-    echo "Options:"
-    echo "  1) HTTP only (port 3000) - No encryption, app serves directly"
-    echo "  2) HTTPS direct (port 443) - App handles SSL with self-signed certificate"
-    echo "  3) HTTPS with Nginx (port 443) - Nginx handles SSL as reverse proxy"
-    echo ""
-    read -p "Select option [1-3] (default: 1): " ssl_choice
-    ssl_choice=${ssl_choice:-1}
-    
-    case $ssl_choice in
-        1)
-            USE_SSL="false"
-            USE_NGINX="false"
-            print_info "HTTP mode selected - app will serve directly on port 3000"
-            ;;
-        2)
-            USE_SSL="true"
-            USE_NGINX="false"
-            print_info "HTTPS direct mode - app will handle SSL on port 443"
-            ;;
-        3)
-            USE_SSL="true"
-            USE_NGINX="true"
-            print_info "HTTPS with Nginx - Nginx will handle SSL as reverse proxy"
-            ;;
-        *)
-            print_warning "Invalid choice, defaulting to HTTP only"
-            USE_SSL="false"
-            USE_NGINX="false"
-            ;;
-    esac
-    echo ""
-}
 
-# Generate SSL certificates
-generate_ssl_certs() {
-    if [ "$USE_SSL" = "true" ]; then
-        print_info "Generating self-signed SSL certificate..."
-        
-        mkdir -p "$SSL_DIR"
-        
-        # Get IP address for SAN
-        local ip_addr=$(hostname -I | awk '{print $1}')
-        local hostname=$(hostname)
-        
-        # Create OpenSSL config for SAN
-        cat > "$SSL_DIR/openssl.cnf" <<EOF
-[req]
-distinguished_name = req_distinguished_name
-x509_extensions = v3_req
-prompt = no
-
-[req_distinguished_name]
-C = US
-ST = State
-L = City
-O = MServerController
-CN = $hostname
-
-[v3_req]
-keyUsage = keyEncipherment, dataEncipherment
-extendedKeyUsage = serverAuth
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = $hostname
-DNS.2 = localhost
-IP.1 = 127.0.0.1
-IP.2 = $ip_addr
-EOF
-        
-        # Generate self-signed certificate (valid for 365 days)
-        openssl req -x509 -newkey rsa:4096 -nodes \
-            -keyout "$SSL_DIR/key.pem" \
-            -out "$SSL_DIR/cert.pem" \
-            -days 365 \
-            -config "$SSL_DIR/openssl.cnf" \
-            2>/dev/null
-        
-        chmod 600 "$SSL_DIR/key.pem"
-        chmod 644 "$SSL_DIR/cert.pem"
-        rm -f "$SSL_DIR/openssl.cnf"
-        
-        print_success "SSL certificate generated"
-        echo "  Certificate: $SSL_DIR/cert.pem"
-        echo "  Private Key: $SSL_DIR/key.pem"
-        echo "  Valid for: 365 days"
-        echo "  Hostname: $hostname"
-        echo "  IP Address: $ip_addr"
-        echo ""
-        print_warning "This is a self-signed certificate. For production, use a certificate from a trusted CA."
-        echo ""
-    fi
-}
 
 # Install system dependencies
 install_dependencies() {
@@ -326,7 +222,7 @@ install_dependencies() {
         JAVA_PKG="default-jre-headless"
     fi
     
-    apt-get install -y curl wget git "$JAVA_PKG" python3 python3-pip python3-venv openssl
+    apt-get install -y curl wget git "$JAVA_PKG" python3 python3-pip python3-venv
 
     echo ""
     print_success "Dependencies installed"
@@ -372,138 +268,14 @@ set_permissions() {
     print_success "Permissions configured"
 }
 
-# Configure Nginx
-configure_nginx() {
-    if [ "$USE_NGINX" = "true" ]; then
-        print_info "Installing and configuring Nginx..."
-        
-        # Install nginx if not present
-        if ! command -v nginx &> /dev/null; then
-            apt-get install -y nginx
-        fi
-        
-        # Get IP address and hostname for nginx config
-        local ip_addr=$(hostname -I | awk '{print $1}')
-        local hostname=$(hostname)
-        
-        # Create nginx configuration for HTTPS reverse proxy
-        cat > /etc/nginx/sites-available/mservercontroller <<EOF
-# MServerController - Nginx HTTPS Reverse Proxy Configuration
-# SSL termination at Nginx, proxying to Flask app on localhost:3000
 
-server {
-    listen 80;
-    server_name $hostname $ip_addr localhost;
-    
-    # Redirect all HTTP traffic to HTTPS
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $hostname $ip_addr localhost;
-    
-    # SSL Certificate paths
-    ssl_certificate $SSL_DIR/cert.pem;
-    ssl_certificate_key $SSL_DIR/key.pem;
-    
-    # SSL Security Settings
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
-    
-    # Security headers
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
-    add_header X-XSS-Protection "1; mode=block";
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    
-    # Increase max body size for file uploads
-    client_max_body_size 500M;
-    
-    # Proxy to MServerController app
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        proxy_read_timeout 86400;
-    }
-    
-    # WebSocket support for console/real-time features
-    location /socket.io {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "Upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-    }
-}
-EOF
-        
-        # Enable the site
-        rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-        ln -sf /etc/nginx/sites-available/mservercontroller /etc/nginx/sites-enabled/
-        
-        # Test nginx configuration
-        if nginx -t 2>/dev/null; then
-            print_success "Nginx configuration is valid"
-        else
-            print_error "Nginx configuration test failed"
-            nginx -t
-            return 1
-        fi
-        
-        # Enable and start nginx
-        systemctl enable nginx
-        systemctl restart nginx
-        
-        print_success "Nginx configured as HTTPS reverse proxy"
-    else
-        # App serves directly, disable nginx if present
-        if systemctl is-active --quiet nginx 2>/dev/null; then
-            print_info "Disabling Nginx (app serves directly)..."
-            systemctl stop nginx 2>/dev/null || true
-            systemctl disable nginx 2>/dev/null || true
-            print_success "Nginx disabled"
-        fi
-    fi
-    return 0
-}
 
 # Create systemd service
 create_service() {
     print_info "Creating systemd service..."
     
-    local exec_start
+    local exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
     local service_port="3000"
-    
-    # Determine port and SSL based on configuration
-    if [ "$USE_NGINX" = "true" ]; then
-        # With nginx: app runs HTTP on 3000, nginx handles SSL on 443
-        service_port="3000"
-        exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
-    elif [ "$USE_SSL" = "true" ]; then
-        # Direct SSL: app handles SSL on 443
-        service_port="443"
-        exec_start="$INSTALL_DIR/venv/bin/python server.py --port 443 --ssl-cert $SSL_DIR/cert.pem --ssl-key $SSL_DIR/key.pem"
-    else
-        # HTTP only: app serves on 3000
-        service_port="3000"
-        exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
-    fi
     
     cat > /etc/systemd/system/mservercontroller.service <<EOF
 [Unit]
@@ -576,39 +348,13 @@ show_completion() {
     
     # Show configuration
     echo "Configuration:"
-    if [ "$USE_NGINX" = "true" ]; then
-        echo "  Transport Security: HTTPS via Nginx reverse proxy"
-        echo "  Nginx: SSL termination on port 443"
-        echo "  App: HTTP on port 3000 (internal)"
-    elif [ "$USE_SSL" = "true" ]; then
-        echo "  Transport Security: HTTPS (direct SSL) on port 443"
-    else
-        echo "  Transport Security: HTTP on port 3000"
-    fi
+    echo "  Transport: HTTP on port 3000"
     echo ""
-    
-    # Show access URL
-    if [ "$USE_SSL" = "true" ]; then
-        echo "Access the web interface at:"
-        echo "  https://$(hostname -I | awk '{print $1}')"
-        echo "  or"
-        echo "  https://localhost"
-        echo ""
-        print_warning "Using self-signed certificate - browsers will show security warning"
-        echo "Accept the certificate warning to proceed."
-        if [ "$USE_NGINX" = "true" ]; then
-            echo ""
-            echo "Nginx commands:"
-            echo "  Reload: sudo systemctl reload nginx"
-            echo "  Status: sudo systemctl status nginx"
-            echo "  Logs:   sudo tail -f /var/log/nginx/error.log"
-        fi
-    else
-        echo "Access the web interface at:"
-        echo "  http://$(hostname -I | awk '{print $1}'):3000"
-        echo "  or"
-        echo "  http://localhost:3000"
-    fi
+
+    echo "Access the web interface at:"
+    echo "  http://$(hostname -I | awk '{print $1}'):3000"
+    echo "  or"
+    echo "  http://localhost:3000"
     echo ""
     
     echo "Service management commands:"
@@ -630,10 +376,7 @@ do_install() {
     
     # Prompt for environment configuration first
     prompt_env_config
-    
-    # Prompt for SSL configuration
-    prompt_ssl_config
-    
+
     install_dependencies
     
     # Handle existing installation
@@ -708,9 +451,7 @@ do_install() {
     
     setup_python_env
     create_directories
-    generate_ssl_certs
     set_permissions
-    configure_nginx
     create_service
     
     if start_services; then
@@ -733,12 +474,6 @@ do_update() {
         exit 1
     fi
     
-    # Check if SSL was previously enabled
-    if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
-        USE_SSL="true"
-        print_info "SSL configuration detected and will be preserved"
-    fi
-    
     # Display what will be preserved
     print_info "Files and data to be PRESERVED during update:"
     echo "  • config.json (server configurations)"
@@ -748,7 +483,6 @@ do_update() {
     echo "  • servers/* (all game server data)"
     echo "  • backups/* (all backups)"
     echo "  • uploads/* (uploaded files)"
-    echo "  • ssl/* (SSL certificates if present)"
     echo ""
     
     read -p "Continue with update? (y/n) " -n 1 -r
@@ -785,12 +519,6 @@ do_update() {
             print_success "  Backed up: $file"
         fi
     done
-    
-    # Also backup SSL directory if it exists
-    if [ -d "$INSTALL_DIR/ssl" ]; then
-        cp -r "$INSTALL_DIR/ssl" "$backup_dir/"
-        print_success "  Backed up: ssl/ (certificates)"
-    fi
     
     # Determine source directory (where install.sh is located)
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -890,13 +618,6 @@ do_update() {
             print_success "  Restored: $file"
         fi
     done
-    
-    # Restore SSL certificates if present
-    if [ -d "$backup_dir/ssl" ]; then
-        rm -rf "$INSTALL_DIR/ssl"
-        cp -r "$backup_dir/ssl" "$INSTALL_DIR/"
-        print_success "  Restored: ssl/ (certificates)"
-    fi
     
     # Cleanup temporary backup
     rm -rf "$backup_dir"
@@ -1073,14 +794,6 @@ do_uninstall() {
     print_info "Stopping services..."
     systemctl stop mservercontroller 2>/dev/null || true
     systemctl disable mservercontroller 2>/dev/null || true
-    
-    # Clean up nginx configuration if it exists
-    if [ -f "/etc/nginx/sites-enabled/mservercontroller" ]; then
-        print_info "Removing Nginx configuration..."
-        rm -f /etc/nginx/sites-enabled/mservercontroller
-        rm -f /etc/nginx/sites-available/mservercontroller
-        systemctl reload nginx 2>/dev/null || true
-    fi
     
     print_info "Removing systemd service..."
     rm -f /etc/systemd/system/mservercontroller.service

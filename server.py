@@ -4,13 +4,6 @@ MServerController - A web-based Minecraft server controller and manager
 Python/Flask implementation with multi-server support and RBAC
 """
 
-# Monkey-patch stdlib for gevent BEFORE any other imports
-# This is required for Flask-SocketIO gevent async mode to work properly.
-# Without it, blocking I/O in threads starves the event loop, causing
-# Socket.IO ping timeouts and constant disconnect/reconnect cycles.
-from gevent import monkey
-monkey.patch_all()
-
 import os
 import io
 import re
@@ -61,7 +54,7 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') != 'development'  # Enable HTTPS-only in production
+app.config['SESSION_COOKIE_SECURE'] = False  # HTTP only - no HTTPS
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 
 # Configure ProxyFix for reverse proxy (e.g., Nginx) headers
@@ -70,11 +63,14 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # Initialize CSRF Protection
 csrf = CSRFProtect(app)
 
-# Initialize SocketIO with gevent async mode and tuned ping settings
+# Initialize SocketIO with threading async mode and tuned ping settings.
+# Threading mode works natively with the existing subprocess/thread-based
+# architecture. The simple-websocket package provides real WebSocket support
+# (not just long-polling) without requiring gevent monkey-patching.
 socketio = SocketIO(
     app,
     manage_session=False,
-    async_mode='gevent',
+    async_mode='threading',
     ping_interval=25,
     ping_timeout=60,
     cors_allowed_origins='*'
@@ -8006,9 +8002,6 @@ Examples:
   
   # Run on a custom port
   python server.py --port 8080
-  
-  # Run with SSL/HTTPS
-  python server.py --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem
         '''
     )
     
@@ -8026,64 +8019,24 @@ Examples:
         help='Host address to bind to (default: 0.0.0.0)'
     )
     
-    parser.add_argument(
-        '--ssl-cert',
-        type=str,
-        help='Path to SSL certificate file for HTTPS'
-    )
-    
-    parser.add_argument(
-        '--ssl-key',
-        type=str,
-        help='Path to SSL private key file for HTTPS'
-    )
-    
     return parser.parse_args()
 
 
-def run_server(host='0.0.0.0', port=3000, ssl_cert=None, ssl_key=None):
+def run_server(host='0.0.0.0', port=3000):
     """Run the MServerController server"""
     print('=' * 60)
     print('MServerController')
     print('=' * 60)
-    
-    # Determine protocol
-    protocol = 'https' if ssl_cert and ssl_key else 'http'
-    print(f'Web Interface: {protocol}://localhost:{port}')
+    print(f'Web Interface: http://localhost:{port}')
     print(f'Listening on: {host}:{port}')
-    
-    if ssl_cert and ssl_key:
-        print(f'✓ SSL/TLS Enabled')
-        print(f'  Certificate: {ssl_cert}')
-        print(f'  Key: {ssl_key}')
-    else:
-        print('⚠️  WARNING: Running without SSL/TLS encryption')
-    
     print('⚠️  WARNING: Default admin credentials are admin/admin')
     print('            Change immediately after first login!')
     print('=' * 60)
-    
-    # Configure SSL context if certificates provided
-    if ssl_cert and ssl_key:
-        # For Flask-SocketIO with eventlet, we need to pass certfile and keyfile
-        socketio.run(app, host=host, port=port, debug=False, 
-                    certfile=ssl_cert, keyfile=ssl_key)
-    else:
-        socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == '__main__':
     args = parse_arguments()
-    
-    # Validate SSL arguments
-    if (args.ssl_cert and not args.ssl_key) or (args.ssl_key and not args.ssl_cert):
-        print('ERROR: Both --ssl-cert and --ssl-key are required for SSL')
-        sys.exit(1)
-    
-    # Run the server
-    run_server(
-        host=args.host, 
-        port=args.port,
-        ssl_cert=args.ssl_cert,
-        ssl_key=args.ssl_key
-    )
+
+    run_server(host=args.host, port=args.port)
