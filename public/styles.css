@@ -1625,6 +1625,97 @@ select.form-control:disabled {
   color: #f85149;
 }
 
+/* Bedrock Server Setup Steps */
+.bedrock-setup-status {
+  padding: 15px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+}
+
+.bedrock-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bedrock-step-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bstep-icon {
+  font-size: 15px;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  color: #8b949e;
+}
+
+.bstep-label {
+  font-size: 14px;
+  color: #8b949e;
+  transition: color 0.2s;
+}
+
+.bedrock-step[data-state="active"] .bstep-icon {
+  color: #e6edf3;
+}
+
+.bedrock-step[data-state="active"] .bstep-label {
+  color: #e6edf3;
+  font-weight: 500;
+}
+
+.bedrock-step[data-state="done"] .bstep-icon {
+  color: #3fb950;
+}
+
+.bedrock-step[data-state="done"] .bstep-label {
+  color: #3fb950;
+}
+
+.bedrock-step[data-state="error"] .bstep-icon,
+.bedrock-step[data-state="error"] .bstep-label {
+  color: #f85149;
+}
+
+.bstep-progress {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  margin-left: 30px;
+}
+
+.bedrock-step[data-state="active"] .bstep-progress {
+  display: flex;
+}
+
+.bstep-bar {
+  flex: 1;
+  height: 6px;
+  background: #30363d;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bstep-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #238636, #3fb950);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+.bstep-pct {
+  font-size: 12px;
+  color: #8b949e;
+  min-width: 40px;
+  text-align: right;
+}
+
 /* RAM Input Fields */
 .ram-inputs {
   display: flex;

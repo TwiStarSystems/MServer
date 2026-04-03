@@ -1272,14 +1272,26 @@ function onCategoryChange() {
     return;
   }
   
+  const engineSelect = document.getElementById('fresh-engine');
+  const pvpOption = document.getElementById('pvp-option');
+  const hardcoreOption = document.getElementById('hardcore-option');
+  const bedrockStatus = document.getElementById('bedrock-setup-status');
+  const jarStatus = document.getElementById('jar-download-status');
+
   if (category === 'unmodded') {
     // Java Vanilla: Hide engine, show version directly
     engineGroup.style.display = 'none';
+    engineSelect.removeAttribute('required');
     versionGroup.style.display = 'block';
+    versionSelect.setAttribute('required', '');
     ramFieldsGroup.style.display = 'block';
     uploadJarGroup.style.display = 'block';
     document.getElementById('server-properties-group').style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
+    if (pvpOption) pvpOption.style.display = '';
+    if (hardcoreOption) hardcoreOption.style.display = '';
+    if (bedrockStatus) bedrockStatus.style.display = 'none';
+    if (jarStatus) jarStatus.style.display = '';
     
     // Update server port default
     document.getElementById('fresh-server-port').value = '25565';
@@ -1289,24 +1301,37 @@ function onCategoryChange() {
   } else if (category === 'modded') {
     // Java Modded: Show engine selector
     engineGroup.style.display = 'block';
+    engineSelect.setAttribute('required', '');
     versionGroup.style.display = 'none';
+    versionSelect.removeAttribute('required');
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
     document.getElementById('server-properties-group').style.display = 'none';
     categoryDesc.textContent = 'Java Edition server with plugin/mod support';
+    if (pvpOption) pvpOption.style.display = '';
+    if (hardcoreOption) hardcoreOption.style.display = '';
+    if (bedrockStatus) bedrockStatus.style.display = 'none';
+    if (jarStatus) jarStatus.style.display = '';
     
     // Reset engine and version
-    document.getElementById('fresh-engine').value = '';
+    engineSelect.value = '';
     versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
     versionSelect.disabled = true;
   } else if (category === 'bedrock') {
     // Bedrock: No engine/version selection, no Java args
     engineGroup.style.display = 'none';
+    engineSelect.removeAttribute('required');
     versionGroup.style.display = 'none';
+    versionSelect.removeAttribute('required');
     ramFieldsGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
     document.getElementById('server-properties-group').style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft Bedrock Edition server - latest version will be downloaded automatically';
+    // Hide Java-only form options
+    if (pvpOption) pvpOption.style.display = 'none';
+    if (hardcoreOption) hardcoreOption.style.display = 'none';
+    if (bedrockStatus) bedrockStatus.style.display = 'none';
+    if (jarStatus) jarStatus.style.display = 'none';
     
     // Set Bedrock default port
     document.getElementById('fresh-server-port').value = '19132';
@@ -1979,96 +2004,180 @@ async function createFreshServer(e) {
     if (backBtn) backBtn.disabled = true;
     
     if (isBedrock) {
-      // Bedrock server creation flow
-      updateProgress('Creating Bedrock server...', 5);
-      
-      // First create the server config
-      const result = await apiRequest('/api/servers', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          executable: 'server.sh',
-          javaArgs: '',
-          category: 'bedrock',
-          serverEngine: 'bedrock',
-          serverType: 'bedrock',
-          version: 'latest',
-          serverProperties: {
-            'server-port': serverPort,
-            'max-players': maxPlayers,
-            'gamemode': gamemode,
-            'difficulty': difficulty,
-            'level-seed': levelSeed,
-            'white-list': whiteList,
-          }
-        })
-      });
-      
-      if (result.pendingApproval) {
-        showNotification('Server created and pending admin approval', 'info');
-        closeServerModal();
-        await loadServers();
-        return;
-      }
-      
-      // Now trigger Bedrock download + extraction
-      updateProgress('Downloading Bedrock server...', 10);
-      submitBtn.textContent = 'Downloading Bedrock...';
-      
-      let setupResult;
-      try {
-        setupResult = await apiRequest(`/api/servers/${result.serverId}/setup-bedrock`, {
-          method: 'POST'
-        });
-      } catch (setupErr) {
-        resetOnError(`Failed to start Bedrock download: ${setupErr.message}`);
-        return;
-      }
-      
-      if (!setupResult.progress_id) {
-        resetOnError('Failed to start Bedrock download - no progress ID returned');
-        return;
-      }
-      
-      // Poll for progress
-      const progressId = setupResult.progress_id;
-      let downloadComplete = false;
-      let pollCount = 0;
-      const maxPolls = 600; // 5 minutes
-      
-      while (!downloadComplete && pollCount < maxPolls) {
-        await new Promise(r => setTimeout(r, 500));
-        pollCount++;
-        
-        try {
-          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
-          
-          if (progress.status === 'downloading') {
-            const pct = progress.progress || 0;
-            updateProgress(progress.message || 'Downloading...', pct);
-          } else if (progress.status === 'complete') {
-            downloadComplete = true;
-            updateProgress('Bedrock server ready!', 100);
-          } else if (progress.status === 'error') {
-            resetOnError(progress.error || 'Bedrock setup failed');
-            return;
-          }
-        } catch (pollErr) {
-          console.error('Progress poll error:', pollErr);
+      // Bedrock step-by-step creation flow
+      const bedrockStatusEl = document.getElementById('bedrock-setup-status');
+      const jarStatusEl = document.getElementById('jar-download-status');
+      if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+      if (bedrockStatusEl) bedrockStatusEl.style.display = 'block';
+      if (jarStatusEl) jarStatusEl.style.display = 'none';
+
+      // Reset all steps to pending
+      for (let i = 1; i <= 5; i++) {
+        const stepEl = document.getElementById(`bstep-${i}`);
+        if (stepEl) {
+          stepEl.dataset.state = 'pending';
+          stepEl.querySelector('.bstep-icon').textContent = '○';
         }
       }
-      
-      if (!downloadComplete) {
-        resetOnError('Bedrock download timed out');
-        return;
+      const bstepFill = document.querySelector('#bstep-2 .bstep-fill');
+      const bstepPct = document.querySelector('#bstep-2 .bstep-pct');
+      if (bstepFill) bstepFill.style.width = '0%';
+      if (bstepPct) bstepPct.textContent = '0%';
+
+      // Mark all steps before stepNum as done, set stepNum as active
+      const advanceToStep = (stepNum, labelText = null) => {
+        for (let i = 1; i < stepNum; i++) {
+          const el = document.getElementById(`bstep-${i}`);
+          if (el && el.dataset.state !== 'done' && el.dataset.state !== 'error') {
+            el.dataset.state = 'done';
+            el.querySelector('.bstep-icon').textContent = '✓';
+          }
+        }
+        const el = document.getElementById(`bstep-${stepNum}`);
+        if (el && el.dataset.state !== 'done') {
+          el.dataset.state = 'active';
+          el.querySelector('.bstep-icon').textContent = '⏳';
+          if (labelText) el.querySelector('.bstep-label').textContent = labelText;
+        }
+      };
+
+      const failAtCurrentStep = (errMsg) => {
+        for (let i = 1; i <= 5; i++) {
+          const el = document.getElementById(`bstep-${i}`);
+          if (el && el.dataset.state === 'active') {
+            el.dataset.state = 'error';
+            el.querySelector('.bstep-icon').textContent = '✗';
+            break;
+          }
+        }
+        submitBtn.textContent = originalText;
+        submitBtn.disabled = false;
+        if (backBtn) backBtn.disabled = false;
+        showNotification(errMsg, 'error');
+      };
+
+      try {
+        // Step 1: Create server config
+        advanceToStep(1);
+        submitBtn.textContent = 'Creating...';
+
+        const result = await apiRequest('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            executable: 'server.sh',
+            javaArgs: '',
+            category: 'bedrock',
+            serverEngine: 'bedrock',
+            serverType: 'bedrock',
+            version: 'latest',
+            serverProperties: {}
+          })
+        });
+
+        if (result.pendingApproval) {
+          advanceToStep(1);
+          const el1 = document.getElementById('bstep-1');
+          if (el1) { el1.dataset.state = 'done'; el1.querySelector('.bstep-icon').textContent = '✓'; }
+          showNotification('Server created and pending admin approval', 'info');
+          closeServerModal();
+          await loadServers();
+          return;
+        }
+
+        // Step 2: Trigger backend download + extract + config pipeline
+        advanceToStep(2, 'Downloading latest Bedrock server...');
+        submitBtn.textContent = 'Downloading...';
+
+        let setupResult;
+        try {
+          setupResult = await apiRequest(`/api/servers/${result.serverId}/setup-bedrock`, {
+            method: 'POST',
+            body: JSON.stringify({
+              serverName: name,
+              serverProperties: {
+                'server-port': serverPort,
+                'max-players': maxPlayers,
+                'gamemode': gamemode,
+                'difficulty': difficulty,
+                'level-seed': levelSeed,
+                'white-list': whiteList,
+              }
+            })
+          });
+        } catch (setupErr) {
+          failAtCurrentStep(`Failed to start Bedrock download: ${setupErr.message}`);
+          return;
+        }
+
+        if (!setupResult.progress_id) {
+          failAtCurrentStep('Failed to start Bedrock download — no progress ID returned');
+          return;
+        }
+
+        // Poll step-by-step progress
+        const progressId = setupResult.progress_id;
+        let setupComplete = false;
+        let pollCount = 0;
+        const maxPolls = 720; // 6 minutes
+        let lastStep = 2;
+
+        while (!setupComplete && pollCount < maxPolls) {
+          await new Promise(r => setTimeout(r, 500));
+          pollCount++;
+
+          try {
+            const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+            const step = progress.step || lastStep;
+
+            if (step > lastStep) {
+              lastStep = step;
+              if (step === 3) {
+                advanceToStep(3, 'Extracting server files...');
+                submitBtn.textContent = 'Extracting...';
+              } else if (step === 4) {
+                advanceToStep(4, 'Writing server.properties...');
+                submitBtn.textContent = 'Configuring...';
+              }
+            }
+
+            // Update download progress bar while step 2 is active
+            if (step === 2 && progress.progress != null) {
+              const pct = progress.progress;
+              if (bstepFill) bstepFill.style.width = `${pct}%`;
+              if (bstepPct) bstepPct.textContent = `${Math.round(pct)}%`;
+            }
+
+            if (progress.status === 'complete') {
+              for (let i = 1; i <= 5; i++) {
+                const el = document.getElementById(`bstep-${i}`);
+                if (el) { el.dataset.state = 'done'; el.querySelector('.bstep-icon').textContent = '✓'; }
+              }
+              setupComplete = true;
+            } else if (progress.status === 'error') {
+              failAtCurrentStep(progress.error || 'Bedrock setup failed');
+              return;
+            }
+          } catch (pollErr) {
+            console.error('Progress poll error:', pollErr);
+          }
+        }
+
+        if (!setupComplete) {
+          failAtCurrentStep('Bedrock setup timed out');
+          return;
+        }
+
+        await new Promise(r => setTimeout(r, 800));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+        showNotification('Bedrock server created successfully!', 'success');
+
+      } catch (error) {
+        failAtCurrentStep(error.message || 'Failed to create Bedrock server');
       }
-      
-      await new Promise(r => setTimeout(r, 1000));
-      await loadServers();
-      selectServer(result.serverId);
-      closeServerModal();
-      showNotification('Bedrock server created successfully!', 'success');
-      
+
     } else if (uploadCustom) {
       // Custom JAR upload flow
       const fileInput = document.getElementById('fresh-jar-file');

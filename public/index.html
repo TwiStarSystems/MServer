@@ -534,6 +534,44 @@
                     <span class="progress-text">0%</span>
                   </div>
                 </div>
+                <div id="bedrock-setup-status" class="bedrock-setup-status" style="display: none;">
+                  <div class="bedrock-steps">
+                    <div class="bedrock-step" id="bstep-1" data-state="pending">
+                      <div class="bedrock-step-row">
+                        <span class="bstep-icon">○</span>
+                        <span class="bstep-label">Creating server configuration</span>
+                      </div>
+                    </div>
+                    <div class="bedrock-step" id="bstep-2" data-state="pending">
+                      <div class="bedrock-step-row">
+                        <span class="bstep-icon">○</span>
+                        <span class="bstep-label">Downloading latest Bedrock server</span>
+                      </div>
+                      <div class="bstep-progress">
+                        <div class="bstep-bar"><div class="bstep-fill" style="width: 0%;"></div></div>
+                        <span class="bstep-pct">0%</span>
+                      </div>
+                    </div>
+                    <div class="bedrock-step" id="bstep-3" data-state="pending">
+                      <div class="bedrock-step-row">
+                        <span class="bstep-icon">○</span>
+                        <span class="bstep-label">Extracting server files</span>
+                      </div>
+                    </div>
+                    <div class="bedrock-step" id="bstep-4" data-state="pending">
+                      <div class="bedrock-step-row">
+                        <span class="bstep-icon">○</span>
+                        <span class="bstep-label">Writing server.properties</span>
+                      </div>
+                    </div>
+                    <div class="bedrock-step" id="bstep-5" data-state="pending">
+                      <div class="bedrock-step-row">
+                        <span class="bstep-icon">○</span>
+                        <span class="bstep-label">Server ready to start!</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div id="ram-fields-group" style="display: none;">
@@ -636,7 +674,7 @@
                   <div class="form-group half">
                     <label for="fresh-level-seed"></label>
                     <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 8px;">
-                      <label style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
+                      <label id="pvp-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
                         <input type="checkbox" id="fresh-pvp" style="margin-right: 8px;">
                         <span>Enable PvP</span>
                       </label>
@@ -644,7 +682,7 @@
                         <input type="checkbox" id="fresh-white-list" style="margin-right: 8px;">
                         <span>Enable Whitelist</span>
                       </label>
-                      <label style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
+                      <label id="hardcore-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
                         <input type="checkbox" id="fresh-hardcore" style="margin-right: 8px;">
                         <span>Hardcore Mode</span>
                       </label>
