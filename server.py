@@ -6,6 +6,7 @@ Python/Flask implementation with multi-server support and RBAC
 
 import os
 import io
+import re
 import gzip
 import json
 import shutil
@@ -127,6 +128,57 @@ def read_version_file():
     except Exception as e:
         print(f"[Version] Error reading version file: {e}")
         return None
+
+
+# --- Minecraft version era helpers ---
+# MC_LEGACY_MAX: highest version in the pre-1.26 world format.  Legacy servers
+#   may upgrade/downgrade within this tier but cannot cross to the modern era.
+# MC_MODERN_MIN: first version with the new world storage format.
+MC_LEGACY_MAX = '1.21.11'
+MC_MODERN_MIN = '1.26'
+
+
+def _parse_mc_version_tuple(v):
+    """Convert a MC version string to a sortable integer tuple (a, b, c).
+    Strips modloader suffixes (e.g. '1.21.3-53.0.26' -> '1.21.3').
+    Handles '1.21.4', '1.26', '26.1', etc.
+    """
+    base = str(v).split('-')[0]
+    parts = re.findall(r'\d+', base)
+    nums = [int(p) for p in parts[:3]]
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums)
+
+
+def mc_version_is_modern(v):
+    """Return True if version is in the 1.26+ (new world format) era."""
+    m = re.match(r'(\d+)\.(\d+)', str(v))
+    if not m:
+        return False
+    major, minor = int(m.group(1)), int(m.group(2))
+    # '1.26', '1.27' ... OR new-scheme '26.1', '27.x'
+    return major >= 26 or (major == 1 and minor >= 26)
+
+
+def mc_version_is_legacy(v):
+    """Return True if version is in the legacy (<=1.21.x) era."""
+    m = re.match(r'(\d+)\.(\d+)', str(v))
+    if not m:
+        return True  # unparseable defaults to legacy
+    major, minor = int(m.group(1)), int(m.group(2))
+    return major == 1 and minor <= 21
+
+
+def compare_mc_versions(v1, v2):
+    """Compare two MC version strings. Returns -1, 0, or 1."""
+    t1 = _parse_mc_version_tuple(v1)
+    t2 = _parse_mc_version_tuple(v2)
+    if t1 < t2:
+        return -1
+    if t1 > t2:
+        return 1
+    return 0
 
 
 def get_current_version():
@@ -2564,7 +2616,7 @@ class ServerManager:
                 'name': server_config.get('name', 'Unnamed Server'),
                 'serverPath': server_config.get('serverPath', ''),
                 'executable': server_config.get('executable', 'server.jar'),
-                'javaArgs': server_config.get('javaArgs', '-Xmx2G -Xms1G'),
+                'javaArgs': server_config.get('javaArgs', '-Xmx4G -Xms1G'),
                 'autoStart': server_config.get('autoStart', False),
                 'serverType': server_config.get('serverType'),
                 'version': server_config.get('version'),
@@ -2607,7 +2659,7 @@ class ServerManager:
         """Get configuration for a specific server"""
         return self.config.get('servers', {}).get(server_id)
     
-    def create_server(self, name, server_path='', executable='server.jar', java_args='-Xmx2G -Xms1G', 
+    def create_server(self, name, server_path='', executable='server.jar', java_args='-Xmx4G -Xms1G', 
                       server_type=None, version=None, owner=None, approved=True, category='unmodded'):
         """Create a new server configuration"""
         server_id = str(uuid.uuid4())[:8]
@@ -2845,7 +2897,7 @@ class ServerManager:
         except Exception as e:
             return False, f"Failed to write eula.txt: {e}"
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx2G -Xms1G', jar_name=None, owner=None, approved=True, category='unmodded'):
+    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G', jar_name=None, owner=None, approved=True, category='unmodded'):
         """Import a server from a ZIP file"""
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
@@ -3005,7 +3057,7 @@ class ServerManager:
             
             server_path = Path(server_config.get('serverPath', ''))
             executable = server_config.get('executable', 'server.jar')
-            java_args = server_config.get('javaArgs', '-Xmx2G -Xms1G')
+            java_args = server_config.get('javaArgs', '-Xmx4G -Xms1G')
             is_bedrock = server_config.get('category') == 'bedrock'
             
             if not server_path.exists():
@@ -4142,7 +4194,7 @@ def create_server():
     data = request.get_json()
     name = data.get('name', 'New Server')
     server_path = data.get('serverPath', '')
-    java_args = data.get('javaArgs', '-Xmx2G -Xms1G')
+    java_args = data.get('javaArgs', '-Xmx4G -Xms1G')
     category = data.get('category', 'unmodded')
     executable = 'server.sh' if category == 'bedrock' else 'server.jar'
     server_engine = data.get('serverEngine')  # New: engine (paper, folia, etc.)
@@ -4403,7 +4455,7 @@ def import_server():
     
     name = request.form.get('name', 'Imported Server')
     jar_name = request.form.get('jarName', 'server.jar')
-    java_args = request.form.get('javaArgs', '-Xmx2G -Xms1G')
+    java_args = request.form.get('javaArgs', '-Xmx4G -Xms1G')
     category = request.form.get('category', 'unmodded')
     
     # Check if server approval is required (admins are always auto-approved)
@@ -4489,9 +4541,40 @@ def download_server_jar(server_id):
     server_path = Path(server_config['serverPath'])
     jar_path = server_path / executable
     
+    # --- Era compatibility guard ---
+    current_version = server_config.get('version', '')
+    if current_version and current_version not in ('Unknown', ''):
+        cur_modern = mc_version_is_modern(current_version)
+        new_mod = mc_version_is_modern(version)
+        new_leg = mc_version_is_legacy(version)
+
+        if cur_modern and not new_mod:
+            return jsonify({
+                'error': (
+                    f'Cannot assign legacy JAR ({version}) to a 1.26+ server ({current_version}). '
+                    f'Create a new server if you need a legacy version.'
+                )
+            }), 400
+
+        if mc_version_is_legacy(current_version) and not new_leg:
+            return jsonify({
+                'error': (
+                    f'Cannot assign a 1.26+ JAR ({version}) to a legacy server ({current_version}). '
+                    f'Create a new server to run Minecraft 1.26 or higher.'
+                )
+            }), 400
+
+        if mc_version_is_legacy(current_version) and compare_mc_versions(version, MC_LEGACY_MAX) > 0:
+            return jsonify({
+                'error': (
+                    f'Legacy servers cannot exceed {MC_LEGACY_MAX}. '
+                    f'Create a new server to run Minecraft 1.26 or higher.'
+                )
+            }), 400
+
     # Copy from local serverexecutables directory
     success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
-    
+
     if success:
         server_manager.update_server(server_id, executable=executable, serverType=server_type, version=version)
         return jsonify({'success': True, 'path': result})
@@ -4604,47 +4687,78 @@ def update_managed_conf(server_id):
 @app.route('/api/servers/<server_id>/change-version', methods=['POST'])
 @server_access_required
 def change_server_version(server_id):
-    """Change the server version"""
+    """Change the server version.
+
+    Era rules
+    ---------
+    Modern (1.26+): may only upgrade, never downgrade.  Cross-era moves blocked.
+    Legacy (<=1.21.11): may upgrade/downgrade within the legacy tier only.
+      Downgrades are allowed but include a warning in the response.
+      Upgrades are capped at MC_LEGACY_MAX (1.21.11).
+      Cannot cross to the modern era — create a new server instead.
+    """
     data = request.get_json()
-    
+
     if not data:
         return jsonify({'error': 'No data provided'}), 400
-    
+
     new_version = data.get('version')
     create_backup = data.get('createBackup', False)
-    
+
     if not new_version:
         return jsonify({'error': 'Version is required'}), 400
-    
+
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
         return jsonify({'error': 'Server not found'}), 404
-    
-    # Get current version from managed.conf
+
     server_dir = Path(server_config.get('serverPath', ''))
     managed_conf = server_manager._read_managed_conf(server_dir)
     current_version = managed_conf.get('Version', server_config.get('version', ''))
-    
-    # Check if current version is below 1.26
-    def is_version_below_126(version_str):
-        """Check if version is below 1.26"""
-        import re
-        match = re.match(r'(\d+)\.(\d+)', str(version_str))
-        if not match:
-            return True  # Assume old if can't parse
-        major, minor = int(match.group(1)), int(match.group(2))
-        return major < 1 or (major == 1 and minor < 26)
-    
-    if is_version_below_126(current_version):
+
+    current_modern = mc_version_is_modern(current_version)
+    current_legacy = mc_version_is_legacy(current_version)
+    new_modern = mc_version_is_modern(new_version)
+    new_legacy = mc_version_is_legacy(new_version)
+
+    # --- Cross-era blocks ---
+    if current_modern and not new_modern:
         return jsonify({
-            'error': 'Version changes are not supported for servers below Minecraft 1.26 due to technical changes in version numbering and world storage format. Please create a new server for the desired version.'
+            'error': (
+                f'Cannot downgrade a 1.26+ server to legacy version {new_version}. '
+                f'The new world storage format is incompatible with older versions. '
+                f'Create a new server if you need a legacy version.'
+            )
         }), 400
-    
-    if is_version_below_126(new_version):
+
+    if current_legacy and not new_legacy:
         return jsonify({
-            'error': 'Downgrading to versions below Minecraft 1.26 is not supported due to incompatible world storage formats. Please create a new server if you need an older version.'
+            'error': (
+                f'Cannot upgrade legacy server from {current_version} to {new_version}. '
+                f'Minecraft 1.26 introduced incompatible world storage changes. '
+                f'The maximum upgrade path for this server is {MC_LEGACY_MAX}. '
+                f'Create a new server to run Minecraft 1.26 or higher.'
+            )
         }), 400
-    
+
+    # --- Legacy: cap at MC_LEGACY_MAX ---
+    if current_legacy and compare_mc_versions(new_version, MC_LEGACY_MAX) > 0:
+        return jsonify({
+            'error': (
+                f'Legacy servers cannot be upgraded beyond {MC_LEGACY_MAX}. '
+                f'Create a new server to run Minecraft 1.26 or higher.'
+            )
+        }), 400
+
+    # --- Legacy downgrade: allowed with warning ---
+    downgrade_warning = None
+    if current_legacy and compare_mc_versions(new_version, current_version) < 0:
+        downgrade_warning = (
+            f'Downgrading from {current_version} to {new_version}: '
+            f'Minecraft world data is generally not backwards-compatible. '
+            f'Ensure you have a backup before starting the server.'
+        )
+
     # Check if server is running
     instance = server_manager.servers.get(server_id)
     if instance and instance.is_running():
@@ -4680,12 +4794,15 @@ def change_server_version(server_id):
     managed_conf['Version'] = new_version
     server_manager._write_managed_conf(server_dir, managed_conf)
     
-    return jsonify({
-        'success': True, 
+    response = {
+        'success': True,
         'message': f'Version updated from {current_version} to {new_version}',
         'oldVersion': current_version,
-        'newVersion': new_version
-    })
+        'newVersion': new_version,
+    }
+    if downgrade_warning:
+        response['warning'] = downgrade_warning
+    return jsonify(response)
 
 @app.route('/api/servers/<server_id>/eula', methods=['GET'])
 @server_access_required
@@ -5300,25 +5417,26 @@ def get_playerdata(server_id):
         })
     
     server_path = server_manager.get_server_path(server_id)
-    
-    # Try different world folder names
-    world_folders = ['world', 'world_nether', 'world_the_end']
+
+    # Player data lives only in the main world folder (nether/end never had it).
+    # Pre-1.26: world/playerdata/<uuid>.dat
+    # 1.26+:    world/players/data/<uuid>.dat
+    # Search all subdirectories for either layout.
     playerdata_path = None
     
-    for world in world_folders:
-        path = server_path / world / 'playerdata'
-        if path.exists():
-            playerdata_path = path
+    for item in server_path.iterdir():
+        if not item.is_dir():
+            continue
+        # 1.26+ layout first
+        new_path = item / 'players' / 'data'
+        if new_path.exists():
+            playerdata_path = new_path
             break
-    
-    if not playerdata_path:
-        # Try to find any folder with playerdata
-        for item in server_path.iterdir():
-            if item.is_dir():
-                pd_path = item / 'playerdata'
-                if pd_path.exists():
-                    playerdata_path = pd_path
-                    break
+        # Legacy layout
+        old_path = item / 'playerdata'
+        if old_path.exists():
+            playerdata_path = old_path
+            break
     
     if not playerdata_path or not playerdata_path.exists():
         return jsonify({'players': [], 'message': 'No playerdata folder found'})
