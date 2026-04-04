@@ -63,16 +63,20 @@ MServerController
    rm tools/bluemap/bluemap-cli.jar
    ```
 
-2. The next time a user clicks "Install BlueMap" from the World Map tab, it will download the latest release from:
+2. The next time a user clicks "Download & Install" from the World Map tab, it will query the GitHub API for the latest release and download the correct CLI JAR automatically:
    ```
-   https://github.com/BlueMap-Minecraft/BlueMap/releases/latest/download/bluemap-cli.jar
+   https://api.github.com/repos/BlueMap-Minecraft/BlueMap/releases/latest
    ```
+   The asset name varies by version (e.g. `bluemap-5.18-cli.jar`), so the API is used to find the correct download URL.
 
    Or download manually:
    ```bash
    cd tools/bluemap/
-   wget https://github.com/BlueMap-Minecraft/BlueMap/releases/latest/download/bluemap-cli.jar
+   # Check the latest release page for the exact filename
+   wget https://github.com/BlueMap-Minecraft/BlueMap/releases/download/v5.18/bluemap-5.18-cli.jar -O bluemap-cli.jar
    ```
+   
+   Or use the **Upload JAR from Local** button in the UI to upload a manually-downloaded JAR.
 
 3. After updating, do a **full re-render** (click "Full Re-render" in the UI) to regenerate configs and tiles with the new version.
 
@@ -141,9 +145,13 @@ Full CLI options: `java -jar bluemap-cli.jar --help`
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/servers/<id>/bluemap/status` | Get install/render status |
-| POST | `/api/servers/<id>/bluemap/setup` | Download JAR + generate configs |
+| POST | `/api/servers/<id>/bluemap/setup` | Download latest JAR via GitHub API + generate configs |
+| POST | `/api/servers/<id>/bluemap/update` | Force re-download latest JAR from GitHub |
+| POST | `/api/servers/<id>/bluemap/upload` | Upload a local JAR file |
 | POST | `/api/servers/<id>/bluemap/render` | Start a render (`{ "force": true }` for full) |
 | GET | `/api/servers/<id>/bluemap/viewer/` | Serve the web viewer (iframe src) |
+
+> **Note:** The World Map tab is hidden for Bedrock servers since BlueMap only supports Java Edition world files.
 
 ## Troubleshooting
 

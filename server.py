@@ -7863,7 +7863,7 @@ def delete_downloaded_jar_legacy():
 
 BLUEMAP_DIR = TOOLS_DIR / 'bluemap'
 BLUEMAP_JAR = BLUEMAP_DIR / 'bluemap-cli.jar'
-BLUEMAP_DOWNLOAD_URL = 'https://github.com/BlueMap-Minecraft/BlueMap/releases/latest/download/bluemap-cli.jar'
+BLUEMAP_GITHUB_API = 'https://api.github.com/repos/BlueMap-Minecraft/BlueMap/releases/latest'
 
 # Track active render processes per server
 _bluemap_renders = {}  # server_id -> { process, started, status }
@@ -8065,19 +8065,47 @@ def bluemap_status(server_id):
     })
 
 
+def _download_bluemap_jar():
+    """Download the latest BlueMap CLI JAR from GitHub releases.
+    Uses the GitHub API to find the correct asset URL (name varies by version).
+    """
+    # Query GitHub API for latest release
+    api_resp = requests.get(BLUEMAP_GITHUB_API, timeout=30, headers={'Accept': 'application/vnd.github.v3+json'})
+    api_resp.raise_for_status()
+    release = api_resp.json()
+
+    # Find the CLI asset (pattern: bluemap-*-cli.jar)
+    cli_asset_url = None
+    for asset in release.get('assets', []):
+        name = asset.get('name', '')
+        if name.endswith('-cli.jar'):
+            cli_asset_url = asset['browser_download_url']
+            break
+
+    if not cli_asset_url:
+        raise RuntimeError(f"No CLI JAR found in release {release.get('tag_name', 'unknown')}")
+
+    # Download the JAR
+    resp = requests.get(cli_asset_url, stream=True, timeout=120)
+    resp.raise_for_status()
+    BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
+    with open(BLUEMAP_JAR, 'wb') as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    return release.get('tag_name', 'latest')
+
+
 @app.route('/api/servers/<server_id>/bluemap/setup', methods=['POST'])
 @server_access_required
 def bluemap_setup(server_id):
-    """Download BlueMap CLI JAR and generate initial configs"""
+    """Download BlueMap CLI JAR (or use existing) and generate configs"""
     BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
 
     if not BLUEMAP_JAR.exists():
         try:
-            resp = requests.get(BLUEMAP_DOWNLOAD_URL, stream=True, timeout=120)
-            resp.raise_for_status()
-            with open(BLUEMAP_JAR, 'wb') as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            tag = _download_bluemap_jar()
+            print(f'[BlueMap] Downloaded {tag}')
         except Exception as e:
             return jsonify({'error': f'Failed to download BlueMap: {str(e)}'}), 500
 
@@ -8088,6 +8116,45 @@ def bluemap_setup(server_id):
         return jsonify({'error': f'Failed to generate configs: {str(e)}'}), 500
 
     return jsonify({'success': True, 'message': 'BlueMap installed and configured'})
+
+
+@app.route('/api/servers/<server_id>/bluemap/update', methods=['POST'])
+@server_access_required
+def bluemap_update(server_id):
+    """Force re-download the latest BlueMap CLI JAR"""
+    # Remove old JAR
+    if BLUEMAP_JAR.exists():
+        BLUEMAP_JAR.unlink()
+
+    try:
+        tag = _download_bluemap_jar()
+    except Exception as e:
+        return jsonify({'error': f'Failed to download BlueMap: {str(e)}'}), 500
+
+    return jsonify({'success': True, 'message': f'BlueMap updated to {tag})'})
+
+
+@app.route('/api/servers/<server_id>/bluemap/upload', methods=['POST'])
+@server_access_required
+def bluemap_upload(server_id):
+    """Upload a BlueMap CLI JAR from local storage"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    file = request.files['file']
+    if file.filename == '' or not file.filename.lower().endswith('.jar'):
+        return jsonify({'error': 'Please upload a .jar file'}), 400
+
+    BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
+    file.save(str(BLUEMAP_JAR))
+
+    # Generate configs for this server
+    try:
+        _bluemap_generate_configs(server_id)
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate configs: {str(e)}'}), 500
+
+    return jsonify({'success': True, 'message': 'BlueMap JAR uploaded and configured'})
 
 
 @app.route('/api/servers/<server_id>/bluemap/render', methods=['POST'])

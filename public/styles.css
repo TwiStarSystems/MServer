@@ -6730,6 +6730,30 @@ select.form-control:disabled {
   font-size: 0.9rem;
 }
 
+.bluemap-setup-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.bluemap-setup-or {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.bluemap-setup-hint {
+  display: block;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+}
+
+.bluemap-setup-hint a {
+  color: var(--color-secondary);
+}
+
 /* Status card */
 .bluemap-status-card {
   background: rgba(15, 52, 96, 0.3);

@@ -528,7 +528,13 @@
                 <div class="bluemap-setup-icon">🗺️</div>
                 <h4>BlueMap Not Installed</h4>
                 <p>BlueMap CLI needs to be downloaded and configured before you can render maps.</p>
-                <button class="btn btn-success" onclick="setupBlueMap()">Install BlueMap</button>
+                <div class="bluemap-setup-actions">
+                  <button class="btn btn-success" onclick="setupBlueMap()">Download &amp; Install</button>
+                  <span class="bluemap-setup-or">or</span>
+                  <label for="bluemap-jar-upload" class="btn btn-primary">Upload JAR from Local</label>
+                  <input type="file" id="bluemap-jar-upload" style="display: none;" accept=".jar" onchange="uploadBlueMapJar(this)">
+                </div>
+                <small class="bluemap-setup-hint">Downloads the latest CLI JAR from <a href="https://github.com/BlueMap-Minecraft/BlueMap/releases" target="_blank" rel="noopener">GitHub Releases</a></small>
               </div>
             </div>
 
@@ -546,6 +552,7 @@
                 <div class="bluemap-status-row">
                   <span class="bluemap-status-label">BlueMap Version:</span>
                   <span id="bluemap-version" class="bluemap-status-value">-</span>
+                  <button class="btn btn-small" onclick="updateBlueMap()" title="Download latest version from GitHub">Update</button>
                 </div>
                 <div id="bluemap-render-progress" class="bluemap-render-progress" style="display: none;">
                   <div class="bluemap-status-row">

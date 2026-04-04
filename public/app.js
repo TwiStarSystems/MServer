@@ -686,6 +686,17 @@ async function loadServerDetails() {
     } else {
       resourcepackTabBtn.style.display = '';
     }
+
+    // Hide World Map tab for Bedrock servers (BlueMap is Java-only)
+    const worldmapTabBtn = document.getElementById('worldmap-tab-btn');
+    if (server.category === 'bedrock') {
+      worldmapTabBtn.style.display = 'none';
+      if (document.querySelector('.tab-button.active[data-tab="worldmap"]')) {
+        switchTab('terminal');
+      }
+    } else {
+      worldmapTabBtn.style.display = '';
+    }
     
     // Check if server.properties exists and show/hide Properties tab
     const propertiesTabBtn = document.getElementById('properties-tab-btn');
@@ -4005,6 +4016,48 @@ function openBlueMapFullscreen() {
     iframe.requestFullscreen();
   } else if (iframe.webkitRequestFullscreen) {
     iframe.webkitRequestFullscreen();
+  }
+}
+
+async function uploadBlueMapJar(input) {
+  if (!currentServerId || !input.files.length) return;
+
+  const file = input.files[0];
+  if (!file.name.toLowerCase().endsWith('.jar')) {
+    showNotification('Please select a .jar file', 'error');
+    input.value = '';
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/bluemap/upload`, {
+      method: 'POST',
+      body: formData,
+      headers: {} // let browser set content-type with boundary
+    });
+    showNotification(result.message || 'BlueMap JAR uploaded', 'success');
+    await loadBlueMapStatus();
+  } catch (err) {
+    showNotification('Failed to upload JAR: ' + (err.message || err), 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
+async function updateBlueMap() {
+  if (!currentServerId) return;
+  if (!confirm('Download the latest BlueMap version from GitHub? This will replace the current JAR.')) return;
+
+  try {
+    showNotification('Downloading latest BlueMap...', 'info');
+    const result = await apiRequest(`/api/servers/${currentServerId}/bluemap/update`, { method: 'POST' });
+    showNotification(result.message || 'BlueMap updated', 'success');
+    await loadBlueMapStatus();
+  } catch (err) {
+    showNotification('Failed to update BlueMap: ' + (err.message || err), 'error');
   }
 }
 
