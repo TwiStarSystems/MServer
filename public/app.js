@@ -653,8 +653,13 @@ async function loadServerDetails() {
   try {
     const server = await apiRequest(`/api/servers/${currentServerId}`);
     
-    // Update header
-    document.getElementById('server-name').textContent = server.name;
+    // Update header — show Name - Type - Version
+    const _typeLabel = (server.serverType || server.category || '').toUpperCase();
+    const _verLabel = server.version || '';
+    const _nameParts = [server.name];
+    if (_typeLabel && _typeLabel !== 'UNMODDED') _nameParts.push(_typeLabel);
+    if (_verLabel) _nameParts.push(_verLabel);
+    document.getElementById('server-name').textContent = _nameParts.join(' - ');
     const status = server.status || (server.running ? 'running' : 'stopped');
     updateServerStatus(status, server.running);
     
@@ -3852,6 +3857,8 @@ function switchTab(tabName) {
     loadTasks();
   } else if (tabName === 'resourcepack') {
     loadResourcePack();
+  } else if (tabName === 'quickcmds') {
+    loadCannedCommands();
   }
 }
 
@@ -5378,4 +5385,161 @@ document.addEventListener('DOMContentLoaded', () => {
     deleteBtn.addEventListener('click', deleteResourcePack);
   }
 });
+
+// ==================== Quick Commands ====================
+
+let _cannedCommands = [];   // {cmd_name, cmd}
+let _autoExec = false;
+
+async function loadCannedCommands() {
+  if (!currentServerId) return;
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/canned-commands`);
+    _cannedCommands = data.commands || [];
+    _autoExec = !!data.auto_execute;
+    const toggle = document.getElementById('quickcmds-autoexec');
+    if (toggle) toggle.checked = _autoExec;
+    updateAutoExecHint();
+    renderCannedCommandsGrid();
+    renderCannedCommandsTable();
+  } catch (err) {
+    console.error('Failed to load canned commands:', err);
+  }
+}
+
+async function saveCannedCommandsToServer() {
+  if (!currentServerId) return;
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/canned-commands`, {
+      method: 'PUT',
+      body: JSON.stringify({ auto_execute: _autoExec, commands: _cannedCommands })
+    });
+  } catch (err) {
+    showNotification('Failed to save commands: ' + err.message, 'error');
+  }
+}
+
+function renderCannedCommandsGrid() {
+  const grid = document.getElementById('quickcmds-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  if (_cannedCommands.length === 0) {
+    grid.innerHTML = '<span class="quickcmds-empty">No commands configured yet. Add one below.</span>';
+    return;
+  }
+  _cannedCommands.forEach((item, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'quickcmd-btn';
+    btn.title = item.cmd;
+    btn.textContent = item.cmd_name || item.cmd.substring(0, 25);
+    btn.addEventListener('click', () => triggerCannedCommand(idx));
+    grid.appendChild(btn);
+  });
+}
+
+function renderCannedCommandsTable() {
+  const tbody = document.getElementById('quickcmds-list');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (_cannedCommands.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-message">No commands yet.</td></tr>';
+    return;
+  }
+  _cannedCommands.forEach((item, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(item.cmd_name)}</td>
+      <td class="cmd-text">${escapeHtml(item.cmd)}</td>
+      <td class="actions-cell">
+        <button class="btn btn-small" onclick="openAddCmdModal(${idx})">Edit</button>
+        <button class="btn btn-danger btn-small" onclick="deleteCannedCommand(${idx})">Delete</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function triggerCannedCommand(idx) {
+  const item = _cannedCommands[idx];
+  if (!item) return;
+  const input = document.getElementById('terminal-input');
+  if (_autoExec) {
+    // Auto-send directly
+    sendCommand(item.cmd);
+  } else {
+    // Fill terminal input
+    if (input) {
+      input.value = item.cmd;
+      input.focus();
+    }
+    // Switch to terminal tab so user can see the filled prompt
+    switchTab('terminal');
+  }
+}
+
+function onAutoExecToggle() {
+  const toggle = document.getElementById('quickcmds-autoexec');
+  _autoExec = toggle ? toggle.checked : false;
+  updateAutoExecHint();
+  saveCannedCommandsToServer();
+}
+
+function updateAutoExecHint() {
+  const hint = document.getElementById('quickcmds-autoexec-hint');
+  if (!hint) return;
+  hint.textContent = _autoExec
+    ? 'On — clicking a button sends the command immediately'
+    : 'Off — clicks fill the terminal prompt';
+}
+
+function openAddCmdModal(editIdx = -1) {
+  document.getElementById('addcmd-index').value = editIdx;
+  if (editIdx >= 0 && editIdx < _cannedCommands.length) {
+    const item = _cannedCommands[editIdx];
+    document.getElementById('addcmd-modal-title').textContent = '✏️ Edit Command';
+    document.getElementById('addcmd-name').value = item.cmd_name;
+    document.getElementById('addcmd-cmd').value = item.cmd;
+  } else {
+    document.getElementById('addcmd-modal-title').textContent = '➕ Add Command';
+    document.getElementById('addcmd-name').value = '';
+    document.getElementById('addcmd-cmd').value = '';
+  }
+  document.getElementById('addcmd-modal').style.display = 'flex';
+  document.getElementById('addcmd-name').focus();
+}
+
+function closeAddCmdModal() {
+  document.getElementById('addcmd-modal').style.display = 'none';
+}
+
+async function saveAddCmdModal() {
+  const editIdx = parseInt(document.getElementById('addcmd-index').value, 10);
+  const rawName = document.getElementById('addcmd-name').value.trim();
+  const cmd = document.getElementById('addcmd-cmd').value.trim();
+
+  if (!rawName) { showNotification('Button name is required', 'error'); return; }
+  if (!cmd) { showNotification('Command is required', 'error'); return; }
+
+  const cmd_name = rawName.substring(0, 25);
+
+  if (editIdx >= 0 && editIdx < _cannedCommands.length) {
+    _cannedCommands[editIdx] = { cmd_name, cmd };
+  } else {
+    _cannedCommands.push({ cmd_name, cmd });
+  }
+
+  closeAddCmdModal();
+  renderCannedCommandsGrid();
+  renderCannedCommandsTable();
+  await saveCannedCommandsToServer();
+  showNotification('Command saved', 'success');
+}
+
+async function deleteCannedCommand(idx) {
+  if (!confirm('Delete this command?')) return;
+  _cannedCommands.splice(idx, 1);
+  renderCannedCommandsGrid();
+  renderCannedCommandsTable();
+  await saveCannedCommandsToServer();
+}
 

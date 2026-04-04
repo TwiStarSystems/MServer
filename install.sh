@@ -206,6 +206,61 @@ EOF
 
 
 
+# Install the newest available Java JRE (21+)
+# Tries standard apt packages first (25 → 21), then falls back to Eclipse
+# Temurin (Adoptium) — the official OpenJDK distribution for newer versions.
+install_java() {
+    JAVA_PKG=""
+
+    print_info "Searching for latest Java in system repositories..."
+    for version in 25 24 23 22 21; do
+        if apt-cache show "openjdk-${version}-jre-headless" >/dev/null 2>&1; then
+            JAVA_PKG="openjdk-${version}-jre-headless"
+            break
+        fi
+    done
+
+    if [ -n "$JAVA_PKG" ]; then
+        print_info "Installing $JAVA_PKG from system packages..."
+        apt-get install -y "$JAVA_PKG"
+    else
+        print_info "Java 21+ not found in system repos. Adding Eclipse Temurin (Adoptium) repository..."
+        apt-get install -y wget apt-transport-https gnupg
+
+        # Import Adoptium GPG key
+        wget -qO /tmp/adoptium.gpg "https://packages.adoptium.net/artifactory/api/gpg/key/public"
+        gpg --batch --dearmor -o /etc/apt/trusted.gpg.d/adoptium.gpg /tmp/adoptium.gpg
+        rm -f /tmp/adoptium.gpg
+
+        # Add Adoptium apt repository for the current distro codename
+        DISTRO_CODENAME=$(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release)
+        echo "deb https://packages.adoptium.net/artifactory/deb ${DISTRO_CODENAME} main" \
+            | tee /etc/apt/sources.list.d/adoptium.list
+        apt-get update
+
+        # Try Temurin JRE packages newest first
+        for version in 25 24 23 22 21; do
+            if apt-cache show "temurin-${version}-jre" >/dev/null 2>&1; then
+                JAVA_PKG="temurin-${version}-jre"
+                break
+            fi
+        done
+
+        if [ -n "$JAVA_PKG" ]; then
+            print_info "Installing $JAVA_PKG from Eclipse Temurin..."
+            apt-get install -y "$JAVA_PKG"
+        else
+            print_warning "Could not find Java 21+ via Temurin. Installing system default Java."
+            apt-get install -y default-jre-headless
+        fi
+    fi
+
+    # If multiple Java versions are installed, make the newest the system default
+    if command -v update-java-alternatives >/dev/null 2>&1; then
+        update-java-alternatives --set "$(update-java-alternatives --list | sort -t' ' -k3 -rV | head -1 | awk '{print $1}')" 2>/dev/null || true
+    fi
+}
+
 # Install system dependencies
 install_dependencies() {
     print_info "Updating system packages..."
@@ -213,16 +268,9 @@ install_dependencies() {
     apt-get upgrade -y
 
     print_info "Installing required packages..."
-    # Install Java - try different versions based on availability
-    if apt-cache show openjdk-21-jre-headless >/dev/null 2>&1; then
-        JAVA_PKG="openjdk-21-jre-headless"
-    elif apt-cache show openjdk-17-jre-headless >/dev/null 2>&1; then
-        JAVA_PKG="openjdk-17-jre-headless"
-    else
-        JAVA_PKG="default-jre-headless"
-    fi
-    
-    apt-get install -y curl wget git "$JAVA_PKG" python3 python3-pip python3-venv
+    apt-get install -y curl wget git python3 python3-pip python3-venv
+
+    install_java
 
     echo ""
     print_success "Dependencies installed"

@@ -95,6 +95,7 @@
 
         <nav class="tabs">
           <button class="tab-button active" data-tab="terminal">Terminal</button>
+          <button class="tab-button" data-tab="quickcmds">Quick Commands</button>
           <button class="tab-button" data-tab="logs">Logs</button>
           <button class="tab-button" data-tab="files">Files</button>
           <button class="tab-button" data-tab="mods" id="mods-tab-btn" style="display: none;">Mods</button>
@@ -116,9 +117,53 @@
           </div>
         </div>
 
+        <!-- Quick Commands Tab -->
+        <div id="quickcmds-tab" class="tab-content">
+          <div class="quickcmds-container">
+            <div class="quickcmds-header">
+              <div class="quickcmds-title-row">
+                <h3>⚡ Quick Commands</h3>
+                <div class="quickcmds-toggle-row">
+                  <label class="quickcmds-toggle-label" for="quickcmds-autoexec">Auto-Execute</label>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="quickcmds-autoexec" onchange="onAutoExecToggle()">
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="quickcmds-toggle-hint" id="quickcmds-autoexec-hint">Off — clicks fill the terminal prompt</span>
+                </div>
+              </div>
+              <p class="quickcmds-info">Click a button to load or send a canned command. Use the editor below to manage your list.</p>
+            </div>
+
+            <div class="quickcmds-buttons-section">
+              <div id="quickcmds-grid" class="quickcmds-grid">
+                <span class="quickcmds-empty">No commands configured yet. Add one below.</span>
+              </div>
+            </div>
+
+            <div class="quickcmds-editor">
+              <div class="quickcmds-editor-header">
+                <h4>Manage Commands</h4>
+                <button class="btn btn-success btn-small" onclick="openAddCmdModal()">+ Add Command</button>
+              </div>
+              <table class="quickcmds-table">
+                <thead>
+                  <tr>
+                    <th>Button Name</th>
+                    <th>Command</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="quickcmds-list">
+                  <tr><td colspan="3" class="empty-message">No commands yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <!-- Logs Tab -->
         <div id="logs-tab" class="tab-content">
-          <div class="terminal-container">
             <div class="logs-controls">
               <button id="refresh-logs-btn" class="btn btn-small">Refresh</button>
               <button id="clear-logs-view-btn" class="btn btn-small">Clear View</button>
@@ -1254,6 +1299,31 @@
       </div>
     </div>
     
+    <!-- Add / Edit Canned Command Modal -->
+    <div id="addcmd-modal" class="modal" style="display: none;">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2 id="addcmd-modal-title">➕ Add Command</h2>
+          <button class="btn-icon modal-close" onclick="closeAddCmdModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="addcmd-index" value="-1">
+          <div class="form-group">
+            <label for="addcmd-name">Button Name <small style="color:var(--color-muted)">(max 25 chars)</small></label>
+            <input type="text" id="addcmd-name" class="form-control" maxlength="25" placeholder="e.g. Say Hello">
+          </div>
+          <div class="form-group">
+            <label for="addcmd-cmd">Minecraft Command</label>
+            <input type="text" id="addcmd-cmd" class="form-control" placeholder="e.g. say Hello World!">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="saveAddCmdModal()">Save</button>
+          <button class="btn" onclick="closeAddCmdModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- User Profile Settings Modal -->
     <!-- VERSION 2.0 - MFA Enabled -->
     <div id="profile-modal" class="modal" style="display: none;">

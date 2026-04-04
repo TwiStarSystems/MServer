@@ -2695,6 +2695,9 @@ class ServerManager:
         # Create managed.conf file
         self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner, version=version)
         
+        # Create canned_commands.conf so the server dir has it from the start
+        self._ensure_canned_commands_conf(server_dir)
+        
         self.config['servers'][server_id] = {
             'name': name,
             'serverPath': str(server_dir),
@@ -3077,6 +3080,9 @@ class ServerManager:
             if not executable_path.exists():
                 return False, f"Server executable '{executable}' not found"
             
+            # Ensure canned_commands.conf exists (create if missing for older servers)
+            self._ensure_canned_commands_conf(server_path)
+
             try:
                 instance = ServerInstance(server_id, server_path, executable, java_args, is_bedrock=is_bedrock)
                 instance.start()
@@ -3155,6 +3161,13 @@ class ServerManager:
                 ports[server_id] = port
         return ports
     
+    def _ensure_canned_commands_conf(self, server_dir):
+        """Create canned_commands.conf in server_dir if it does not already exist."""
+        conf_path = Path(server_dir) / 'canned_commands.conf'
+        if not conf_path.exists():
+            default = {'auto_execute': False, 'commands': []}
+            conf_path.write_text(json.dumps(default, indent=2), encoding='utf-8')
+
     def get_server_path(self, server_id):
         """Get the path for a specific server"""
         server_config = self.get_server_config(server_id)
@@ -4712,6 +4725,51 @@ def update_managed_conf(server_id):
     server_manager._write_managed_conf(server_dir, managed_conf)
     
     return jsonify({'success': True, 'message': 'Configuration updated'})
+
+
+# ==================== Canned Commands API ====================
+
+@app.route('/api/servers/<server_id>/canned-commands', methods=['GET'])
+@server_access_required
+def get_canned_commands(server_id):
+    """Return the canned_commands.conf for a server, creating it if missing."""
+    server_path = server_manager.get_server_path(server_id)
+    conf_path = server_path / 'canned_commands.conf'
+    server_manager._ensure_canned_commands_conf(server_path)
+    try:
+        data = json.loads(conf_path.read_text(encoding='utf-8'))
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/canned-commands', methods=['PUT'])
+@server_access_required
+def save_canned_commands(server_id):
+    """Save (overwrite) the canned_commands.conf for a server."""
+    server_path = server_manager.get_server_path(server_id)
+    body = request.get_json()
+    if body is None:
+        return jsonify({'error': 'Invalid JSON'}), 400
+
+    auto_execute = bool(body.get('auto_execute', False))
+    raw_commands = body.get('commands', [])
+
+    # Sanitise each command entry
+    commands = []
+    for item in raw_commands:
+        cmd_name = str(item.get('cmd_name', '')).strip()[:25]
+        cmd = str(item.get('cmd', '')).strip()
+        if cmd_name and cmd:
+            commands.append({'cmd_name': cmd_name, 'cmd': cmd})
+
+    conf_data = {'auto_execute': auto_execute, 'commands': commands}
+    conf_path = server_path / 'canned_commands.conf'
+    try:
+        conf_path.write_text(json.dumps(conf_data, indent=2), encoding='utf-8')
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/servers/<server_id>/change-version', methods=['POST'])
 @server_access_required
