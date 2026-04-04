@@ -409,13 +409,20 @@ body {
 
 .tab-content {
   display: none;
-  flex: 1;
   padding: 20px;
-  overflow: auto;
 }
 
 .tab-content.active {
   display: block;
+}
+
+/* Terminal tab needs flex-column so the quick-cmd grid sits below the terminal */
+#terminal-tab.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0;
+  overflow: hidden;
 }
 
 /* ==================== Buttons ==================== */
@@ -481,6 +488,12 @@ body {
   max-height: 800px;
   display: flex;
   flex-direction: column;
+}
+
+/* When the terminal tab also shows the quick-cmd grid, shrink the terminal slightly */
+#terminal-tab > .terminal-container {
+  height: calc(100vh - 280px);
+  max-height: 730px;
 }
 
 .terminal {
@@ -6484,6 +6497,17 @@ select.form-control:disabled {
   min-height: 70px;
 }
 
+/* When the grid sits directly inside the Terminal tab, tighten it up */
+.quickcmds-buttons-terminal {
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 10px 12px;
+  min-height: unset;
+}
+
 .quickcmds-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -6521,6 +6545,13 @@ select.form-control:disabled {
 
 .quickcmd-btn:active {
   transform: translateY(0);
+}
+
+.quickcmd-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+  filter: grayscale(60%);
 }
 
 @media (max-width: 900px) {

@@ -115,6 +115,11 @@
               <button id="send-btn" class="btn" disabled>Send</button>
             </div>
           </div>
+          <div class="quickcmds-buttons-section quickcmds-buttons-terminal">
+            <div id="quickcmds-grid" class="quickcmds-grid">
+              <span class="quickcmds-empty">No quick commands configured. Set them up in the Quick Commands tab.</span>
+            </div>
+          </div>
         </div>
 
         <!-- Quick Commands Tab -->
@@ -133,12 +138,6 @@
                 </div>
               </div>
               <p class="quickcmds-info">Click a button to load or send a canned command. Use the editor below to manage your list.</p>
-            </div>
-
-            <div class="quickcmds-buttons-section">
-              <div id="quickcmds-grid" class="quickcmds-grid">
-                <span class="quickcmds-empty">No commands configured yet. Add one below.</span>
-              </div>
             </div>
 
             <div class="quickcmds-editor">
@@ -164,6 +163,7 @@
 
         <!-- Logs Tab -->
         <div id="logs-tab" class="tab-content">
+          <div class="terminal-container">
             <div class="logs-controls">
               <button id="refresh-logs-btn" class="btn btn-small">Refresh</button>
               <button id="clear-logs-view-btn" class="btn btn-small">Clear View</button>

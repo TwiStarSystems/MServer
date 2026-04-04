@@ -750,8 +750,15 @@ function updateServerStatus(status, isRunning) {
   killBtn.disabled = !canKill;
   terminalInput.disabled = !canCommand;
   sendBtn.disabled = !canCommand;
-  
-  // Update server in list
+
+  // Gray out quick command buttons when server is not running
+  const quickcmdsGrid = document.getElementById('quickcmds-grid');
+  if (quickcmdsGrid) {
+    quickcmdsGrid.dataset.serverRunning = canCommand ? 'true' : 'false';
+    quickcmdsGrid.querySelectorAll('.quickcmd-btn').forEach(btn => {
+      btn.disabled = !canCommand;
+    });
+  }
   updateServerInList(currentServerId, isRunning, status);
 }
 
@@ -3859,6 +3866,8 @@ function switchTab(tabName) {
     loadResourcePack();
   } else if (tabName === 'quickcmds') {
     loadCannedCommands();
+  } else if (tabName === 'terminal') {
+    loadCannedCommands();
   }
 }
 
@@ -5422,9 +5431,10 @@ async function saveCannedCommandsToServer() {
 function renderCannedCommandsGrid() {
   const grid = document.getElementById('quickcmds-grid');
   if (!grid) return;
+  const serverRunning = grid.dataset.serverRunning === 'true';
   grid.innerHTML = '';
   if (_cannedCommands.length === 0) {
-    grid.innerHTML = '<span class="quickcmds-empty">No commands configured yet. Add one below.</span>';
+    grid.innerHTML = '<span class="quickcmds-empty">No quick commands configured. Set them up in the Quick Commands tab.</span>';
     return;
   }
   _cannedCommands.forEach((item, idx) => {
@@ -5432,6 +5442,7 @@ function renderCannedCommandsGrid() {
     btn.className = 'quickcmd-btn';
     btn.title = item.cmd;
     btn.textContent = item.cmd_name || item.cmd.substring(0, 25);
+    btn.disabled = !serverRunning;
     btn.addEventListener('click', () => triggerCannedCommand(idx));
     grid.appendChild(btn);
   });
