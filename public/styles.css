@@ -6660,3 +6660,149 @@ select.form-control:disabled {
   gap: 6px;
   white-space: nowrap;
 }
+
+/* ==================== World Map (BlueMap) Tab ==================== */
+
+.worldmap-container {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.worldmap-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.worldmap-header h3 {
+  margin: 0;
+}
+
+.worldmap-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.worldmap-info {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.worldmap-info a {
+  color: var(--color-secondary);
+}
+
+/* Setup card */
+.bluemap-setup {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.bluemap-setup-card {
+  text-align: center;
+  background: rgba(15, 52, 96, 0.3);
+  border: 1px solid var(--color-border);
+  padding: 40px 50px;
+  max-width: 420px;
+}
+
+.bluemap-setup-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+}
+
+.bluemap-setup-card h4 {
+  margin: 0 0 8px;
+  font-size: 1.2rem;
+}
+
+.bluemap-setup-card p {
+  color: var(--color-muted);
+  margin: 0 0 20px;
+  font-size: 0.9rem;
+}
+
+/* Status card */
+.bluemap-status-card {
+  background: rgba(15, 52, 96, 0.3);
+  border: 1px solid var(--color-border);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bluemap-status-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.bluemap-status-label {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  min-width: 120px;
+}
+
+.bluemap-status-value {
+  font-size: 0.9rem;
+}
+
+.bluemap-render-progress .progress-bar {
+  margin-top: 6px;
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  overflow: hidden;
+}
+
+.bluemap-render-progress .progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  transition: width 0.3s;
+}
+
+/* Viewer */
+.bluemap-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 500px;
+}
+
+.bluemap-viewer-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bluemap-iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 480px;
+  border: 1px solid var(--color-border);
+  background: #000;
+}
+
+/* Empty state */
+.bluemap-empty {
+  text-align: center;
+  padding: 40px 0;
+  color: var(--color-muted);
+}
+
+.bluemap-empty p {
+  margin: 6px 0;
+}
+
+.bluemap-hint {
+  font-size: 0.85rem;
+  color: var(--color-gold);
+}

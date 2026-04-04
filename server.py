@@ -36,7 +36,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
-from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
+from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for, make_response
 from flask_socketio import SocketIO, emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -7857,6 +7857,295 @@ def delete_downloaded_jar_legacy():
         return jsonify({'success': True, 'message': f'Deleted {filename}'})
     except Exception as e:
         return jsonify({'error': f'Failed to delete: {str(e)}'}), 500
+
+
+# ==================== BlueMap (World Map) API ====================
+
+BLUEMAP_DIR = TOOLS_DIR / 'bluemap'
+BLUEMAP_JAR = BLUEMAP_DIR / 'bluemap-cli.jar'
+BLUEMAP_DOWNLOAD_URL = 'https://github.com/BlueMap-Minecraft/BlueMap/releases/latest/download/bluemap-cli.jar'
+
+# Track active render processes per server
+_bluemap_renders = {}  # server_id -> { process, started, status }
+
+
+def _get_bluemap_config_dir(server_id):
+    """Get the BlueMap config directory for a server"""
+    server_path = server_manager.get_server_path(server_id)
+    return server_path / 'bluemap-config'
+
+
+def _get_bluemap_web_dir(server_id):
+    """Get the BlueMap web output directory for a server"""
+    server_path = server_manager.get_server_path(server_id)
+    return server_path / 'bluemap' / 'web'
+
+
+def _bluemap_is_installed():
+    """Check if the BlueMap CLI JAR exists"""
+    return BLUEMAP_JAR.exists()
+
+
+def _get_bluemap_version():
+    """Get BlueMap version from the JAR filename pattern or by running --version"""
+    if not _bluemap_is_installed():
+        return None
+    try:
+        result = subprocess.run(
+            ['java', '-jar', str(BLUEMAP_JAR), '--version'],
+            capture_output=True, text=True, timeout=15
+        )
+        output = (result.stdout + result.stderr).strip()
+        # BlueMap prints version info on stdout
+        for line in output.splitlines():
+            line = line.strip()
+            if line and any(c.isdigit() for c in line):
+                return line
+        return 'Installed'
+    except Exception:
+        return 'Installed'
+
+
+def _bluemap_has_map_data(server_id):
+    """Check if any rendered map data exists for this server"""
+    web_dir = _get_bluemap_web_dir(server_id)
+    maps_dir = web_dir / 'maps'
+    if not maps_dir.exists():
+        return False
+    # Check if any map subdirectory has hires data
+    for item in maps_dir.iterdir():
+        if item.is_dir():
+            return True
+    return False
+
+
+def _bluemap_last_render_time(server_id):
+    """Get the last render timestamp"""
+    config_dir = _get_bluemap_config_dir(server_id)
+    marker_file = config_dir / '.last_render'
+    if marker_file.exists():
+        try:
+            ts = marker_file.read_text().strip()
+            dt = datetime.fromisoformat(ts)
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            pass
+    return None
+
+
+def _bluemap_generate_configs(server_id):
+    """Run BlueMap once with -c to generate default configs, then patch world paths"""
+    config_dir = _get_bluemap_config_dir(server_id)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    server_path = server_manager.get_server_path(server_id)
+
+    # Generate default configs
+    subprocess.run(
+        ['java', '-jar', str(BLUEMAP_JAR), '-c', str(config_dir)],
+        capture_output=True, text=True, timeout=30,
+        cwd=str(server_path)
+    )
+
+    # Accept the download in core.conf
+    core_conf = config_dir / 'core.conf'
+    if core_conf.exists():
+        content = core_conf.read_text()
+        content = content.replace('accept-download: false', 'accept-download: true')
+        core_conf.write_text(content)
+
+    # Set webserver to disabled (we serve via Flask)
+    webserver_conf = config_dir / 'webserver.conf'
+    if webserver_conf.exists():
+        content = webserver_conf.read_text()
+        content = content.replace('enabled: true', 'enabled: false')
+        webserver_conf.write_text(content)
+
+    # Point webapp.conf webroot to our output dir
+    webapp_conf = config_dir / 'webapp.conf'
+    web_dir = _get_bluemap_web_dir(server_id)
+    if webapp_conf.exists():
+        content = webapp_conf.read_text()
+        content = re.sub(
+            r'webroot\s*:\s*"[^"]*"',
+            f'webroot: "{str(web_dir)}"',
+            content
+        )
+        webapp_conf.write_text(content)
+
+    # Point file storage root to web/maps
+    file_conf = config_dir / 'storages' / 'file.conf'
+    if file_conf.exists():
+        content = file_conf.read_text()
+        content = re.sub(
+            r'root\s*:\s*"[^"]*"',
+            f'root: "{str(web_dir / "maps")}"',
+            content
+        )
+        file_conf.write_text(content)
+
+    # Patch map configs to point to the correct world directory
+    maps_conf_dir = config_dir / 'maps'
+    if maps_conf_dir.exists():
+        world_dir = server_path / 'world'
+        for map_conf in maps_conf_dir.glob('*.conf'):
+            content = map_conf.read_text()
+            content = re.sub(
+                r'world\s*:\s*"[^"]*"',
+                f'world: "{str(world_dir)}"',
+                content
+            )
+            map_conf.write_text(content)
+
+
+def _run_bluemap_render(server_id, force=False):
+    """Run BlueMap render in background thread"""
+    config_dir = _get_bluemap_config_dir(server_id)
+    server_path = server_manager.get_server_path(server_id)
+
+    cmd = ['java', '-jar', str(BLUEMAP_JAR), '-c', str(config_dir), '-r', '-g']
+    if force:
+        cmd.append('-f')
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(server_path)
+        )
+        _bluemap_renders[server_id] = {
+            'process': process,
+            'started': datetime.now().isoformat(),
+            'status': 'Rendering...',
+            'progress': 0
+        }
+
+        # Read output for progress
+        for line in iter(process.stdout.readline, ''):
+            line = line.strip()
+            if not line:
+                continue
+            # Try to parse progress from BlueMap output
+            _bluemap_renders[server_id]['status'] = line[-120:] if len(line) > 120 else line
+            # Look for percentage patterns
+            pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', line)
+            if pct_match:
+                _bluemap_renders[server_id]['progress'] = min(float(pct_match.group(1)), 100)
+
+        process.wait()
+
+        # Mark completion
+        marker_file = config_dir / '.last_render'
+        marker_file.write_text(datetime.now().isoformat())
+
+    except Exception as e:
+        print(f'[BlueMap] Render error for {server_id}: {e}')
+    finally:
+        _bluemap_renders.pop(server_id, None)
+
+
+@app.route('/api/servers/<server_id>/bluemap/status', methods=['GET'])
+@server_access_required
+def bluemap_status(server_id):
+    """Get BlueMap status for a server"""
+    installed = _bluemap_is_installed()
+    rendering = server_id in _bluemap_renders
+    render_info = _bluemap_renders.get(server_id, {})
+
+    return jsonify({
+        'installed': installed,
+        'version': _get_bluemap_version() if installed else None,
+        'hasMapData': _bluemap_has_map_data(server_id) if installed else False,
+        'lastRender': _bluemap_last_render_time(server_id),
+        'rendering': rendering,
+        'renderStatus': render_info.get('status', ''),
+        'renderProgress': render_info.get('progress', 0)
+    })
+
+
+@app.route('/api/servers/<server_id>/bluemap/setup', methods=['POST'])
+@server_access_required
+def bluemap_setup(server_id):
+    """Download BlueMap CLI JAR and generate initial configs"""
+    BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not BLUEMAP_JAR.exists():
+        try:
+            resp = requests.get(BLUEMAP_DOWNLOAD_URL, stream=True, timeout=120)
+            resp.raise_for_status()
+            with open(BLUEMAP_JAR, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        except Exception as e:
+            return jsonify({'error': f'Failed to download BlueMap: {str(e)}'}), 500
+
+    # Generate configs for this server
+    try:
+        _bluemap_generate_configs(server_id)
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate configs: {str(e)}'}), 500
+
+    return jsonify({'success': True, 'message': 'BlueMap installed and configured'})
+
+
+@app.route('/api/servers/<server_id>/bluemap/render', methods=['POST'])
+@server_access_required
+def bluemap_render(server_id):
+    """Start a BlueMap render for this server"""
+    if not _bluemap_is_installed():
+        return jsonify({'error': 'BlueMap is not installed. Run setup first.'}), 400
+
+    if server_id in _bluemap_renders:
+        return jsonify({'error': 'A render is already in progress for this server'}), 409
+
+    # Ensure configs exist
+    config_dir = _get_bluemap_config_dir(server_id)
+    if not config_dir.exists():
+        _bluemap_generate_configs(server_id)
+
+    data = request.get_json(silent=True) or {}
+    force = data.get('force', False)
+
+    # Start render in background thread
+    thread = threading.Thread(
+        target=_run_bluemap_render,
+        args=(server_id,),
+        kwargs={'force': force},
+        daemon=True
+    )
+    thread.start()
+
+    return jsonify({'success': True, 'message': 'Render started'})
+
+
+@app.route('/api/servers/<server_id>/bluemap/viewer/', defaults={'path': 'index.html'}, methods=['GET'])
+@app.route('/api/servers/<server_id>/bluemap/viewer/<path:path>', methods=['GET'])
+@server_access_required
+def bluemap_viewer(server_id, path):
+    """Serve BlueMap web viewer files"""
+    web_dir = _get_bluemap_web_dir(server_id)
+
+    if not web_dir.exists():
+        return jsonify({'error': 'No map data available'}), 404
+
+    # Security: prevent directory traversal
+    if not is_safe_path(str(web_dir), str(web_dir / path)):
+        return jsonify({'error': 'Invalid path'}), 403
+
+    full_path = web_dir / path
+    if full_path.is_file():
+        return send_from_directory(str(web_dir), path)
+
+    # Try with .gz extension (BlueMap stores tiles gzipped)
+    gz_path = web_dir / (path + '.gz')
+    if gz_path.is_file():
+        response = make_response(send_from_directory(str(web_dir), path + '.gz'))
+        response.headers['Content-Encoding'] = 'gzip'
+        return response
+
+    return jsonify({'error': 'File not found'}), 404
 
 
 # ==================== Tools API ====================

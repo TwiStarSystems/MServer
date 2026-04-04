@@ -104,6 +104,7 @@
           <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
           <button class="tab-button" data-tab="tasks">Tasks</button>
+          <button class="tab-button" data-tab="worldmap" id="worldmap-tab-btn">World Map</button>
         </nav>
 
         <!-- Terminal Tab -->
@@ -505,6 +506,73 @@
                 <tr><td colspan="8" class="empty-message">No tasks configured</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- World Map Tab -->
+        <div id="worldmap-tab" class="tab-content">
+          <div class="worldmap-container">
+            <div class="worldmap-header">
+              <h3>🗺️ World Map</h3>
+              <div class="worldmap-actions">
+                <button id="bluemap-render-btn" class="btn btn-success" onclick="startBlueMapRender()">Render Map</button>
+                <button id="bluemap-render-full-btn" class="btn btn-primary" onclick="startBlueMapRender(true)">Full Re-render</button>
+                <button id="bluemap-refresh-btn" class="btn" onclick="loadBlueMapStatus()">Refresh Status</button>
+              </div>
+            </div>
+            <p class="worldmap-info">Interactive 3D world map powered by <a href="https://bluemap.bluecolored.de/" target="_blank" rel="noopener">BlueMap</a>. Renders your Minecraft world into a browsable 3D map with surface models.</p>
+
+            <!-- Setup Required State -->
+            <div id="bluemap-setup" class="bluemap-setup" style="display: none;">
+              <div class="bluemap-setup-card">
+                <div class="bluemap-setup-icon">🗺️</div>
+                <h4>BlueMap Not Installed</h4>
+                <p>BlueMap CLI needs to be downloaded and configured before you can render maps.</p>
+                <button class="btn btn-success" onclick="setupBlueMap()">Install BlueMap</button>
+              </div>
+            </div>
+
+            <!-- Status / Render Progress -->
+            <div id="bluemap-status" class="bluemap-status" style="display: none;">
+              <div class="bluemap-status-card">
+                <div class="bluemap-status-row">
+                  <span class="bluemap-status-label">Status:</span>
+                  <span id="bluemap-status-text" class="bluemap-status-value">Checking...</span>
+                </div>
+                <div class="bluemap-status-row">
+                  <span class="bluemap-status-label">Last Render:</span>
+                  <span id="bluemap-last-render" class="bluemap-status-value">Never</span>
+                </div>
+                <div class="bluemap-status-row">
+                  <span class="bluemap-status-label">BlueMap Version:</span>
+                  <span id="bluemap-version" class="bluemap-status-value">-</span>
+                </div>
+                <div id="bluemap-render-progress" class="bluemap-render-progress" style="display: none;">
+                  <div class="bluemap-status-row">
+                    <span class="bluemap-status-label">Rendering:</span>
+                    <span id="bluemap-render-status" class="bluemap-status-value">In Progress...</span>
+                  </div>
+                  <div class="progress-bar">
+                    <div id="bluemap-progress-fill" class="progress-fill" style="width: 0%;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Map Viewer (iframe) -->
+            <div id="bluemap-viewer" class="bluemap-viewer" style="display: none;">
+              <div class="bluemap-viewer-controls">
+                <button class="btn btn-small" onclick="openBlueMapFullscreen()">⛶ Fullscreen</button>
+                <a id="bluemap-external-link" href="#" target="_blank" rel="noopener" class="btn btn-small">↗ Open in New Tab</a>
+              </div>
+              <iframe id="bluemap-iframe" class="bluemap-iframe" src="" frameborder="0" allowfullscreen></iframe>
+            </div>
+
+            <!-- No Map Data State -->
+            <div id="bluemap-empty" class="bluemap-empty" style="display: none;">
+              <p>No map data yet. Click <strong>Render Map</strong> to generate your world map.</p>
+              <p class="bluemap-hint">⚠️ The Minecraft server should be <strong>stopped</strong> during rendering for best results, though it can work while running.</p>
+            </div>
           </div>
         </div>
       </div>

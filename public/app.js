@@ -3868,6 +3868,143 @@ function switchTab(tabName) {
     loadCannedCommands();
   } else if (tabName === 'terminal') {
     loadCannedCommands();
+  } else if (tabName === 'worldmap') {
+    loadBlueMapStatus();
+  }
+}
+
+// ==================== World Map (BlueMap) ====================
+
+let _blueMapPollTimer = null;
+
+async function loadBlueMapStatus() {
+  if (!currentServerId) return;
+
+  const setupEl = document.getElementById('bluemap-setup');
+  const statusEl = document.getElementById('bluemap-status');
+  const viewerEl = document.getElementById('bluemap-viewer');
+  const emptyEl = document.getElementById('bluemap-empty');
+
+  // Hide all sections while loading
+  setupEl.style.display = 'none';
+  statusEl.style.display = 'none';
+  viewerEl.style.display = 'none';
+  emptyEl.style.display = 'none';
+
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/bluemap/status`);
+
+    if (!data.installed) {
+      setupEl.style.display = 'block';
+      return;
+    }
+
+    // Show status card
+    statusEl.style.display = 'block';
+    document.getElementById('bluemap-version').textContent = data.version || 'Unknown';
+    document.getElementById('bluemap-last-render').textContent = data.lastRender || 'Never';
+    document.getElementById('bluemap-status-text').textContent = data.rendering ? 'Rendering...' : 'Ready';
+
+    // Show render progress if active
+    const progressEl = document.getElementById('bluemap-render-progress');
+    if (data.rendering) {
+      progressEl.style.display = 'block';
+      document.getElementById('bluemap-render-status').textContent = data.renderStatus || 'In Progress...';
+      document.getElementById('bluemap-progress-fill').style.width = (data.renderProgress || 0) + '%';
+      // Poll for updates
+      startBlueMapPoll();
+    } else {
+      progressEl.style.display = 'none';
+      stopBlueMapPoll();
+    }
+
+    // Show viewer if map data exists
+    if (data.hasMapData) {
+      viewerEl.style.display = 'block';
+      const viewerUrl = `/api/servers/${currentServerId}/bluemap/viewer/`;
+      const iframe = document.getElementById('bluemap-iframe');
+      // Only update src if it changed to avoid reloading
+      if (!iframe.src.includes(viewerUrl)) {
+        iframe.src = viewerUrl;
+      }
+      const extLink = document.getElementById('bluemap-external-link');
+      extLink.href = viewerUrl;
+    } else {
+      emptyEl.style.display = 'block';
+    }
+  } catch (err) {
+    setupEl.style.display = 'block';
+    console.error('BlueMap status error:', err);
+  }
+}
+
+async function setupBlueMap() {
+  if (!currentServerId) return;
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Installing...';
+
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/bluemap/setup`, { method: 'POST' });
+    showNotification(result.message || 'BlueMap installed successfully', 'success');
+    await loadBlueMapStatus();
+  } catch (err) {
+    showNotification('Failed to install BlueMap: ' + (err.message || err), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Install BlueMap';
+  }
+}
+
+async function startBlueMapRender(forceFullRender = false) {
+  if (!currentServerId) return;
+
+  const btnId = forceFullRender ? 'bluemap-render-full-btn' : 'bluemap-render-btn';
+  const btn = document.getElementById(btnId);
+  btn.disabled = true;
+
+  try {
+    const body = JSON.stringify({ force: forceFullRender });
+    const result = await apiRequest(`/api/servers/${currentServerId}/bluemap/render`, {
+      method: 'POST',
+      body
+    });
+    showNotification(result.message || 'Render started', 'success');
+    await loadBlueMapStatus();
+  } catch (err) {
+    showNotification('Failed to start render: ' + (err.message || err), 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function startBlueMapPoll() {
+  stopBlueMapPoll();
+  _blueMapPollTimer = setInterval(() => {
+    // Only poll if worldmap tab is active
+    const activeTab = document.querySelector('.tab-button.active');
+    if (activeTab && activeTab.dataset.tab === 'worldmap') {
+      loadBlueMapStatus();
+    } else {
+      stopBlueMapPoll();
+    }
+  }, 5000);
+}
+
+function stopBlueMapPoll() {
+  if (_blueMapPollTimer) {
+    clearInterval(_blueMapPollTimer);
+    _blueMapPollTimer = null;
+  }
+}
+
+function openBlueMapFullscreen() {
+  const iframe = document.getElementById('bluemap-iframe');
+  if (iframe.requestFullscreen) {
+    iframe.requestFullscreen();
+  } else if (iframe.webkitRequestFullscreen) {
+    iframe.webkitRequestFullscreen();
   }
 }
 
