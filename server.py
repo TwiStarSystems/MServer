@@ -5222,19 +5222,41 @@ def add_operator(server_id):
     """Add a player as operator"""
     data = request.get_json()
     player_name = data.get('name', '').strip()
+    player_uuid = data.get('uuid', '').strip()
     level = data.get('level', 4)
     bypass_limit = data.get('bypassesPlayerLimit', False)
-    
-    if not player_name:
-        return jsonify({'error': 'Player name is required'}), 400
-    
-    # Get UUID from Mojang API
-    uuid, actual_name = get_player_uuid(player_name)
-    if not uuid:
-        return jsonify({'error': f'Could not find player "{player_name}". Make sure the name is correct.'}), 404
-    
+
     server_path = server_manager.get_server_path(server_id)
     ops_file = server_path / 'ops.json'
+
+    uuid = None
+    actual_name = None
+
+    if player_uuid:
+        # UUID provided directly — look up name from usercache.json
+        usercache_file = server_path / 'usercache.json'
+        if usercache_file.exists():
+            try:
+                with open(usercache_file, 'r') as f:
+                    cache = json.load(f)
+                for entry in cache:
+                    if entry.get('uuid') == player_uuid:
+                        actual_name = entry.get('name', player_uuid)
+                        uuid = player_uuid
+                        break
+            except Exception:
+                pass
+        if not uuid:
+            # Not in usercache — use the UUID as-is with whatever name was supplied
+            uuid = player_uuid
+            actual_name = player_name or player_uuid
+    elif player_name:
+        # Name provided — look up UUID from Mojang API
+        uuid, actual_name = get_player_uuid(player_name)
+        if not uuid:
+            return jsonify({'error': f'Could not find player "{player_name}". Make sure the name is correct.'}), 404
+    else:
+        return jsonify({'error': 'Player name or UUID is required'}), 400
     
     try:
         ops = []
@@ -5347,16 +5369,36 @@ def add_to_whitelist(server_id):
     """Add a player to whitelist"""
     data = request.get_json()
     player_name = data.get('name', '').strip()
-    
-    if not player_name:
-        return jsonify({'error': 'Player name is required'}), 400
-    
-    uuid, actual_name = get_player_uuid(player_name)
-    if not uuid:
-        return jsonify({'error': f'Could not find player "{player_name}"'}), 404
-    
+    player_uuid = data.get('uuid', '').strip()
+
     server_path = server_manager.get_server_path(server_id)
     whitelist_file = server_path / 'whitelist.json'
+
+    uuid = actual_name = None
+
+    if player_uuid:
+        # UUID provided directly — look up name from usercache.json
+        usercache_file = server_path / 'usercache.json'
+        if usercache_file.exists():
+            try:
+                with open(usercache_file, 'r') as f:
+                    cache = json.load(f)
+                for entry in cache:
+                    if entry.get('uuid') == player_uuid:
+                        actual_name = entry.get('name', player_uuid)
+                        uuid = player_uuid
+                        break
+            except Exception:
+                pass
+        if not uuid:
+            uuid = player_uuid
+            actual_name = player_name or player_uuid
+    elif player_name:
+        uuid, actual_name = get_player_uuid(player_name)
+        if not uuid:
+            return jsonify({'error': f'Could not find player "{player_name}"'}), 404
+    else:
+        return jsonify({'error': 'Player name or UUID is required'}), 400
     
     try:
         whitelist = []
@@ -5426,17 +5468,37 @@ def ban_player(server_id):
     """Ban a player"""
     data = request.get_json()
     player_name = data.get('name', '').strip()
-    reason = data.get('reason', 'Banned by server administrator')
-    
-    if not player_name:
-        return jsonify({'error': 'Player name is required'}), 400
-    
-    uuid, actual_name = get_player_uuid(player_name)
-    if not uuid:
-        return jsonify({'error': f'Could not find player "{player_name}"'}), 404
-    
+    player_uuid = data.get('uuid', '').strip()
+    reason = data.get('reason', 'Banned By Admin')
+
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
+
+    uuid = actual_name = None
+
+    if player_uuid:
+        # UUID provided directly — look up name from usercache.json
+        usercache_file = server_path / 'usercache.json'
+        if usercache_file.exists():
+            try:
+                with open(usercache_file, 'r') as f:
+                    cache = json.load(f)
+                for entry in cache:
+                    if entry.get('uuid') == player_uuid:
+                        actual_name = entry.get('name', player_uuid)
+                        uuid = player_uuid
+                        break
+            except Exception:
+                pass
+        if not uuid:
+            uuid = player_uuid
+            actual_name = player_name or player_uuid
+    elif player_name:
+        uuid, actual_name = get_player_uuid(player_name)
+        if not uuid:
+            return jsonify({'error': f'Could not find player "{player_name}"'}), 404
+    else:
+        return jsonify({'error': 'Player name or UUID is required'}), 400
     
     try:
         banned = []
@@ -5488,6 +5550,51 @@ def unban_player(server_id, uuid):
             json.dump(banned, f, indent=2)
         
         return jsonify({'success': True, 'message': 'Player unbanned'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/whitelist-status', methods=['GET'])
+@server_access_required
+def get_whitelist_status(server_id):
+    """Return whether whitelist is enabled in server.properties"""
+    server_path = server_manager.get_server_path(server_id)
+    properties_path = server_path / 'server.properties'
+    if not properties_path.exists():
+        return jsonify({'enabled': False, 'available': False})
+    try:
+        with open(properties_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('white-list='):
+                    value = line.split('=', 1)[1].strip().lower()
+                    return jsonify({'enabled': value == 'true', 'available': True})
+        return jsonify({'enabled': False, 'available': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/whitelist-toggle', methods=['PATCH'])
+@server_access_required
+def toggle_whitelist_setting(server_id):
+    """Toggle white-list in server.properties"""
+    server_path = server_manager.get_server_path(server_id)
+    properties_path = server_path / 'server.properties'
+    if not properties_path.exists():
+        return jsonify({'error': 'server.properties not found'}), 404
+    try:
+        lines = []
+        current = False
+        with open(properties_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith('white-list='):
+                    current = stripped.split('=', 1)[1].strip().lower() == 'true'
+                    new_val = 'false' if current else 'true'
+                    lines.append(f'white-list={new_val}\n')
+                else:
+                    lines.append(line)
+        with open(properties_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+        return jsonify({'success': True, 'enabled': not current})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

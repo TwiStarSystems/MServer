@@ -164,11 +164,11 @@
         <!-- Logs Tab -->
         <div id="logs-tab" class="tab-content">
           <div class="terminal-container">
+            <div id="logs-output" class="terminal"></div>
             <div class="logs-controls">
               <button id="refresh-logs-btn" class="btn btn-small">Refresh</button>
               <button id="clear-logs-view-btn" class="btn btn-small">Clear View</button>
             </div>
-            <div id="logs-output" class="terminal"></div>
           </div>
         </div>
 
@@ -380,6 +380,7 @@
                 <button class="btn btn-small" onclick="loadPlayerData()">Refresh</button>
               </div>
               <p class="players-info">Players who have joined the server. Click to edit their NBT data.</p>
+              <p class="players-info players-info-note">⚠️ <strong>Note:</strong> Player data files are only written when a player leaves the server. Data for currently online players may not reflect their current state.</p>
               <table class="players-table">
                 <thead>
                   <tr>
@@ -399,7 +400,10 @@
             <div class="players-section">
               <div class="players-section-header">
                 <h3>📝 Whitelist</h3>
-                <button class="btn btn-small btn-success" onclick="openAddWhitelistModal()">+ Add Player</button>
+                <div class="players-section-actions">
+                  <button id="whitelist-toggle-btn" class="btn btn-small" onclick="toggleWhitelistSetting()" title="Toggle whitelist on/off">⬜ WL: OFF</button>
+                  <button class="btn btn-small btn-success" onclick="openAddWhitelistModal()">+ Add Player</button>
+                </div>
               </div>
               <table class="players-table">
                 <thead>

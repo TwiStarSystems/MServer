@@ -4122,14 +4122,18 @@ async function loadPlayerData() {
   tbody.innerHTML = '<tr><td colspan="4" class="empty-message">Loading...</td></tr>';
   
   try {
-    // Load both player data and ops list
-    const [playerDataResponse, opsResponse] = await Promise.all([
+    // Load player data, ops, whitelist and banned in parallel
+    const [playerDataResponse, opsResponse, whitelistResponse, bannedResponse] = await Promise.all([
       apiRequest(`/api/servers/${currentServerId}/players/playerdata`),
-      apiRequest(`/api/servers/${currentServerId}/players/ops`)
+      apiRequest(`/api/servers/${currentServerId}/players/ops`),
+      apiRequest(`/api/servers/${currentServerId}/players/whitelist`),
+      apiRequest(`/api/servers/${currentServerId}/players/banned`)
     ]);
     
     const players = playerDataResponse.players || [];
     const ops = opsResponse.operators || [];
+    const whitelist = whitelistResponse.whitelist || [];
+    const banned = bannedResponse.banned || [];
     
     if (playerDataResponse.message) {
       tbody.innerHTML = `<tr><td colspan="4" class="empty-message">${escapeHtml(playerDataResponse.message)}</td></tr>`;
@@ -4141,12 +4145,25 @@ async function loadPlayerData() {
       return;
     }
     
+    const whitelistUuids = new Set(whitelist.map(p => p.uuid));
+    const bannedUuids = new Set(banned.map(p => p.uuid));
+
     tbody.innerHTML = players.map(player => {
-      // Check if player is an operator
+      // OP button
       const op = ops.find(o => o.uuid === player.uuid);
       const opButton = op 
         ? `<button class="btn btn-small btn-danger" onclick="removeOperator('${player.uuid}', '${escapeHtml(op.name)}')">Remove OP</button>`
         : `<button class="btn btn-small btn-success" onclick="makePlayerOp('${player.uuid}')">Make OP</button>`;
+
+      // Whitelist button
+      const wlButton = whitelistUuids.has(player.uuid)
+        ? `<button class="btn btn-small btn-secondary" disabled title="Already whitelisted">✓ WL</button>`
+        : `<button class="btn btn-small" onclick="whitelistPlayerByUuid('${player.uuid}')">Whitelist</button>`;
+
+      // Ban button
+      const banButton = bannedUuids.has(player.uuid)
+        ? `<button class="btn btn-small btn-secondary" disabled title="Already banned">Banned</button>`
+        : `<button class="btn btn-small btn-danger" onclick="banPlayerByUuid('${player.uuid}')">Ban</button>`;
       
       return `
         <tr>
@@ -4156,6 +4173,8 @@ async function loadPlayerData() {
           <td class="actions-cell">
             <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}')">Edit NBT</button>
             ${opButton}
+            ${wlButton}
+            ${banButton}
           </td>
         </tr>
       `;
@@ -4172,8 +4191,14 @@ async function loadWhitelist() {
   tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Loading...</td></tr>';
   
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/players/whitelist`);
+    const [data, statusData] = await Promise.all([
+      apiRequest(`/api/servers/${currentServerId}/players/whitelist`),
+      apiRequest(`/api/servers/${currentServerId}/players/whitelist-status`).catch(() => ({ enabled: false, available: false }))
+    ]);
     const whitelist = data.whitelist || [];
+
+    // Update toggle button state
+    updateWhitelistToggleBtn(statusData.enabled, statusData.available !== false);
     
     if (whitelist.length === 0) {
       tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Whitelist is empty</td></tr>';
@@ -4191,6 +4216,68 @@ async function loadWhitelist() {
     `).join('');
   } catch (error) {
     tbody.innerHTML = '<tr><td colspan="3" class="empty-message error">Failed to load whitelist</td></tr>';
+  }
+}
+
+function updateWhitelistToggleBtn(enabled, available) {
+  const btn = document.getElementById('whitelist-toggle-btn');
+  if (!btn) return;
+  if (!available) {
+    btn.textContent = 'WL: N/A';
+    btn.className = 'btn btn-small btn-secondary';
+    btn.disabled = true;
+    btn.title = 'server.properties not found';
+    return;
+  }
+  btn.disabled = false;
+  if (enabled) {
+    btn.textContent = '✅ WL: ON';
+    btn.className = 'btn btn-small btn-success';
+    btn.title = 'Whitelist is enabled — click to disable';
+  } else {
+    btn.textContent = '⬜ WL: OFF';
+    btn.className = 'btn btn-small';
+    btn.title = 'Whitelist is disabled — click to enable';
+  }
+}
+
+async function toggleWhitelistSetting() {
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/whitelist-toggle`, {
+      method: 'PATCH'
+    });
+    updateWhitelistToggleBtn(result.enabled, true);
+    showNotification(`Whitelist ${result.enabled ? 'enabled' : 'disabled'}. Restart server for changes to take effect.`, 'success');
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function whitelistPlayerByUuid(uuid) {
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/whitelist`, {
+      method: 'POST',
+      body: JSON.stringify({ uuid })
+    });
+    showNotification(result.message || 'Player added to whitelist', 'success');
+    loadAllPlayerData();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function banPlayerByUuid(uuid) {
+  const reason = prompt('Reason for ban (leave blank for default):');
+  if (reason === null) return; // cancelled
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/banned`, {
+      method: 'POST',
+      body: JSON.stringify({ uuid, reason: reason.trim() || 'Banned By Admin' })
+    });
+    showNotification(result.message || 'Player has been banned', 'success');
+    loadAllPlayerData();
+  } catch (error) {
+    // Error shown by apiRequest
   }
 }
 
@@ -4310,17 +4397,14 @@ async function removeOperator(uuid, name) {
 }
 
 async function makePlayerOp(uuid) {
-  const name = prompt('Enter player name to make OP:');
-  if (!name) return;
-  
   try {
-    await apiRequest(`/api/servers/${currentServerId}/players/ops`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/ops`, {
       method: 'POST',
-      body: JSON.stringify({ name, level: 4, bypassesPlayerLimit: false })
+      body: JSON.stringify({ uuid, level: 4, bypassesPlayerLimit: false })
     });
-    
-    showNotification(`${name} added as operator`, 'success');
-    loadOperators();
+
+    showNotification(result.message || 'Player added as operator', 'success');
+    loadAllPlayerData();
   } catch (error) {
     // Error shown by apiRequest
   }
@@ -4386,7 +4470,7 @@ function closeBanPlayerModal() {
 
 async function banPlayer() {
   const name = document.getElementById('ban-player-name').value.trim();
-  const reason = document.getElementById('ban-reason').value.trim() || 'Banned by server administrator';
+  const reason = document.getElementById('ban-reason').value.trim() || 'Banned By Admin';
   
   if (!name) {
     alert('Please enter a player name');

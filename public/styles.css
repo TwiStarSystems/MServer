@@ -409,15 +409,22 @@ body {
 
 .tab-content {
   display: none;
-  padding: 20px;
+  padding: 15px;
 }
 
 .tab-content.active {
   display: block;
 }
 
-/* Terminal tab needs flex-column so the quick-cmd grid sits below the terminal */
 #terminal-tab.active {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0;
+  overflow: hidden;
+}
+
+#logs-tab.active {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -490,16 +497,10 @@ body {
   flex-direction: column;
 }
 
-/* When the terminal tab also shows the quick-cmd grid, shrink the terminal slightly */
-#terminal-tab > .terminal-container {
-  height: calc(100vh - 280px);
-  max-height: 730px;
-}
-
 .terminal {
   flex: 1;
   overflow-y: auto;
-  padding: 15px;
+  padding: 5px;
   font-family: 'Courier New', monospace;
   font-size: 13px;
   color: #00ff00;
@@ -746,9 +747,6 @@ body {
 
 /* ==================== Properties Tab ==================== */
 
-.properties-container {
-  padding: 15px 0;
-}
 
 .properties-header {
   display: flex;
@@ -798,7 +796,6 @@ body {
 
 .property-group {
   margin-bottom: 25px;
-  padding-bottom: 20px;
   border-bottom: 1px solid #0f3460;
 }
 
@@ -5062,6 +5059,30 @@ select.form-control:disabled {
   margin: 0;
 }
 
+.players-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.players-section-header h3 {
+  margin: 0;
+}
+
+.players-section-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn-secondary {
+  background: #444;
+  color: #888;
+  border-color: #555;
+  cursor: default;
+}
+
 .players-table {
   width: 100%;
   border-collapse: collapse;
@@ -5109,6 +5130,20 @@ select.form-control:disabled {
 
 .players-table .empty-message.error {
   color: #ef4444;
+}
+
+.players-info {
+  color: #aaa;
+  font-size: 0.88rem;
+  margin: 0 0 12px 0;
+}
+
+.players-info-note {
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #ca8a04;
 }
 
 /* Level Badges */
@@ -5229,8 +5264,6 @@ select.form-control:disabled {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: 20px;
-  max-width: 1000px;
   margin: 0 auto;
 }
 
@@ -6348,7 +6381,7 @@ select.form-control:disabled {
 .api-docs-info p {
   color: #aaa;
   margin: 0;
-}}
+}
 
 /* ==================== Version Change Modal ==================== */
 
