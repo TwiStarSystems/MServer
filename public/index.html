@@ -41,6 +41,10 @@
           <small>Click "Add" to create one</small>
         </div>
       </div>
+      <div class="server-list-actions" id="server-list-actions" style="display: none;">
+        <button id="start-all-btn" class="btn btn-success btn-small" onclick="startAllServers()">Start All</button>
+        <button id="stop-all-btn" class="btn btn-danger btn-small" onclick="stopAllServers()">Stop All</button>
+      </div>
     </aside>
 
     <!-- Main Content -->
@@ -607,6 +611,11 @@
               <span class="creation-label">Import Existing Server</span>
               <span class="creation-desc">Import from a ZIP file</span>
             </button>
+            <button type="button" class="creation-type-btn" onclick="selectCreationType('import-world')">
+              <span class="creation-icon">🌍</span>
+              <span class="creation-label">Import Existing World</span>
+              <span class="creation-desc">Fresh server with your world data</span>
+            </button>
             <button type="button" class="creation-type-btn" onclick="selectCreationType('manual')">
               <span class="creation-icon">⚙️</span>
               <span class="creation-label">Manual Configuration</span>
@@ -844,7 +853,12 @@
             <input type="file" id="import-file" class="form-control" accept=".zip" required>
             <small>Upload a ZIP file containing your existing server files</small>
           </div>
-          
+
+          <div class="form-group">
+            <label for="import-executable-name">Server Executable (optional):</label>
+            <input type="text" id="import-executable-name" class="form-control" placeholder="e.g. paper-1.21.4.jar — leave blank to auto-detect" autocomplete="off">
+            <small>The JAR file name inside the ZIP to use as the server. It will be renamed to <code>server.jar</code>.</small>
+          </div>
 
           
           <div class="form-group">
@@ -892,6 +906,106 @@
           <div class="modal-footer">
             <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
             <button type="submit" class="btn btn-success">Import Server</button>
+          </div>
+        </form>
+
+        <!-- Import World Form -->
+        <form id="import-world-form" class="server-form" style="display: none;" onsubmit="importWorld(event)">
+          <div class="form-group">
+            <label for="iworld-name">Server Name:</label>
+            <input type="text" id="iworld-name" class="form-control" placeholder="My Minecraft Server" required autocomplete="off">
+          </div>
+
+          <div class="form-group">
+            <label for="iworld-category">Category: <span style="color: #ff6b6b;">*</span></label>
+            <select id="iworld-category" class="form-control" required onchange="onIWorldCategoryChange()">
+              <option value="">Select category...</option>
+              <option value="unmodded">Java (Vanilla)</option>
+              <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
+            </select>
+            <small>Bedrock world format is not supported for this import type</small>
+          </div>
+
+          <div class="form-group" id="iworld-engine-group" style="display: none;">
+            <label for="iworld-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
+            <select id="iworld-engine" class="form-control" onchange="loadIWorldVersions()">
+              <option value="">Select server engine...</option>
+            </select>
+            <small id="iworld-engine-description" class="type-desc"></small>
+          </div>
+
+          <div class="form-group" id="iworld-version-group" style="display: none;">
+            <label for="iworld-version">Version: <span style="color: #ff6b6b;">*</span></label>
+            <div class="version-selector">
+              <select id="iworld-version" class="form-control" disabled required>
+                <option value="">Select category first...</option>
+              </select>
+              <span id="iworld-version-status" class="version-status"></span>
+            </div>
+          </div>
+
+          <div id="iworld-download-status-group" class="form-group" style="display: none;">
+            <div id="iworld-jar-download-status" class="jar-download-status">
+              <div class="download-info"></div>
+              <div class="download-progress" style="display: none;">
+                <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+                <span class="progress-text">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="iworld-world-file">World ZIP File: <span style="color: #ff6b6b;">*</span></label>
+            <input type="file" id="iworld-world-file" class="form-control" accept=".zip" required>
+            <small>ZIP containing your Minecraft world folder (must include <code>level.dat</code>)</small>
+          </div>
+
+          <div id="iworld-ram-fields-group" style="display: none;">
+            <div class="form-group">
+              <label>Memory Allocation:</label>
+              <div class="ram-inputs">
+                <div class="ram-field">
+                  <label for="iworld-min-ram">Min RAM:</label>
+                  <select id="iworld-min-ram" class="form-control">
+                    <option value="512M">512 MB</option>
+                    <option value="1G" selected>1 GB</option>
+                    <option value="2G">2 GB</option>
+                    <option value="3G">3 GB</option>
+                    <option value="4G">4 GB</option>
+                    <option value="6G">6 GB</option>
+                    <option value="8G">8 GB</option>
+                    <option value="12G">12 GB</option>
+                    <option value="16G">16 GB</option>
+                  </select>
+                </div>
+                <div class="ram-field">
+                  <label for="iworld-max-ram">Max RAM:</label>
+                  <select id="iworld-max-ram" class="form-control">
+                    <option value="1G">1 GB</option>
+                    <option value="2G" selected>2 GB</option>
+                    <option value="3G">3 GB</option>
+                    <option value="4G">4 GB</option>
+                    <option value="6G">6 GB</option>
+                    <option value="8G">8 GB</option>
+                    <option value="12G">12 GB</option>
+                    <option value="16G">16 GB</option>
+                    <option value="24G">24 GB</option>
+                    <option value="32G">32 GB</option>
+                  </select>
+                </div>
+              </div>
+              <small>Minimum and maximum memory for the JVM</small>
+            </div>
+            <div class="form-group jvm-args-group">
+              <label for="iworld-jvm-args">Additional JVM Arguments (optional):</label>
+              <input type="text" id="iworld-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
+              <small>Extra Java arguments (memory args are set automatically above)</small>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
+            <button type="submit" class="btn btn-success">Create Server &amp; Import World</button>
           </div>
         </form>
 

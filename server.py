@@ -2910,7 +2910,7 @@ class ServerManager:
         except Exception as e:
             return False, f"Failed to write eula.txt: {e}"
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G', jar_name=None, owner=None, approved=True, category='unmodded'):
+    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G', executable_name=None, owner=None, approved=True, category='unmodded'):
         """Import a server from a ZIP file"""
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
@@ -2923,25 +2923,6 @@ class ServerManager:
             with zipfile.ZipFile(zip_path, 'r') as zipf:
                 zipf.extractall(server_dir)
             
-            # Find server JAR file
-            # Use provided jar_name if specified and exists, otherwise auto-detect
-            executable = 'server.jar'
-            if jar_name:
-                jar_path = server_dir / jar_name
-                if jar_path.exists() and jar_path.suffix == '.jar':
-                    executable = jar_name
-            
-            # If jar_name not provided or not found, auto-detect
-            if not jar_name or executable == 'server.jar':
-                for item in server_dir.iterdir():
-                    if item.suffix == '.jar' and item.is_file():
-                        # Prioritize common server jar names
-                        if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
-                            executable = item.name
-                            break
-                        elif 'server' in item.name.lower() or 'paper' in item.name.lower():
-                            executable = item.name
-            
             # Check if files are in a subdirectory (common with some ZIPs)
             subdirs = [d for d in server_dir.iterdir() if d.is_dir()]
             if len(subdirs) == 1 and not any(server_dir.glob('*.jar')):
@@ -2950,21 +2931,38 @@ class ServerManager:
                 for item in subdir.iterdir():
                     shutil.move(str(item), str(server_dir / item.name))
                 subdir.rmdir()
-                
-                # Re-check for JAR if we're auto-detecting
-                if not jar_name or executable == 'server.jar':
-                    for item in server_dir.iterdir():
-                        if item.suffix == '.jar' and item.is_file():
-                            if item.name in ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']:
-                                executable = item.name
-                                break
-                            elif 'server' in item.name.lower() or 'paper' in item.name.lower():
-                                executable = item.name
-                elif jar_name:
-                    # Check if the specified jar_name exists after moving
-                    jar_path = server_dir / jar_name
-                    if jar_path.exists() and jar_path.suffix == '.jar':
-                        executable = jar_name
+            
+            # Find the server executable JAR
+            found_jar = None
+            if executable_name:
+                # User specified the executable name within the ZIP
+                target = server_dir / executable_name
+                if target.exists() and target.suffix == '.jar':
+                    found_jar = target
+            
+            if not found_jar:
+                # Auto-detect: prefer known server jar names, then fall back to any JAR
+                priority_names = ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']
+                fallback = None
+                for item in server_dir.iterdir():
+                    if item.suffix == '.jar' and item.is_file():
+                        if item.name in priority_names:
+                            found_jar = item
+                            break
+                        elif ('server' in item.name.lower() or 'paper' in item.name.lower()) and not fallback:
+                            fallback = item
+                if not found_jar:
+                    found_jar = fallback
+            
+            # Rename found JAR to server.jar to standardise the executable name
+            if found_jar and found_jar.name != 'server.jar':
+                standard_jar = server_dir / 'server.jar'
+                if standard_jar.exists():
+                    standard_jar.unlink()
+                found_jar.rename(standard_jar)
+            
+            # Always use server.jar as the standard executable
+            executable = 'server.jar'
             
             if 'servers' not in self.config:
                 self.config['servers'] = {}
@@ -4496,7 +4494,7 @@ def import_server():
         return jsonify({'error': 'File must be a ZIP archive'}), 400
     
     name = request.form.get('name', 'Imported Server')
-    jar_name = request.form.get('jarName', 'server.jar')
+    executable_name = request.form.get('executableName', '').strip()
     java_args = request.form.get('javaArgs', '-Xmx4G -Xms1G')
     category = request.form.get('category', 'unmodded')
     
@@ -4513,9 +4511,9 @@ def import_server():
         file.save(str(temp_path))
         
         success, result = server_manager.import_server_from_zip(
-            name, temp_path, java_args, 
-            jar_name=jar_name, 
-            owner=user_id, 
+            name, temp_path, java_args,
+            executable_name=executable_name or None,
+            owner=user_id,
             approved=approved,
             category=category
         )
@@ -4530,6 +4528,99 @@ def import_server():
             return jsonify({'error': result}), 400
     finally:
         # Clean up temp file
+        if temp_path.exists():
+            temp_path.unlink()
+
+@app.route('/api/servers/<server_id>/import-world', methods=['POST'])
+@server_access_required
+@limiter.limit("5 per 15 minutes")
+def import_world(server_id):
+    """Import a world ZIP into an existing server, placing it as the world/ folder"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+
+    file = request.files['file']
+    if not file.filename.endswith('.zip'):
+        return jsonify({'error': 'File must be a ZIP archive'}), 400
+
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        return jsonify({'error': 'Server not found'}), 404
+
+    server_path = Path(server_config['serverPath']).resolve()
+    filename = secure_filename(file.filename)
+    temp_path = UPLOADS_DIR / filename
+
+    try:
+        file.save(str(temp_path))
+
+        with zipfile.ZipFile(temp_path, 'r') as zipf:
+            names = zipf.namelist()
+
+            # Security: reject entries that contain path traversal sequences
+            for member in names:
+                if '..' in member or member.startswith('/'):
+                    return jsonify({'error': 'Invalid ZIP: contains unsafe paths'}), 400
+
+            # Determine the structure of the world ZIP
+            top_level_items = set()
+            for n in names:
+                part = n.split('/')[0]
+                if part:
+                    top_level_items.add(part)
+
+            if 'level.dat' in names:
+                # World files are at ZIP root → extract into world/ subfolder
+                world_dir = server_path / 'world'
+                if world_dir.exists():
+                    shutil.rmtree(world_dir)
+                world_dir.mkdir()
+                for member in names:
+                    if member.endswith('/'):
+                        continue
+                    target = world_dir / member
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zipf.open(member) as src, open(target, 'wb') as dst:
+                        shutil.copyfileobj(src, dst)
+            else:
+                # Extract to a temp directory, then locate the world folder
+                tmp_dir = server_path / '_world_import_tmp'
+                if tmp_dir.exists():
+                    shutil.rmtree(tmp_dir)
+                tmp_dir.mkdir()
+                zipf.extractall(tmp_dir)
+
+                # Find a directory that contains level.dat
+                world_found = None
+                for candidate in tmp_dir.iterdir():
+                    if candidate.is_dir() and (candidate / 'level.dat').exists():
+                        world_found = candidate
+                        break
+
+                if world_found:
+                    target_world = server_path / 'world'
+                    if target_world.exists():
+                        shutil.rmtree(target_world)
+                    shutil.move(str(world_found), str(target_world))
+                elif len(top_level_items) == 1:
+                    # Single top-level directory — use it as the world
+                    single = tmp_dir / list(top_level_items)[0]
+                    target_world = server_path / 'world'
+                    if target_world.exists():
+                        shutil.rmtree(target_world)
+                    shutil.move(str(single), str(target_world))
+                else:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    return jsonify({'error': 'Could not locate a valid world in the ZIP (level.dat not found)'}), 400
+
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        return jsonify({'success': True})
+    except zipfile.BadZipFile:
+        return jsonify({'error': 'Invalid or corrupted ZIP file'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
         if temp_path.exists():
             temp_path.unlink()
 
@@ -8048,6 +8139,7 @@ def _run_bluemap_render(server_id, force=False):
 
 @app.route('/api/servers/<server_id>/bluemap/status', methods=['GET'])
 @server_access_required
+@limiter.exempt
 def bluemap_status(server_id):
     """Get BlueMap status for a server"""
     installed = _bluemap_is_installed()
@@ -8190,6 +8282,7 @@ def bluemap_render(server_id):
 @app.route('/api/servers/<server_id>/bluemap/viewer/', defaults={'path': 'index.html'}, methods=['GET'])
 @app.route('/api/servers/<server_id>/bluemap/viewer/<path:path>', methods=['GET'])
 @server_access_required
+@limiter.exempt
 def bluemap_viewer(server_id, path):
     """Serve BlueMap web viewer files"""
     web_dir = _get_bluemap_web_dir(server_id)
@@ -8397,8 +8490,13 @@ def run_tool(tool_name):
 @app.after_request
 def add_security_headers(response):
     """Add security headers to all responses for production hardening"""
-    # Prevent clickjacking attacks
-    response.headers['X-Frame-Options'] = 'DENY'
+    # Prevent clickjacking attacks.
+    # BlueMap viewer is served same-origin inside an iframe, so allow SAMEORIGIN for those paths.
+    bluemap_viewer_path = '/bluemap/viewer'
+    if bluemap_viewer_path in request.path:
+        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    else:
+        response.headers['X-Frame-Options'] = 'DENY'
     
     # Prevent MIME-sniffing vulnerabilities
     response.headers['X-Content-Type-Options'] = 'nosniff'

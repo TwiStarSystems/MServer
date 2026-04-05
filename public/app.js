@@ -567,6 +567,7 @@ async function loadServers() {
 
 function renderServerList() {
   const container = document.getElementById('server-list');
+  const actionsBar = document.getElementById('server-list-actions');
   
   if (servers.length === 0) {
     container.innerHTML = `
@@ -575,8 +576,11 @@ function renderServerList() {
         <small>Click "Add" to create one</small>
       </div>
     `;
+    if (actionsBar) actionsBar.style.display = 'none';
     return;
   }
+  
+  if (actionsBar) actionsBar.style.display = 'flex';
   
   container.innerHTML = servers.map(server => {
     const status = server.status || 'stopped';
@@ -1095,6 +1099,74 @@ async function stopServer() {
   }
 }
 
+async function startAllServers() {
+  const stoppedServers = servers.filter(s => s.status === 'stopped');
+  if (stoppedServers.length === 0) {
+    showNotification('All servers are already running', 'info');
+    return;
+  }
+
+  const btn = document.getElementById('start-all-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+
+  let started = 0;
+  let failed = 0;
+
+  for (const server of stoppedServers) {
+    try {
+      const result = await apiRequest(`/api/servers/${server.id}/start`, { method: 'POST' });
+      if (result.success) started++;
+      else failed++;
+    } catch (_) {
+      failed++;
+    }
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Start All'; }
+
+  if (failed === 0) {
+    showNotification(`Started ${started} server${started !== 1 ? 's' : ''}`, 'success');
+  } else {
+    showNotification(`Started ${started}, failed ${failed}`, 'warning');
+  }
+
+  await loadServers();
+}
+
+async function stopAllServers() {
+  const runningServers = servers.filter(s => s.status === 'running' || s.status === 'starting');
+  if (runningServers.length === 0) {
+    showNotification('No servers are running', 'info');
+    return;
+  }
+
+  const btn = document.getElementById('stop-all-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Stopping...'; }
+
+  let stopped = 0;
+  let failed = 0;
+
+  for (const server of runningServers) {
+    try {
+      const result = await apiRequest(`/api/servers/${server.id}/stop`, { method: 'POST' });
+      if (result.success) stopped++;
+      else failed++;
+    } catch (_) {
+      failed++;
+    }
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Stop All'; }
+
+  if (failed === 0) {
+    showNotification(`Stopped ${stopped} server${stopped !== 1 ? 's' : ''}`, 'success');
+  } else {
+    showNotification(`Stopped ${stopped}, failed ${failed}`, 'warning');
+  }
+
+  setTimeout(loadServers, 2000);
+}
+
 async function killServer() {
   if (!currentServerId) return;
   
@@ -1136,6 +1208,8 @@ async function openAddServerModal() {
     if (freshForm) freshForm.style.display = 'none';
     if (importForm) importForm.style.display = 'none';
     if (manualForm) manualForm.style.display = 'none';
+    const importWorldForm = document.getElementById('import-world-form');
+    if (importWorldForm) importWorldForm.style.display = 'none';
     
     // Hide version management section (only for editing)
     const versionSection = document.getElementById('version-management-section');
@@ -1201,10 +1275,26 @@ async function openAddServerModal() {
   // Reset import form
   document.getElementById('import-name').value = '';
   document.getElementById('import-file').value = '';
+  document.getElementById('import-executable-name').value = '';
   document.getElementById('import-category').value = 'unmodded';
   document.getElementById('import-min-ram').value = '1G';
   document.getElementById('import-max-ram').value = '2G';
   document.getElementById('import-jvm-args').value = '';
+  
+  // Reset import-world form
+  document.getElementById('iworld-name').value = '';
+  document.getElementById('iworld-category').value = '';
+  document.getElementById('iworld-world-file').value = '';
+  document.getElementById('iworld-min-ram').value = '1G';
+  document.getElementById('iworld-max-ram').value = '2G';
+  document.getElementById('iworld-jvm-args').value = '';
+  document.getElementById('iworld-engine-group').style.display = 'none';
+  document.getElementById('iworld-version-group').style.display = 'none';
+  document.getElementById('iworld-ram-fields-group').style.display = 'none';
+  document.getElementById('iworld-download-status-group').style.display = 'none';
+  document.getElementById('iworld-version').innerHTML = '<option value="">Select category first...</option>';
+  document.getElementById('iworld-version').disabled = true;
+  iworldVersionAvailability = {};
   
   // Reset manual form with default path placeholder
   document.getElementById('input-name').value = '';
@@ -1251,6 +1341,9 @@ function selectCreationType(type) {
     document.getElementById('fresh-server-form').style.display = 'block';
   } else if (type === 'import') {
     document.getElementById('import-server-form').style.display = 'block';
+  } else if (type === 'import-world') {
+    document.getElementById('import-world-form').style.display = 'block';
+    loadIWorldEngines();
   } else if (type === 'manual') {
     document.getElementById('manual-server-form').style.display = 'block';
     // Show the back button in manual mode
@@ -1264,6 +1357,7 @@ function backToCreationType() {
   // Hide all forms
   document.getElementById('fresh-server-form').style.display = 'none';
   document.getElementById('import-server-form').style.display = 'none';
+  document.getElementById('import-world-form').style.display = 'none';
   document.getElementById('manual-server-form').style.display = 'none';
   
   // Show creation type selection
@@ -1272,6 +1366,9 @@ function backToCreationType() {
 
 // Track JAR availability for versions
 let versionAvailability = {};  // {version: {downloaded: bool}}
+
+// Track JAR availability for the import-world form
+let iworldVersionAvailability = {};  // {version: {downloaded: bool}}
 
 // Handle category change for fresh server form
 function onCategoryChange() {
@@ -2461,13 +2558,311 @@ async function createFreshServer(e) {
 
 // Note: formatBytes is in utils.js
 
+// ==================== Import World helpers ====================
+
+async function loadIWorldEngines() {
+  try {
+    const result = await apiRequest('/api/jar-bucket/all-types');
+    const allTypes = result.types || [];
+    const moddedEngines = allTypes.filter(t => t.id !== 'vanilla' && (t.category === 'java_servers' || t.category === 'modded'));
+
+    const engineSelect = document.getElementById('iworld-engine');
+    engineSelect.innerHTML = '<option value="">Select server engine...</option>';
+    engineSelect.disabled = false;
+    moddedEngines.forEach(engine => {
+      const option = document.createElement('option');
+      option.value = engine.id;
+      option.textContent = `${engine.icon || '📦'} ${engine.name}`;
+      option.dataset.description = engine.description || '';
+      engineSelect.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Failed to load server engines for import-world:', error);
+  }
+}
+
+function onIWorldCategoryChange() {
+  const category = document.getElementById('iworld-category').value;
+  const engineGroup = document.getElementById('iworld-engine-group');
+  const versionGroup = document.getElementById('iworld-version-group');
+  const ramGroup = document.getElementById('iworld-ram-fields-group');
+  const versionSelect = document.getElementById('iworld-version');
+
+  iworldVersionAvailability = {};
+  document.getElementById('iworld-download-status-group').style.display = 'none';
+
+  if (!category) {
+    engineGroup.style.display = 'none';
+    versionGroup.style.display = 'none';
+    ramGroup.style.display = 'none';
+    return;
+  }
+
+  if (category === 'unmodded') {
+    engineGroup.style.display = 'none';
+    versionGroup.style.display = 'block';
+    versionSelect.setAttribute('required', '');
+    ramGroup.style.display = 'block';
+    loadIWorldVersionsForEngine('vanilla');
+  } else if (category === 'modded') {
+    engineGroup.style.display = 'block';
+    versionGroup.style.display = 'none';
+    versionSelect.removeAttribute('required');
+    ramGroup.style.display = 'none';
+    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
+    versionSelect.disabled = true;
+  }
+}
+
+async function loadIWorldVersions() {
+  const engineSelect = document.getElementById('iworld-engine');
+  const descEl = document.getElementById('iworld-engine-description');
+  const versionGroup = document.getElementById('iworld-version-group');
+  const ramGroup = document.getElementById('iworld-ram-fields-group');
+  const versionSelect = document.getElementById('iworld-version');
+  const engine = engineSelect.value;
+
+  iworldVersionAvailability = {};
+  document.getElementById('iworld-download-status-group').style.display = 'none';
+
+  if (!engine) {
+    versionGroup.style.display = 'none';
+    ramGroup.style.display = 'none';
+    if (descEl) descEl.textContent = '';
+    return;
+  }
+
+  const selectedOpt = engineSelect.options[engineSelect.selectedIndex];
+  if (descEl) descEl.textContent = selectedOpt.dataset.description || '';
+
+  versionSelect.setAttribute('required', '');
+  versionGroup.style.display = 'block';
+  ramGroup.style.display = 'block';
+  await loadIWorldVersionsForEngine(engine);
+}
+
+async function loadIWorldVersionsForEngine(serverEngine) {
+  const versionSelect = document.getElementById('iworld-version');
+  const statusEl = document.getElementById('iworld-version-status');
+
+  try {
+    versionSelect.innerHTML = '<option value="">Loading versions...</option>';
+    versionSelect.disabled = true;
+    if (statusEl) statusEl.textContent = '';
+
+    const result = await apiRequest(`/api/jar-bucket/all-versions/${serverEngine}`);
+    const versions = result.versions || [];
+
+    if (versions.length === 0) {
+      versionSelect.innerHTML = '<option value="">No versions available</option>';
+      return;
+    }
+
+    iworldVersionAvailability = {};
+    versions.forEach(v => { iworldVersionAvailability[v.version] = { downloaded: v.downloaded }; });
+
+    versionSelect.innerHTML = '<option value="">Select version...</option>';
+    versions.forEach(v => {
+      const option = document.createElement('option');
+      option.value = v.version;
+      option.textContent = v.downloaded ? `${v.version} ✓ (Downloaded)` : v.version;
+      option.dataset.downloaded = v.downloaded;
+      versionSelect.appendChild(option);
+    });
+    versionSelect.disabled = false;
+  } catch (error) {
+    console.error('Failed to load versions for import-world:', error);
+    versionSelect.innerHTML = '<option value="">Error loading versions</option>';
+  }
+}
+
+async function importWorld(e) {
+  e.preventDefault();
+
+  const name = document.getElementById('iworld-name').value;
+  const category = document.getElementById('iworld-category').value;
+  const serverEngine = category === 'modded'
+    ? document.getElementById('iworld-engine').value
+    : 'vanilla';
+  const version = document.getElementById('iworld-version').value;
+  const worldFileInput = document.getElementById('iworld-world-file');
+  const minRam = document.getElementById('iworld-min-ram').value;
+  const maxRam = document.getElementById('iworld-max-ram').value;
+  const extraJvmArgs = document.getElementById('iworld-jvm-args').value.trim();
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
+
+  if (!category) { showNotification('Please select a category', 'error'); return; }
+  if (category === 'modded' && !serverEngine) { showNotification('Please select a server engine', 'error'); return; }
+  if (!version) { showNotification('Please select a version', 'error'); return; }
+  if (!worldFileInput.files.length) { showNotification('Please select a world ZIP file', 'error'); return; }
+
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  const backBtn = e.target.querySelector('.btn:not([type="submit"])');
+  const originalText = submitBtn.textContent;
+  submitBtn.textContent = 'Working...';
+  submitBtn.disabled = true;
+  if (backBtn) backBtn.disabled = true;
+
+  const downloadStatusGroup = document.getElementById('iworld-download-status-group');
+  const downloadProgress = document.querySelector('#iworld-jar-download-status .download-progress');
+  const progressFill = document.querySelector('#iworld-jar-download-status .progress-fill');
+  const progressText = document.querySelector('#iworld-jar-download-status .progress-text');
+  const downloadInfo = document.querySelector('#iworld-jar-download-status .download-info');
+
+  const updateProgress = (message, percent = null, isError = false) => {
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    if (downloadInfo) {
+      const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
+      downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
+      if (isError) downloadInfo.classList.add('error');
+      else downloadInfo.classList.remove('error');
+    }
+    if (percent !== null && downloadProgress) {
+      downloadProgress.style.display = 'flex';
+      if (progressFill) progressFill.style.width = `${percent}%`;
+      if (progressText) progressText.textContent = `${Math.round(percent)}%`;
+    }
+  };
+
+  const resetOnError = (msg) => {
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+    if (backBtn) backBtn.disabled = false;
+    updateProgress(msg, null, true);
+    showNotification(msg, 'error');
+  };
+
+  try {
+    // Step 1: Download JAR if not already available
+    const versionInfo = iworldVersionAvailability[version] || {};
+    if (!versionInfo.downloaded) {
+      updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
+      submitBtn.textContent = 'Downloading JAR...';
+
+      let downloadResult;
+      try {
+        downloadResult = await apiRequest('/api/jar-bucket/download', {
+          method: 'POST',
+          body: JSON.stringify({ type: serverEngine, version })
+        });
+      } catch (err) {
+        resetOnError(`Failed to start download: ${err.message}`);
+        return;
+      }
+
+      if (!downloadResult.progress_id) {
+        resetOnError('Failed to start download — no progress ID returned');
+        return;
+      }
+
+      const progressId = downloadResult.progress_id;
+      let done = false;
+      let dlError = null;
+      let polls = 0;
+
+      while (!done && polls < 600) {
+        await new Promise(r => setTimeout(r, 500));
+        polls++;
+        try {
+          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+          if (progress.status === 'downloading') {
+            const pct = progress.progress || 0;
+            const dl = formatBytes(progress.downloaded || 0);
+            const tot = formatBytes(progress.total || 0);
+            updateProgress(`Downloading ${serverEngine} ${version}... (${dl} / ${tot})`, pct);
+          } else if (progress.status === 'complete') {
+            done = true;
+            if (progress.success === false) dlError = progress.error || 'Download failed';
+            else updateProgress('Download complete!', 100);
+          } else if (progress.status === 'error') {
+            done = true;
+            dlError = progress.error || 'Download failed';
+          }
+        } catch (_) { /* keep polling */ }
+      }
+
+      if (!done) { resetOnError('Download timed out. Please try again.'); return; }
+      if (dlError) { resetOnError(`Download failed: ${dlError}`); return; }
+    }
+
+    // Step 2: Create the fresh server
+    submitBtn.textContent = 'Creating Server...';
+    updateProgress('Creating server files...', 0);
+
+    let serverResult;
+    try {
+      serverResult = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          executable: 'server.jar',
+          javaArgs,
+          category,
+          serverEngine,
+          version,
+          downloadJar: true,
+          serverProperties: {}
+        })
+      });
+    } catch (err) {
+      resetOnError(`Failed to create server: ${err.message}`);
+      return;
+    }
+
+    if (serverResult.pendingApproval) {
+      updateProgress('Server created and pending admin approval', 100);
+      showNotification('Server created and pending admin approval', 'info');
+      await new Promise(r => setTimeout(r, 1500));
+      closeServerModal();
+      await loadServers();
+      return;
+    }
+
+    // Step 3: Upload and import the world ZIP
+    submitBtn.textContent = 'Importing World...';
+    updateProgress('Uploading and importing world data...', 50);
+
+    const formData = new FormData();
+    formData.append('file', worldFileInput.files[0]);
+
+    const worldResponse = await fetch(`/api/servers/${serverResult.serverId}/import-world`, {
+      method: 'POST',
+      body: formData
+    });
+
+    const worldResult = await worldResponse.json();
+
+    if (!worldResponse.ok) {
+      // Server was created but world import failed — still show the server
+      console.error('World import failed:', worldResult.error);
+      await loadServers();
+      selectServer(serverResult.serverId);
+      closeServerModal();
+      showNotification(`Server created but world import failed: ${worldResult.error}`, 'warning');
+    } else {
+      updateProgress('Server created with world!', 100);
+      await new Promise(r => setTimeout(r, 800));
+      await loadServers();
+      selectServer(serverResult.serverId);
+      closeServerModal();
+      showNotification('Server created and world imported successfully!', 'success');
+    }
+
+  } catch (error) {
+    console.error('Failed to import world:', error);
+    resetOnError(`Failed: ${error.message}`);
+  }
+}
+
+// ==================== End Import World helpers ====================
+
 // Import server from ZIP
 async function importServer(e) {
   e.preventDefault();
   
   const name = document.getElementById('import-name').value;
   const fileInput = document.getElementById('import-file');
-  const jarName = 'server.jar';
+  const executableName = document.getElementById('import-executable-name').value.trim();
   const category = document.getElementById('import-category').value;
   const minRam = document.getElementById('import-min-ram').value;
   const maxRam = document.getElementById('import-max-ram').value;
@@ -2494,7 +2889,7 @@ async function importServer(e) {
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
     formData.append('name', name);
-    formData.append('jarName', jarName);
+    if (executableName) formData.append('executableName', executableName);
     formData.append('javaArgs', javaArgs);
     formData.append('category', category);
     
@@ -4000,7 +4395,7 @@ function startBlueMapPoll() {
     } else {
       stopBlueMapPoll();
     }
-  }, 5000);
+  }, 15000);
 }
 
 function stopBlueMapPoll() {
