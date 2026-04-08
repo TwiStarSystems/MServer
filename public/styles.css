@@ -1037,6 +1037,29 @@ body {
   background: #1a1a2e;
 }
 
+/* Backup History Section */
+.backup-history-section {
+  margin-top: 20px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.section-subheader {
+  background: #0f3460;
+  padding: 10px 15px;
+  font-weight: 600;
+  color: #a0b4cc;
+  font-size: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.section-subheader:hover {
+  background: #1a4a7a;
+}
+
 /* Backup Schedule Status */
 .schedule-status {
   display: flex;

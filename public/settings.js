@@ -64,6 +64,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (tab === 'appsettings') {
         loadAppSettings();
       }
+      // Load external backup settings when that tab is clicked
+      if (tab === 'external-backup') {
+        loadExternalBackupSettings();
+      }
       // Load version info and JAR bucket when Tools tab is clicked
       if (tab === 'tools') {
         loadVersionInfo();
@@ -2725,5 +2729,112 @@ async function deleteApiKey(keyId) {
   } catch (err) {
     console.error('Failed to delete API key:', err);
     alert('Failed to delete API key: ' + err.message);
+  }
+}
+
+
+// ==================== External Backup Storage ====================
+
+let _extBackupSaveTimer = null;
+
+function debounceSaveExternal() {
+  clearTimeout(_extBackupSaveTimer);
+  _extBackupSaveTimer = setTimeout(saveExternalBackupSettings, 800);
+}
+
+function updateExternalBackupType() {
+  const type = document.getElementById('ext-backup-type').value;
+  document.getElementById('ext-ftp-config').style.display = type === 'ftp' ? '' : 'none';
+  document.getElementById('ext-s3-config').style.display = type === 's3' ? '' : 'none';
+}
+
+async function loadExternalBackupSettings() {
+  try {
+    const response = await fetch('/api/settings/external-backup');
+    if (!response.ok) return;
+    const data = await response.json();
+
+    document.getElementById('ext-backup-enabled').checked = !!data.enabled;
+    document.getElementById('ext-backup-config').style.display = data.enabled ? '' : 'none';
+
+    const type = data.type || 'ftp';
+    document.getElementById('ext-backup-type').value = type;
+    updateExternalBackupType();
+
+    // FTP
+    const ftp = data.ftp || {};
+    document.getElementById('ext-ftp-host').value = ftp.host || '';
+    document.getElementById('ext-ftp-port').value = ftp.port || 21;
+    document.getElementById('ext-ftp-username').value = ftp.username || '';
+    document.getElementById('ext-ftp-password').value = '';  // never pre-fill passwords
+    document.getElementById('ext-ftp-path').value = ftp.remotePath || '/backups/';
+    document.getElementById('ext-ftp-passive').checked = ftp.passive !== false;
+
+    // S3
+    const s3 = data.s3 || {};
+    document.getElementById('ext-s3-bucket').value = s3.bucket || '';
+    document.getElementById('ext-s3-region').value = s3.region || 'us-east-1';
+    document.getElementById('ext-s3-access-key').value = s3.accessKey || '';
+    document.getElementById('ext-s3-secret-key').value = '';  // never pre-fill secrets
+    document.getElementById('ext-s3-prefix').value = s3.prefix || 'backups/';
+  } catch (err) {
+    console.error('Failed to load external backup settings:', err);
+  }
+}
+
+async function saveExternalBackupSettings() {
+  const enabled = document.getElementById('ext-backup-enabled').checked;
+  document.getElementById('ext-backup-config').style.display = enabled ? '' : 'none';
+
+  const type = document.getElementById('ext-backup-type').value;
+
+  const payload = {
+    enabled,
+    type,
+    ftp: {
+      host: document.getElementById('ext-ftp-host').value,
+      port: parseInt(document.getElementById('ext-ftp-port').value) || 21,
+      username: document.getElementById('ext-ftp-username').value,
+      password: document.getElementById('ext-ftp-password').value,
+      remotePath: document.getElementById('ext-ftp-path').value,
+      passive: document.getElementById('ext-ftp-passive').checked
+    },
+    s3: {
+      bucket: document.getElementById('ext-s3-bucket').value,
+      region: document.getElementById('ext-s3-region').value,
+      accessKey: document.getElementById('ext-s3-access-key').value,
+      secretKey: document.getElementById('ext-s3-secret-key').value,
+      prefix: document.getElementById('ext-s3-prefix').value
+    }
+  };
+
+  try {
+    const response = await fetch('/api/settings/external-backup', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (result.success) {
+      showNotification('External backup settings saved', 'success');
+    }
+  } catch (err) {
+    console.error('Failed to save external backup settings:', err);
+    showNotification('Failed to save external backup settings', 'error');
+  }
+}
+
+async function testExternalBackupSettings() {
+  try {
+    showNotification('Testing external backup connection…', 'info');
+    const response = await fetch('/api/settings/external-backup/test', { method: 'POST' });
+    const result = await response.json();
+    if (result.success) {
+      showNotification(`✅ Connection successful: ${result.message}`, 'success');
+    } else {
+      showNotification(`❌ Connection failed: ${result.error}`, 'error');
+    }
+  } catch (err) {
+    showNotification(`❌ Connection failed: ${err.message}`, 'error');
   }
 }

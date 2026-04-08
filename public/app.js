@@ -628,6 +628,7 @@ function updateServerInList(serverId, isRunning, status) {
 async function selectServer(serverId) {
   currentServerId = serverId;
   currentPath = '';
+  backupHistoryLoaded = false;  // Reset history state on server change
   
   // Update UI
   document.getElementById('no-server-view').style.display = 'none';
@@ -3756,15 +3757,21 @@ async function loadBackups() {
     
     data.backups.forEach(backup => {
       const row = document.createElement('tr');
-      const isScheduled = backup.name.startsWith('scheduled-backup-');
+      let prefix = '';
+      if (backup.is_incremental) prefix = '🔼 ';
+      else if (backup.is_scheduled) prefix = '📅 ';
+      const checksumBadge = backup.has_checksum
+        ? '<span class="badge badge-success" title="Checksum present">✓</span>'
+        : '';
       row.innerHTML = `
-        <td>${isScheduled ? '📅 ' : ''}${escapeHtml(backup.name)}</td>
+        <td>${prefix}${escapeHtml(backup.name)} ${checksumBadge}</td>
         <td>${formatBytes(backup.size)}</td>
         <td>${new Date(backup.created).toLocaleString()}</td>
         <td>
           <div class="file-actions-cell">
             <button class="btn btn-small action-btn" onclick="downloadBackup('${escapeHtml(backup.name)}')">Download</button>
             <button class="btn btn-success btn-small action-btn" onclick="restoreBackup('${escapeHtml(backup.name)}')">Restore</button>
+            <button class="btn btn-small action-btn" onclick="verifyBackup('${escapeHtml(backup.name)}')">Verify</button>
             <button class="btn btn-danger btn-small action-btn" onclick="deleteBackup('${escapeHtml(backup.name)}')">Delete</button>
           </div>
         </td>
@@ -3776,18 +3783,40 @@ async function loadBackups() {
   }
 }
 
+function openCreateBackupModal() {
+  if (!currentServerId) return;
+  // Reset to defaults
+  document.getElementById('backup-compression-level').value = 6;
+  document.getElementById('backup-compression-level-val').textContent = '6';
+  document.getElementById('backup-incremental').checked = false;
+  document.getElementById('create-backup-modal').classList.add('active');
+}
+
+function closeCreateBackupModal() {
+  document.getElementById('create-backup-modal').classList.remove('active');
+}
+
 async function createBackup() {
   if (!currentServerId) return;
-  if (!confirm('Create a backup of the server? This may take a few minutes.')) return;
-  
+
+  const compressionLevel = parseInt(document.getElementById('backup-compression-level').value) || 6;
+  const incremental = document.getElementById('backup-incremental').checked;
+
+  closeCreateBackupModal();
+
   const btn = document.getElementById('create-backup-btn');
   btn.disabled = true;
   btn.textContent = 'Creating...';
   
   try {
-    const result = await apiRequest(`/api/servers/${currentServerId}/backups/create`, { method: 'POST' });
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
+      method: 'POST',
+      body: JSON.stringify({ compressionLevel, incremental, backupType: 'manual' })
+    });
     if (result.success) {
-      alert(`Backup created: ${result.backup} (${formatBytes(result.size)})`);
+      const typeLabel = result.is_incremental ? 'Incremental backup' : 'Backup';
+      const checksumNote = result.checksum ? ` | SHA-256: ${result.checksum.substring(0, 12)}…` : '';
+      showNotification(`${typeLabel} created: ${result.backup} (${formatBytes(result.size)}${checksumNote})`, 'success');
       loadBackups();
     }
   } catch (error) {
@@ -3836,6 +3865,86 @@ async function deleteBackup(name) {
     console.error('Failed to delete backup:', error);
   }
 }
+
+async function verifyBackup(name) {
+  if (!currentServerId) return;
+  try {
+    showNotification(`Verifying ${name}…`, 'info');
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+    if (result.success) {
+      const short = result.checksum ? result.checksum.substring(0, 16) + '…' : 'N/A';
+      showNotification(`✅ Backup OK — SHA-256: ${short}`, 'success');
+    } else {
+      showNotification(`❌ Backup failed verification: ${result.error}`, 'error');
+    }
+    // Refresh list to show/update checksum badge
+    loadBackups();
+  } catch (error) {
+    console.error('Failed to verify backup:', error);
+    showNotification('Backup verification failed', 'error');
+  }
+}
+
+let backupHistoryLoaded = false;
+
+function toggleBackupHistory() {
+  const container = document.getElementById('backup-history-container');
+  const icon = document.getElementById('backup-history-toggle-icon');
+  if (container.style.display === 'none') {
+    container.style.display = '';
+    icon.textContent = '▲';
+    if (!backupHistoryLoaded) loadBackupHistory();
+  } else {
+    container.style.display = 'none';
+    icon.textContent = '▼';
+  }
+}
+
+async function loadBackupHistory() {
+  if (!currentServerId) return;
+  backupHistoryLoaded = true;
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/backups/history`);
+    const tbody = document.getElementById('backup-history-list');
+    tbody.innerHTML = '';
+
+    if (!data.events || data.events.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-message">No backup history yet</td></tr>';
+      return;
+    }
+
+    const typeLabels = {
+      'manual': '🖐 Manual',
+      'scheduled': '📅 Scheduled',
+      'pre-version-change': '🔄 Pre-Update',
+      'pre-jar-update': '⚙️ Pre-JAR'
+    };
+
+    data.events.forEach(evt => {
+      const row = document.createElement('tr');
+      const time = new Date(evt.timestamp).toLocaleString();
+      const typeLabel = typeLabels[evt.type] || escapeHtml(evt.type || '');
+      const fileName = evt.backup_name
+        ? `<span title="${escapeHtml(evt.backup_name)}">${escapeHtml(evt.backup_name.substring(0, 36))}${evt.backup_name.length > 36 ? '…' : ''}</span>`
+        : '—';
+      const size = evt.size ? formatBytes(evt.size) : '—';
+      const status = evt.success
+        ? `<span class="badge badge-success">${evt.is_incremental ? '🔼 Incremental' : '✅ OK'}</span>`
+        : `<span class="badge badge-danger" title="${escapeHtml(evt.error || '')}">❌ Failed</span>`;
+      const checksum = evt.checksum
+        ? `<span class="badge badge-secondary" title="${escapeHtml(evt.checksum)}">${evt.checksum.substring(0, 8)}…</span>`
+        : '—';
+      row.innerHTML = `<td>${time}</td><td>${typeLabel}</td><td>${fileName}</td><td>${size}</td><td>${status}</td><td>${checksum}</td>`;
+      tbody.appendChild(row);
+    });
+  } catch (error) {
+    console.error('Failed to load backup history:', error);
+  }
+}
+
 
 // ==================== Backup Scheduling ====================
 
@@ -3913,6 +4022,11 @@ async function loadScheduleIntoModal() {
       document.getElementById('schedule-max-backups').value = s.maxBackups || 7;
       document.getElementById('schedule-stop-server').checked = s.stopServer !== false;
       document.getElementById('schedule-restart-after').checked = s.restartAfter !== false;
+
+      const compLvl = (s.compressionLevel !== undefined) ? s.compressionLevel : 6;
+      document.getElementById('schedule-compression-level').value = compLvl;
+      document.getElementById('schedule-compression-level-val').textContent = compLvl;
+      document.getElementById('schedule-incremental').checked = !!s.incremental;
       
       updateScheduleOptions();
     }
@@ -3963,6 +4077,8 @@ async function saveSchedule() {
     dayOfWeek: parseInt(document.getElementById('schedule-day').value) || 0,
     cron: document.getElementById('schedule-cron').value,
     maxBackups: parseInt(document.getElementById('schedule-max-backups').value) || 7,
+    compressionLevel: parseInt(document.getElementById('schedule-compression-level').value) || 6,
+    incremental: document.getElementById('schedule-incremental').checked,
     stopServer: document.getElementById('schedule-stop-server').checked,
     restartAfter: document.getElementById('schedule-restart-after').checked
   };
@@ -5242,7 +5358,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const scheduleBackupBtn = document.getElementById('schedule-backup-btn');
   const refreshBackupsBtn = document.getElementById('refresh-backups-btn');
   
-  if (createBackupBtn) createBackupBtn.onclick = createBackup;
+  if (createBackupBtn) createBackupBtn.onclick = openCreateBackupModal;
   if (scheduleBackupBtn) scheduleBackupBtn.onclick = openScheduleModal;
   if (refreshBackupsBtn) refreshBackupsBtn.onclick = loadBackups;
   

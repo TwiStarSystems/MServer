@@ -42,6 +42,7 @@
           <button type="button" class="settings-tab-btn" data-tab="approvals">✅ Approvals</button>
           <button type="button" class="settings-tab-btn" data-tab="api">🔌 API Manager</button>
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
+          <button type="button" class="settings-tab-btn" data-tab="external-backup">☁️ External Backup</button>
           <button type="button" class="settings-tab-btn" data-tab="tools">🛠️ Tools</button>
         </nav>
         
@@ -384,6 +385,105 @@
                 <div class="form-group" style="display: flex; align-items: flex-end;">
                   <button type="button" class="btn btn-secondary" onclick="testSmtpSettings()">📧 Send Test Email</button>
                 </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- External Backup Storage Section -->
+        <section id="external-backup-section" class="settings-section">
+          <div class="section-header">
+            <h2>☁️ External Backup Storage</h2>
+          </div>
+          <div class="settings-card">
+            <h3>📤 Upload Backups to External Storage</h3>
+            <p class="settings-description">Automatically upload each backup to an S3 bucket or FTP server after it is created.</p>
+
+            <div class="form-group">
+              <label class="toggle-label">
+                <input type="checkbox" id="ext-backup-enabled" onchange="saveExternalBackupSettings()">
+                <span class="toggle-slider"></span>
+                Enable External Backup Upload
+              </label>
+            </div>
+
+            <div id="ext-backup-config" style="display: none;">
+              <div class="form-group">
+                <label>Storage Type</label>
+                <select id="ext-backup-type" class="form-control" onchange="updateExternalBackupType(); saveExternalBackupSettings()">
+                  <option value="ftp">FTP</option>
+                  <option value="s3">Amazon S3 / S3-Compatible</option>
+                </select>
+              </div>
+
+              <!-- FTP Settings -->
+              <div id="ext-ftp-config">
+                <div class="form-row">
+                  <div class="form-group" style="flex: 2;">
+                    <label>FTP Host</label>
+                    <input type="text" id="ext-ftp-host" class="form-control" placeholder="ftp.example.com" oninput="debounceSaveExternal()">
+                  </div>
+                  <div class="form-group" style="flex: 1;">
+                    <label>Port</label>
+                    <input type="number" id="ext-ftp-port" class="form-control" value="21" min="1" max="65535" oninput="debounceSaveExternal()">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group" style="flex: 1;">
+                    <label>Username</label>
+                    <input type="text" id="ext-ftp-username" class="form-control" placeholder="ftpuser" oninput="debounceSaveExternal()">
+                  </div>
+                  <div class="form-group" style="flex: 1;">
+                    <label>Password</label>
+                    <input type="password" id="ext-ftp-password" class="form-control" placeholder="••••••••" oninput="debounceSaveExternal()">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Remote Path</label>
+                  <input type="text" id="ext-ftp-path" class="form-control" value="/backups/" oninput="debounceSaveExternal()">
+                </div>
+                <div class="form-group">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="ext-ftp-passive" checked onchange="saveExternalBackupSettings()">
+                    Use Passive Mode (recommended)
+                  </label>
+                </div>
+              </div>
+
+              <!-- S3 Settings -->
+              <div id="ext-s3-config" style="display: none;">
+                <div class="form-row">
+                  <div class="form-group" style="flex: 2;">
+                    <label>Bucket Name</label>
+                    <input type="text" id="ext-s3-bucket" class="form-control" placeholder="my-backup-bucket" oninput="debounceSaveExternal()">
+                  </div>
+                  <div class="form-group" style="flex: 1;">
+                    <label>Region</label>
+                    <input type="text" id="ext-s3-region" class="form-control" value="us-east-1" oninput="debounceSaveExternal()">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group" style="flex: 1;">
+                    <label>Access Key ID</label>
+                    <input type="text" id="ext-s3-access-key" class="form-control" placeholder="AKIAIOSFODNN7EXAMPLE" oninput="debounceSaveExternal()">
+                  </div>
+                  <div class="form-group" style="flex: 1;">
+                    <label>Secret Access Key</label>
+                    <input type="password" id="ext-s3-secret-key" class="form-control" placeholder="••••••••" oninput="debounceSaveExternal()">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Key Prefix</label>
+                  <input type="text" id="ext-s3-prefix" class="form-control" value="backups/" oninput="debounceSaveExternal()">
+                  <small class="form-help">Path prefix inside the bucket (e.g. <code>backups/</code>)</small>
+                </div>
+                <div class="form-group">
+                  <small class="form-help">⚠️ S3 support requires <code>boto3</code> to be installed: <code>pip install boto3</code></small>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <button type="button" class="btn btn-secondary" onclick="testExternalBackupSettings()">🔌 Test Connection</button>
               </div>
             </div>
           </div>

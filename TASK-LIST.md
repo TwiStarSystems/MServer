@@ -18,7 +18,7 @@
 | File Management | 9 | 0 | 100% |
 | JAR Management | 10 | 0 | 100% |
 | User Management | 10 | 0 | 100% |
-| Backup System | 9 | 4 | 69% |
+| Backup System | 15 | 0 | 100% |
 | Task Scheduler | 7 | 2 | 78% |
 | Player Management | 8 | 2 | 80% |
 | Mods/Plugins Management | 5 | 4 | 56% |
@@ -109,10 +109,13 @@
 [X] - Pre-backup server shutdown option
 [X] - Post-backup server restart option
 [X] - Backup email notifications on completion/failure
-[ ] - Incremental backups
-[ ] - Backup compression options (level selection)
-[ ] - Backup to external storage (S3, FTP, etc.)
-[ ] - Backup verification/integrity checking
+[X] - Incremental backups
+[X] - Backup compression options (level selection)
+[X] - Backup to external storage (S3, FTP, etc.)
+[X] - Backup verification/integrity checking
+[X] - Backup history/log viewing interface
+[X] - Automatic backup before server updates/changes
+
 
 ## Task Scheduler ##
 [X] - Scheduled server start

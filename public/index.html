@@ -451,7 +451,7 @@
         <!-- Backups Tab -->
         <div id="backups-tab" class="tab-content">
           <div class="backup-controls">
-            <button id="create-backup-btn" class="btn btn-success">Create Backup</button>
+            <button id="create-backup-btn" class="btn btn-success" onclick="openCreateBackupModal()">Create Backup</button>
             <button id="schedule-backup-btn" class="btn btn-primary">📅 Schedule Backup</button>
             <button id="refresh-backups-btn" class="btn">Refresh</button>
           </div>
@@ -482,6 +482,31 @@
               <tbody id="backup-list">
               </tbody>
             </table>
+          </div>
+
+          <!-- Backup History -->
+          <div class="backup-history-section">
+            <div class="section-subheader" onclick="toggleBackupHistory()" style="cursor:pointer; user-select:none;">
+              <span>📋 Backup History</span>
+              <span id="backup-history-toggle-icon">▼</span>
+            </div>
+            <div id="backup-history-container" style="display:none;">
+              <table class="backup-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Backup File</th>
+                    <th>Size</th>
+                    <th>Status</th>
+                    <th>Checksum</th>
+                  </tr>
+                </thead>
+                <tbody id="backup-history-list">
+                  <tr><td colspan="6" class="empty-message">No history yet</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
@@ -1400,6 +1425,12 @@
           </div>
           
           <div class="form-group">
+            <label>Compression Level (0 = none, 9 = maximum)</label>
+            <input type="range" id="schedule-compression-level" class="form-control" min="0" max="9" value="6" oninput="document.getElementById('schedule-compression-level-val').textContent = this.value">
+            <small class="form-help">Level: <span id="schedule-compression-level-val">6</span> — higher level = smaller file, slower backup</small>
+          </div>
+          
+          <div class="form-group">
             <label class="checkbox-label">
               <input type="checkbox" id="schedule-stop-server" checked>
               Stop server before backup (recommended for data integrity)
@@ -1412,10 +1443,46 @@
               Restart server after backup completes
             </label>
           </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="schedule-incremental">
+              Incremental backup (only files changed since last backup)
+            </label>
+            <small class="form-help">⚠️ First run will be a full backup. Incremental backups require the previous full backup to restore.</small>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-success" onclick="saveSchedule()">Save Schedule</button>
           <button class="btn" onclick="closeScheduleModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Backup Options Modal -->
+    <div id="create-backup-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>💾 Create Backup</h2>
+          <button class="close-btn" onclick="closeCreateBackupModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px;">
+          <div class="form-group">
+            <label>Compression Level (0 = none, 9 = maximum)</label>
+            <input type="range" id="backup-compression-level" class="form-control" min="0" max="9" value="6" oninput="document.getElementById('backup-compression-level-val').textContent = this.value">
+            <small class="form-help">Level: <span id="backup-compression-level-val">6</span> — higher = smaller file, slower</small>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="backup-incremental">
+              Incremental backup (only files changed since last backup)
+            </label>
+            <small class="form-help">⚠️ Requires a previous full backup to restore. Falls back to full if none exists.</small>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="createBackup()">Create Backup</button>
+          <button class="btn" onclick="closeCreateBackupModal()">Cancel</button>
         </div>
       </div>
     </div>

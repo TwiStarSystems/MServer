@@ -292,6 +292,25 @@ class SettingsManager:
             'password': '',
             'fromEmail': '',
             'fromName': 'MServerController'
+        },
+        'externalBackup': {
+            'enabled': False,
+            'type': 'ftp',  # 'ftp' or 's3'
+            's3': {
+                'bucket': '',
+                'region': 'us-east-1',
+                'accessKey': '',
+                'secretKey': '',
+                'prefix': 'backups/'
+            },
+            'ftp': {
+                'host': '',
+                'port': 21,
+                'username': '',
+                'password': '',
+                'remotePath': '/backups/',
+                'passive': True
+            }
         }
     }
     
@@ -406,6 +425,56 @@ class SettingsManager:
             smtp.get('host') and
             smtp.get('fromEmail')
         )
+
+    def get_external_backup_settings(self):
+        """Get external backup settings (passwords masked)"""
+        ext = self.settings.get('externalBackup',
+                                self.DEFAULT_SETTINGS['externalBackup']).copy()
+        # Deep copy and mask secrets
+        ext = json.loads(json.dumps(ext))
+        if ext.get('s3', {}).get('secretKey'):
+            ext['s3']['secretKey'] = '********'
+        if ext.get('ftp', {}).get('password'):
+            ext['ftp']['password'] = '********'
+        return ext
+
+    def get_external_backup_settings_full(self):
+        """Get full external backup settings including secrets (internal use)"""
+        return self.settings.get('externalBackup',
+                                 self.DEFAULT_SETTINGS['externalBackup'])
+
+    def update_external_backup_settings(self, data):
+        """Update external backup settings"""
+        if 'externalBackup' not in self.settings:
+            self.settings['externalBackup'] = json.loads(
+                json.dumps(self.DEFAULT_SETTINGS['externalBackup'])
+            )
+        ext = self.settings['externalBackup']
+
+        for key in ['enabled', 'type']:
+            if key in data:
+                ext[key] = data[key]
+
+        if 's3' in data:
+            if 's3' not in ext:
+                ext['s3'] = {}
+            for key in ['bucket', 'region', 'accessKey', 'prefix']:
+                if key in data['s3']:
+                    ext['s3'][key] = data['s3'][key]
+            if 'secretKey' in data['s3'] and data['s3']['secretKey'] != '********':
+                ext['s3']['secretKey'] = data['s3']['secretKey']
+
+        if 'ftp' in data:
+            if 'ftp' not in ext:
+                ext['ftp'] = {}
+            for key in ['host', 'port', 'username', 'remotePath', 'passive']:
+                if key in data['ftp']:
+                    ext['ftp'][key] = data['ftp'][key]
+            if 'password' in data['ftp'] and data['ftp']['password'] != '********':
+                ext['ftp']['password'] = data['ftp']['password']
+
+        self._save_settings()
+        return self.get_external_backup_settings()
 
 
 # ==================== Email Service ====================
@@ -674,6 +743,112 @@ class StatsManager:
         ]
 
 
+# ==================== Backup Helpers ====================
+
+def verify_backup_file(backup_path):
+    """Verify a ZIP backup's integrity and compute its SHA-256 checksum.
+
+    Returns (ok: bool, checksum: str|None, error: str|None).
+    Also writes a .sha256 sidecar file next to the backup.
+    """
+    backup_path = Path(backup_path)
+    try:
+        with zipfile.ZipFile(backup_path, 'r') as zf:
+            bad = zf.testzip()
+            if bad is not None:
+                return False, None, f"Corrupt entry in ZIP: {bad}"
+
+        sha256 = hashlib.sha256()
+        with open(backup_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                sha256.update(chunk)
+        checksum = sha256.hexdigest()
+
+        sidecar = backup_path.with_suffix('.sha256')
+        sidecar.write_text(f"{checksum}  {backup_path.name}\n")
+
+        return True, checksum, None
+    except zipfile.BadZipFile as e:
+        return False, None, f"Bad ZIP file: {e}"
+    except Exception as e:
+        return False, None, str(e)
+
+
+def upload_backup_to_external(backup_path, server_id, backup_name):
+    """Upload a backup file to configured external storage (S3 or FTP).
+
+    Returns (ok: bool, message: str).
+    """
+    ext = settings_manager.get_external_backup_settings_full()
+    if not ext.get('enabled', False):
+        return True, 'External backup not enabled'
+
+    storage_type = ext.get('type', 'ftp')
+    backup_path = Path(backup_path)
+
+    if storage_type == 's3':
+        try:
+            import boto3
+            s3_cfg = ext.get('s3', {})
+            bucket = s3_cfg.get('bucket', '')
+            region = s3_cfg.get('region', 'us-east-1')
+            access_key = s3_cfg.get('accessKey', '')
+            secret_key = s3_cfg.get('secretKey', '')
+            prefix = s3_cfg.get('prefix', 'backups/').rstrip('/') + '/'
+
+            if not bucket:
+                return False, 'S3 bucket not configured'
+
+            s3 = boto3.client(
+                's3',
+                region_name=region,
+                aws_access_key_id=access_key or None,
+                aws_secret_access_key=secret_key or None,
+            )
+            key = f"{prefix}{server_id}/{backup_name}"
+            s3.upload_file(str(backup_path), bucket, key)
+            return True, f"Uploaded to s3://{bucket}/{key}"
+        except ImportError:
+            return False, 'boto3 is not installed. Run: pip install boto3'
+        except Exception as e:
+            return False, f"S3 upload failed: {e}"
+
+    elif storage_type == 'ftp':
+        import ftplib
+        ftp_cfg = ext.get('ftp', {})
+        host = ftp_cfg.get('host', '')
+        port = int(ftp_cfg.get('port', 21))
+        username = ftp_cfg.get('username', '')
+        password = ftp_cfg.get('password', '')
+        remote_path = ftp_cfg.get('remotePath', '/backups/').rstrip('/') + '/'
+        passive = ftp_cfg.get('passive', True)
+
+        if not host:
+            return False, 'FTP host not configured'
+
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(host, port, timeout=30)
+            ftp.login(username, password)
+            ftp.set_pasv(passive)
+
+            # Ensure remote directory exists
+            remote_dir = f"{remote_path}{server_id}"
+            try:
+                ftp.mkd(remote_dir)
+            except ftplib.error_perm:
+                pass  # Directory already exists
+
+            with open(backup_path, 'rb') as f:
+                ftp.storbinary(f"STOR {remote_dir}/{backup_name}", f)
+            ftp.quit()
+            return True, f"Uploaded to ftp://{host}{remote_dir}/{backup_name}"
+        except Exception as e:
+            return False, f"FTP upload failed: {e}"
+
+    return False, f"Unknown external storage type: {storage_type}"
+
+
 # ==================== Backup Scheduler ====================
 
 class BackupScheduler:
@@ -757,29 +932,29 @@ class BackupScheduler:
     def _execute_backup(self, server_id):
         """Execute a scheduled backup for a server"""
         print(f"[Scheduler] Starting scheduled backup for server: {server_id}")
-        
+
         try:
             # Get server config
             server_config = server_manager.get_server_config(server_id)
             if not server_config:
                 print(f"[Scheduler] Server {server_id} not found")
                 return
-            
+
             server_path = Path(server_config.get('serverPath', SERVERS_DIR))
             if not server_path.exists():
                 print(f"[Scheduler] Server path not found for {server_id}")
                 return
-            
+
             # Check if server is running and stop it if configured to do so
             schedule = self.schedules['schedules'].get(server_id, {})
             was_running = False
             instance = server_manager.servers.get(server_id)
-            
+
             if instance and instance.is_running():
                 if schedule.get('stopServer', True):
                     print(f"[Scheduler] Stopping server {server_id} for backup")
                     was_running = True
-                    
+
                     # Send warning to players
                     server_manager.send_command(server_id, "say [Backup] Server will restart in 30 seconds for scheduled backup!")
                     time.sleep(10)
@@ -787,75 +962,196 @@ class BackupScheduler:
                     time.sleep(10)
                     server_manager.send_command(server_id, "say [Backup] Server restarting in 10 seconds...")
                     time.sleep(10)
-                    
+
                     # Stop the server gracefully
                     server_manager.stop_server(server_id)
-                    
+
                     # Wait for server to stop (max 60 seconds)
                     for _ in range(60):
                         if server_id not in server_manager.servers or not server_manager.servers[server_id].is_running():
                             break
                         time.sleep(1)
-                    
+
                     # Force kill if still running
                     if server_id in server_manager.servers and server_manager.servers[server_id].is_running():
                         server_manager.kill_server(server_id)
                         time.sleep(2)
                 else:
                     print(f"[Scheduler] Server {server_id} is running, backup may be inconsistent (stopServer=False)")
-            
+
             # Create backup directory for this server
             backup_dir = BACKUPS_DIR / server_id
             backup_dir.mkdir(parents=True, exist_ok=True)
-            
+
             timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            backup_name = f'scheduled-backup-{timestamp}.zip'
+            is_incremental = schedule.get('incremental', False)
+            compression_level = max(0, min(9, int(schedule.get('compressionLevel', 6))))
+
+            if is_incremental:
+                backup_name = f'incremental-backup-{timestamp}.zip'
+            else:
+                backup_name = f'scheduled-backup-{timestamp}.zip'
             backup_path = backup_dir / backup_name
-            
+
+            # Determine cutoff time for incremental backups
+            cutoff_time = None
+            if is_incremental:
+                cutoff_time = self._get_last_backup_time(server_id)
+                if cutoff_time:
+                    print(f"[Scheduler] Incremental backup since: {cutoff_time.isoformat()}")
+                else:
+                    print(f"[Scheduler] No previous backup found; performing full backup")
+                    is_incremental = False  # fall back to full
+
             # Create the backup
             print(f"[Scheduler] Creating backup: {backup_name}")
-            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            included_files = []
+            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
+                                 compresslevel=compression_level) as zipf:
                 for root, dirs, files in os.walk(server_path):
                     for file in files:
                         file_path = Path(root) / file
+                        if cutoff_time is not None:
+                            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                            if mtime < cutoff_time:
+                                continue
                         arcname = file_path.relative_to(server_path)
                         zipf.write(file_path, arcname)
-            
+                        included_files.append(str(arcname))
+
+                # Write manifest for incremental backups
+                if cutoff_time is not None:
+                    manifest = {
+                        'type': 'incremental',
+                        'base_time': cutoff_time.isoformat(),
+                        'created': timestamp,
+                        'file_count': len(included_files)
+                    }
+                    zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
+                else:
+                    manifest = {
+                        'type': 'full',
+                        'created': timestamp,
+                        'file_count': len(included_files)
+                    }
+                    zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
+
             size = backup_path.stat().st_size
             print(f"[Scheduler] Backup created: {backup_name} ({size} bytes)")
-            
+
+            # Verify backup integrity
+            ok, checksum, verify_err = verify_backup_file(backup_path)
+            if not ok:
+                print(f"[Scheduler] Backup verification warning: {verify_err}")
+
+            # Upload to external storage if configured
+            ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
+            if not ext_ok:
+                print(f"[Scheduler] External upload warning: {ext_msg}")
+
             # Update last backup time
             self.schedules['schedules'][server_id]['lastBackup'] = datetime.now().isoformat()
             self._save_schedules()
-            
+
+            # Log backup event
+            self._log_backup_event(server_id, {
+                'type': 'scheduled',
+                'backup_name': backup_name,
+                'size': size,
+                'is_incremental': cutoff_time is not None,
+                'compression_level': compression_level,
+                'verified': ok,
+                'checksum': checksum,
+                'uploaded_to_external': ext_ok,
+                'success': True
+            })
+
             # Clean up old backups if retention is set
             max_backups = schedule.get('maxBackups', 0)
             if max_backups > 0:
                 self._cleanup_old_backups(server_id, max_backups)
-            
+
             # Restart server if it was running
             if was_running and schedule.get('restartAfter', True):
                 print(f"[Scheduler] Restarting server {server_id}")
                 server_manager.start_server(server_id)
-            
+
             # Emit notification to connected clients
             socketio.emit('backup_completed', {
                 'serverId': server_id,
                 'backup': backup_name,
                 'size': size,
-                'scheduled': True
+                'scheduled': True,
+                'verified': ok,
+                'checksum': checksum
             })
-            
+
             print(f"[Scheduler] Scheduled backup completed for server: {server_id}")
-            
+
         except Exception as e:
             print(f"[Scheduler] Backup failed for server {server_id}: {e}")
+            self._log_backup_event(server_id, {
+                'type': 'scheduled',
+                'backup_name': None,
+                'success': False,
+                'error': str(e)
+            })
             socketio.emit('backup_failed', {
                 'serverId': server_id,
                 'error': str(e),
                 'scheduled': True
             })
     
+    def _get_history_path(self, server_id):
+        """Return path to the backup history log for a server"""
+        return BACKUPS_DIR / server_id / '_backup_log.json'
+
+    def _log_backup_event(self, server_id, event):
+        """Append a backup event to the per-server history log"""
+        history_path = self._get_history_path(server_id)
+        try:
+            if history_path.exists():
+                with open(history_path, 'r') as f:
+                    history = json.load(f)
+            else:
+                history = {'events': []}
+
+            event.setdefault('id', str(uuid.uuid4()))
+            event.setdefault('timestamp', datetime.now().isoformat())
+            history['events'].insert(0, event)
+
+            # Keep at most 500 events
+            history['events'] = history['events'][:500]
+
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(history_path, 'w') as f:
+                json.dump(history, f, indent=2)
+        except Exception as e:
+            print(f"[Backup] Failed to log backup event: {e}")
+
+    def get_backup_history(self, server_id):
+        """Return backup event history for a server"""
+        history_path = self._get_history_path(server_id)
+        if not history_path.exists():
+            return []
+        try:
+            with open(history_path, 'r') as f:
+                data = json.load(f)
+            return data.get('events', [])
+        except Exception:
+            return []
+
+    def _get_last_backup_time(self, server_id):
+        """Return datetime of the most recent successful backup, or None"""
+        history = self.get_backup_history(server_id)
+        for event in history:
+            if event.get('success'):
+                try:
+                    return datetime.fromisoformat(event['timestamp'])
+                except Exception:
+                    pass
+        return None
+
     def _cleanup_old_backups(self, server_id, max_backups):
         """Remove old scheduled backups exceeding the maximum count"""
         backup_dir = BACKUPS_DIR / server_id
@@ -874,6 +1170,10 @@ class BackupScheduler:
         for backup_file, _ in backups[max_backups:]:
             try:
                 backup_file.unlink()
+                # Remove sidecar checksum file if present
+                sidecar = backup_file.with_suffix('.sha256')
+                if sidecar.exists():
+                    sidecar.unlink()
                 print(f"[Scheduler] Removed old backup: {backup_file.name}")
             except Exception as e:
                 print(f"[Scheduler] Failed to remove old backup {backup_file.name}: {e}")
@@ -893,6 +1193,8 @@ class BackupScheduler:
             'stopServer': schedule_config.get('stopServer', True),
             'restartAfter': schedule_config.get('restartAfter', True),
             'maxBackups': schedule_config.get('maxBackups', 7),
+            'compressionLevel': schedule_config.get('compressionLevel', 6),
+            'incremental': schedule_config.get('incremental', False),
             'lastBackup': self.schedules.get('schedules', {}).get(server_id, {}).get('lastBackup'),
             'createdAt': datetime.now().isoformat()
         }
@@ -4662,18 +4964,19 @@ def download_server_jar(server_id):
     data = request.get_json()
     server_type = data.get('serverType')
     version = data.get('version')
+    create_bk = data.get('createBackup', False)
     executable = 'server.jar'  # Always use server.jar for Java server JARs
-    
+
     if not server_type or not version:
         return jsonify({'error': 'Server type and version required'}), 400
-    
+
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
         return jsonify({'error': 'Server not found'}), 404
-    
+
     server_path = Path(server_config['serverPath'])
     jar_path = server_path / executable
-    
+
     # --- Era compatibility guard ---
     current_version = server_config.get('version', '')
     if current_version and current_version not in ('Unknown', ''):
@@ -4704,6 +5007,39 @@ def download_server_jar(server_id):
                     f'Create a new server to run Minecraft 1.26 or higher.'
                 )
             }), 400
+
+    # Automatic backup before JAR update if requested
+    if create_bk:
+        try:
+            backup_dir = BACKUPS_DIR / server_id
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+            bk_name = f'pre-jar-update-{timestamp}.zip'
+            bk_path = backup_dir / bk_name
+            with zipfile.ZipFile(bk_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+                fc = 0
+                for root, dirs, files in os.walk(server_path):
+                    for file in files:
+                        fp = Path(root) / file
+                        zipf.write(fp, fp.relative_to(server_path))
+                        fc += 1
+                zipf.writestr('backup_manifest.json', json.dumps({
+                    'type': 'full', 'created': timestamp, 'file_count': fc
+                }))
+            bk_size = bk_path.stat().st_size
+            ok, checksum, _ = verify_backup_file(bk_path)
+            backup_scheduler._log_backup_event(server_id, {
+                'type': 'pre-jar-update',
+                'backup_name': bk_name,
+                'size': bk_size,
+                'is_incremental': False,
+                'compression_level': 6,
+                'verified': ok,
+                'checksum': checksum,
+                'success': True
+            })
+        except Exception as e:
+            return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
 
     # Copy from local serverexecutables directory
     success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
@@ -4948,18 +5284,37 @@ def change_server_version(server_id):
             # Create backup directory for this server
             backup_dir = BACKUPS_DIR / server_id
             backup_dir.mkdir(parents=True, exist_ok=True)
-            
+
             timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
             backup_name = f'pre-version-change-{timestamp}.zip'
             backup_path = backup_dir / backup_name
-            
+
             # Create the backup
-            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
+                                 compresslevel=6) as zipf:
+                file_count = 0
                 for root, dirs, files in os.walk(server_dir):
                     for file in files:
                         file_path = Path(root) / file
                         arcname = file_path.relative_to(server_dir)
                         zipf.write(file_path, arcname)
+                        file_count += 1
+                zipf.writestr('backup_manifest.json', json.dumps({
+                    'type': 'full', 'created': timestamp, 'file_count': file_count
+                }))
+
+            bk_size = backup_path.stat().st_size
+            ok, checksum, _ = verify_backup_file(backup_path)
+            backup_scheduler._log_backup_event(server_id, {
+                'type': 'pre-version-change',
+                'backup_name': backup_name,
+                'size': bk_size,
+                'is_incremental': False,
+                'compression_level': 6,
+                'verified': ok,
+                'checksum': checksum,
+                'success': True
+            })
         except Exception as e:
             return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
     
@@ -6270,21 +6625,24 @@ def delete_resourcepack(server_id):
 def list_backups(server_id):
     """List backups for a server"""
     backup_dir = BACKUPS_DIR / server_id
-    
+
     if not backup_dir.exists():
         return jsonify({'backups': []})
-    
-    
+
     backups = []
     for item in backup_dir.iterdir():
         if item.suffix == '.zip':
             stat = item.stat()
-            backups.append({
+            entry = {
                 'name': item.name,
                 'size': stat.st_size,
-                'created': datetime.fromtimestamp(stat.st_mtime).isoformat()
-            })
-    
+                'created': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                'is_incremental': item.name.startswith('incremental-backup-'),
+                'is_scheduled': item.name.startswith('scheduled-backup-'),
+                'has_checksum': item.with_suffix('.sha256').exists()
+            }
+            backups.append(entry)
+
     backups.sort(key=lambda x: x['created'], reverse=True)
     return jsonify({'backups': backups})
 
@@ -6292,31 +6650,104 @@ def list_backups(server_id):
 @limiter.limit("5 per 15 minutes")
 @server_access_required
 def create_backup(server_id):
-    """Create a backup for a server"""
+    """Create a backup for a server.
+
+    Optional JSON body:
+      - compressionLevel (int 0-9, default 6)
+      - incremental (bool, default False) — only back up files changed since last backup
+      - backupType (str) — label for the history log (e.g. 'manual', 'pre-update')
+    """
     server_path = server_manager.get_server_path(server_id)
-    
+
     if not server_path.exists():
         return jsonify({'error': 'Server path not found'}), 400
-    
+
+    data = request.get_json(silent=True) or {}
+    compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
+    is_incremental = bool(data.get('incremental', False))
+    backup_type = str(data.get('backupType', 'manual'))
+
     # Create backup directory for this server
     backup_dir = BACKUPS_DIR / server_id
     backup_dir.mkdir(parents=True, exist_ok=True)
-    
+
     timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-    backup_name = f'backup-{timestamp}.zip'
+    if is_incremental:
+        backup_name = f'incremental-backup-{timestamp}.zip'
+    else:
+        backup_name = f'backup-{timestamp}.zip'
     backup_path = backup_dir / backup_name
-    
+
     try:
-        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # Determine cutoff time for incremental
+        cutoff_time = None
+        if is_incremental:
+            cutoff_time = backup_scheduler._get_last_backup_time(server_id)
+            if cutoff_time is None:
+                is_incremental = False  # fall back to full
+
+        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
+                             compresslevel=compression_level) as zipf:
+            file_count = 0
             for root, dirs, files in os.walk(server_path):
                 for file in files:
                     file_path = Path(root) / file
+                    if cutoff_time is not None:
+                        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                        if mtime < cutoff_time:
+                            continue
                     arcname = file_path.relative_to(server_path)
                     zipf.write(file_path, arcname)
-        
+                    file_count += 1
+
+            manifest = {
+                'type': 'incremental' if cutoff_time else 'full',
+                'created': timestamp,
+                'file_count': file_count
+            }
+            if cutoff_time:
+                manifest['base_time'] = cutoff_time.isoformat()
+            zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
+
         size = backup_path.stat().st_size
-        return jsonify({'success': True, 'backup': backup_name, 'size': size})
+
+        # Verify backup integrity
+        ok, checksum, verify_err = verify_backup_file(backup_path)
+
+        # Upload to external storage if configured
+        ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
+        if not ext_ok:
+            print(f"[Backup] External upload warning: {ext_msg}")
+
+        # Log backup event
+        backup_scheduler._log_backup_event(server_id, {
+            'type': backup_type,
+            'backup_name': backup_name,
+            'size': size,
+            'is_incremental': cutoff_time is not None,
+            'compression_level': compression_level,
+            'verified': ok,
+            'checksum': checksum,
+            'uploaded_to_external': ext_ok,
+            'success': True
+        })
+
+        return jsonify({
+            'success': True,
+            'backup': backup_name,
+            'size': size,
+            'verified': ok,
+            'checksum': checksum,
+            'is_incremental': cutoff_time is not None,
+            'uploaded_to_external': ext_ok
+        })
     except Exception as e:
+        backup_scheduler._log_backup_event(server_id, {
+            'type': backup_type,
+            'backup_name': backup_name,
+            'success': False,
+            'error': str(e)
+        })
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/servers/<server_id>/backups/download', methods=['GET'])
@@ -6456,7 +6887,9 @@ def set_backup_schedule(server_id):
         'cron': data.get('cron', ''),
         'stopServer': data.get('stopServer', True),
         'restartAfter': data.get('restartAfter', True),
-        'maxBackups': data.get('maxBackups', 7)
+        'maxBackups': data.get('maxBackups', 7),
+        'compressionLevel': data.get('compressionLevel', 6),
+        'incremental': data.get('incremental', False)
     })
     
     return jsonify({'success': True, 'schedule': schedule})
@@ -6487,6 +6920,46 @@ def get_all_backup_schedules():
             user_schedules[server_id] = schedule
     
     return jsonify({'schedules': user_schedules})
+
+
+@app.route('/api/servers/<server_id>/backups/history', methods=['GET'])
+@server_access_required
+def get_backup_history(server_id):
+    """Get the backup event history for a server"""
+    events = backup_scheduler.get_backup_history(server_id)
+    return jsonify({'events': events})
+
+
+@app.route('/api/servers/<server_id>/backups/verify', methods=['POST'])
+@server_access_required
+def verify_backup(server_id):
+    """Verify a backup file's integrity and compute its checksum"""
+    data = request.get_json()
+    backup_name = data.get('name', '')
+
+    backup_name = secure_filename(backup_name)
+    if not backup_name or '..' in backup_name or '/' in backup_name:
+        return jsonify({'error': 'Invalid backup name'}), 400
+
+    backup_path = BACKUPS_DIR / server_id / backup_name
+    try:
+        backup_path = backup_path.resolve()
+        if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
+            return jsonify({'error': 'Invalid backup path'}), 400
+    except Exception:
+        return jsonify({'error': 'Invalid backup path'}), 400
+
+    if not backup_path.exists():
+        return jsonify({'error': 'Backup not found'}), 404
+
+    ok, checksum, error = verify_backup_file(backup_path)
+
+    return jsonify({
+        'success': ok,
+        'backup': backup_name,
+        'checksum': checksum,
+        'error': error
+    })
 
 
 # ==================== Task Scheduler API ====================
@@ -6695,6 +7168,52 @@ def test_smtp_settings():
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 400
+
+
+@app.route('/api/settings/external-backup', methods=['GET'])
+@admin_required
+def get_external_backup_settings_api():
+    """Get external backup storage settings (admin only)"""
+    return jsonify(settings_manager.get_external_backup_settings())
+
+
+@app.route('/api/settings/external-backup', methods=['PUT'])
+@admin_required
+def update_external_backup_settings_api():
+    """Update external backup storage settings (admin only)"""
+    data = request.get_json()
+    updated = settings_manager.update_external_backup_settings(data)
+    return jsonify({'success': True, 'settings': updated})
+
+
+@app.route('/api/settings/external-backup/test', methods=['POST'])
+@admin_required
+def test_external_backup_settings():
+    """Test external backup storage connectivity by uploading a tiny probe file"""
+    import tempfile
+
+    ext = settings_manager.get_external_backup_settings_full()
+    if not ext.get('enabled', False):
+        return jsonify({'error': 'External backup is not enabled'}), 400
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            with zipfile.ZipFile(tmp_path, 'w') as zf:
+                zf.writestr('test.txt', 'MServerController external backup test')
+
+        ok, msg = upload_backup_to_external(tmp_path, '_test', 'connectivity-test.zip')
+        tmp_path.unlink(missing_ok=True)
+        # Remove sidecar (no checksum for test file)
+        sidecar = tmp_path.with_suffix('.sha256')
+        if sidecar.exists():
+            sidecar.unlink()
+
+        if ok:
+            return jsonify({'success': True, 'message': msg})
+        return jsonify({'error': msg}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ==================== System Stats API ====================
