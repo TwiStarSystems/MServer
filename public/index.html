@@ -347,6 +347,30 @@
         <!-- Players Tab -->
         <div id="players-tab" class="tab-content">
           <div class="players-container">
+            <!-- Online Players Section -->
+            <div class="players-section">
+              <div class="players-section-header">
+                <h3>🟢 Online Players</h3>
+                <div class="players-section-actions">
+                  <button class="btn btn-small" onclick="openMessagePlayersModal()">📢 Message Players</button>
+                  <button class="btn btn-small" onclick="loadOnlinePlayers()">Refresh</button>
+                </div>
+              </div>
+              <p class="players-info">Players currently online, tracked from live console output. Requires the server to be running.</p>
+              <table class="players-table">
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>Online Since</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="online-players-list">
+                  <tr><td colspan="3" class="empty-message">No players online</td></tr>
+                </tbody>
+              </table>
+            </div>
+
             <!-- Operators Section -->
             <div class="players-section">
               <div class="players-section-header">
@@ -384,7 +408,7 @@
                 <h3>📋 Player Data Files</h3>
                 <button class="btn btn-small" onclick="loadPlayerData()">Refresh</button>
               </div>
-              <p class="players-info">Players who have joined the server. Click to edit their NBT data.</p>
+              <p class="players-info">Players who have joined the server. Click to edit their NBT data or view stats.</p>
               <p class="players-info players-info-note">⚠️ <strong>Note:</strong> Player data files are only written when a player leaves the server. Data for currently online players may not reflect their current state.</p>
               <table class="players-table">
                 <thead>
@@ -436,12 +460,35 @@
                     <th>Player</th>
                     <th>UUID</th>
                     <th>Reason</th>
+                    <th>Expires</th>
                     <th>Banned By</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="banned-list">
-                  <tr><td colspan="5" class="empty-message">Loading banned players...</td></tr>
+                  <tr><td colspan="6" class="empty-message">Loading banned players...</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Banned IPs Section -->
+            <div class="players-section">
+              <div class="players-section-header">
+                <h3>🌐 Banned IPs</h3>
+                <button class="btn btn-small btn-danger" onclick="openBanIpModal()">+ Ban IP</button>
+              </div>
+              <table class="players-table">
+                <thead>
+                  <tr>
+                    <th>IP Address</th>
+                    <th>Reason</th>
+                    <th>Expires</th>
+                    <th>Banned By</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="banned-ips-list">
+                  <tr><td colspan="5" class="empty-message">Loading banned IPs...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -453,6 +500,8 @@
           <div class="backup-controls">
             <button id="create-backup-btn" class="btn btn-success" onclick="openCreateBackupModal()">Create Backup</button>
             <button id="schedule-backup-btn" class="btn btn-primary">📅 Schedule Backup</button>
+            <button class="btn" onclick="triggerImportBackup()">📥 Import Backup</button>
+            <input type="file" id="import-backup-input" accept=".zip" style="display:none" onchange="importBackup(this)">
             <button id="refresh-backups-btn" class="btn">Refresh</button>
           </div>
           
@@ -1109,6 +1158,14 @@
             <input type="text" id="input-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200">
             <small>Extra Java arguments (memory args are set automatically above)</small>
           </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="input-auto-start">
+              Auto-Start on controller startup
+            </label>
+            <small>Automatically start this server 15 seconds after MServerController starts (e.g. after a host reboot)</small>
+          </div>
           
           <div class="modal-footer">
             <button type="button" class="btn back-btn" onclick="backToCreationType()">← Back</button>
@@ -1121,7 +1178,7 @@
 
     <!-- File Editor Modal -->
     <div id="file-editor-modal" class="modal">
-      <div class="modal-content modal-large">
+      <div class="modal-content modal-editor">
         <div class="modal-header">
           <h2 id="editor-title">Edit File</h2>
           <button class="close-btn" onclick="closeFileEditor()">&times;</button>
@@ -1184,7 +1241,7 @@
 
     <!-- NBT Editor Modal -->
     <div id="nbt-editor-modal" class="modal">
-      <div class="modal-content modal-xlarge">
+      <div class="modal-content modal-editor">
         <div class="modal-header">
           <h2 id="nbt-editor-title">NBT Editor</h2>
           <button class="close-btn" onclick="closeNbtEditor()">&times;</button>
@@ -1201,6 +1258,7 @@
         <div class="modal-footer">
           <button class="btn btn-success" onclick="saveNbtFile()">Save Changes</button>
           <button class="btn" onclick="closeNbtEditor()">Cancel</button>
+          <button class="btn btn-secondary" onclick="closeNbtEditor()">Close</button>
         </div>
       </div>
     </div>
@@ -1358,9 +1416,117 @@
           <label>Reason</label>
           <input type="text" id="ban-reason" class="form-control" placeholder="Reason for ban">
         </div>
+        <div class="form-group">
+          <label>Expires</label>
+          <select id="ban-expires-type" class="form-control" onchange="toggleBanExpiry()">
+            <option value="forever" selected>Never (Permanent)</option>
+            <option value="date">Custom Date/Time</option>
+          </select>
+        </div>
+        <div class="form-group" id="ban-expires-date-group" style="display:none;">
+          <label>Expiry Date &amp; Time</label>
+          <input type="datetime-local" id="ban-expires-date" class="form-control">
+        </div>
         <div class="modal-footer">
           <button class="btn btn-danger" onclick="banPlayer()">Ban Player</button>
           <button class="btn" onclick="closeBanPlayerModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ban IP Modal -->
+    <div id="ban-ip-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>Ban IP Address</h2>
+          <button class="close-btn" onclick="closeBanIpModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>IP Address</label>
+          <input type="text" id="ban-ip-address" class="form-control" placeholder="e.g. 192.168.1.100">
+        </div>
+        <div class="form-group">
+          <label>Reason</label>
+          <input type="text" id="ban-ip-reason" class="form-control" placeholder="Reason for ban">
+        </div>
+        <div class="form-group">
+          <label>Expires</label>
+          <select id="ban-ip-expires-type" class="form-control" onchange="toggleBanIpExpiry()">
+            <option value="forever" selected>Never (Permanent)</option>
+            <option value="date">Custom Date/Time</option>
+          </select>
+        </div>
+        <div class="form-group" id="ban-ip-expires-date-group" style="display:none;">
+          <label>Expiry Date &amp; Time</label>
+          <input type="datetime-local" id="ban-ip-expires-date" class="form-control">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-danger" onclick="banIp()">Ban IP</button>
+          <button class="btn" onclick="closeBanIpModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Message Players Modal -->
+    <div id="message-players-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>📢 Message Players</h2>
+          <button class="close-btn" onclick="closeMessagePlayersModal()">&times;</button>
+        </div>
+        <div class="form-group">
+          <label>Target</label>
+          <input type="text" id="msg-target" class="form-control" value="@a" placeholder="@a, @p, or player name">
+          <small class="form-help">@a = all players, @p = nearest player, or enter a specific name</small>
+        </div>
+        <div class="form-group">
+          <label>Message Type</label>
+          <select id="msg-type" class="form-control">
+            <option value="chat">Chat (tellraw)</option>
+            <option value="title">Title (large screen text)</option>
+            <option value="subtitle">Subtitle (below title)</option>
+            <option value="actionbar">Action Bar (above hotbar)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Message</label>
+          <input type="text" id="msg-text" class="form-control" placeholder="Enter message to send">
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="sendPlayerMessage()">Send</button>
+          <button class="btn" onclick="closeMessagePlayersModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player Stats Modal -->
+    <div id="player-stats-modal" class="modal">
+      <div class="modal-content modal-medium">
+        <div class="modal-header">
+          <h2>📊 Player Statistics</h2>
+          <button class="close-btn" onclick="closePlayerStatsModal()">&times;</button>
+        </div>
+        <div id="player-stats-content" style="padding: 16px; max-height: 500px; overflow-y: auto;">
+          <p class="empty-message">Loading...</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closePlayerStatsModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player Inventory Modal -->
+    <div id="player-inventory-modal" class="modal">
+      <div class="modal-content modal-medium">
+        <div class="modal-header">
+          <h2>🎒 Player Inventory</h2>
+          <button class="close-btn" onclick="closePlayerInventoryModal()">&times;</button>
+        </div>
+        <div id="player-inventory-content" style="padding: 16px; max-height: 500px; overflow-y: auto;">
+          <p class="empty-message">Loading...</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="closePlayerInventoryModal()">Close</button>
         </div>
       </div>
     </div>
@@ -1467,6 +1633,9 @@
           <button class="close-btn" onclick="closeCreateBackupModal()">&times;</button>
         </div>
         <div class="modal-body" style="padding: 20px;">
+          <div class="alert alert-warning" style="margin-bottom: 16px; padding: 10px 14px; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; color: #92400e; font-size: 0.875rem;">
+            ⚠️ If the server is currently online, it will be temporarily powered down before the backup begins and restarted afterward to ensure data integrity.
+          </div>
           <div class="form-group">
             <label>Compression Level (0 = none, 9 = maximum)</label>
             <input type="range" id="backup-compression-level" class="form-control" min="0" max="9" value="6" oninput="document.getElementById('backup-compression-level-val').textContent = this.value">
@@ -1487,6 +1656,27 @@
       </div>
     </div>
     
+    <!-- Restore Confirm Modal -->
+    <div id="restore-confirm-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>🔄 Restore Backup</h2>
+          <button class="close-btn" onclick="closeRestoreModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px;">
+          <p>You are about to restore: <strong id="restore-backup-name"></strong></p>
+          <div style="margin-top: 12px; padding: 10px 14px; background: #fee2e2; border: 1px solid #ef4444; border-radius: 6px; color: #7f1d1d; font-size: 0.875rem;">
+            ⚠️ <strong>Warning:</strong> All current server files will be permanently replaced by the backup.<br>
+            If the server is online, it will be powered down first and restarted after the restore completes.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="confirmRestore()">Restore</button>
+          <button class="btn" onclick="closeRestoreModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Task Scheduler Modal -->
     <div id="task-modal" class="modal">
       <div class="modal-content modal-medium">

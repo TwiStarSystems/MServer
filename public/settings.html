@@ -621,6 +621,55 @@
             </div>
           </div>
           
+          <!-- Server Backup & Restore -->
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>💾 Server Backup &amp; Restore</h3>
+              <span class="tool-description">Download all servers as a single archive or restore from a previous backup</span>
+            </div>
+            <div class="tool-panel-body">
+              <!-- Backup -->
+              <div class="settings-card" style="margin-bottom: 1rem;">
+                <h4 style="margin-top:0;">📦 Backup All Servers</h4>
+                <p class="settings-description">Creates a ZIP archive of every server directory and downloads it to your browser. Servers do not need to be stopped — files are snapshotted live.</p>
+                <button id="backup-all-btn" class="btn btn-primary" onclick="backupAllServers()">
+                  📥 Download All Servers
+                </button>
+                <div id="backup-all-status" class="jar-status" style="margin-top:0.75rem;"></div>
+              </div>
+
+              <!-- Restore -->
+              <div class="settings-card">
+                <h4 style="margin-top:0;">📤 Restore Servers from Backup</h4>
+                <p class="settings-description">Upload a previously downloaded backup ZIP. Running servers included in the archive will be stopped automatically before being restored.</p>
+
+                <div class="form-group">
+                  <label>Restore Mode</label>
+                  <select id="restore-mode" class="form-control" style="max-width:280px;">
+                    <option value="merge" selected>Merge — keep servers not in the archive</option>
+                    <option value="replace">Replace — wipe ALL servers first</option>
+                  </select>
+                  <small class="form-help" style="display:block;margin-top:0.35rem;">
+                    ⚠️ <strong>Replace</strong> will delete every server on this installation before extracting.
+                  </small>
+                </div>
+
+                <div class="form-group">
+                  <label class="btn btn-secondary upload-btn" style="cursor:pointer;">
+                    📁 Select Backup File
+                    <input type="file" id="restore-file-input" accept=".zip" style="display:none;" onchange="onRestoreFileSelected(this)">
+                  </label>
+                  <span id="restore-filename" style="margin-left:0.6rem;color:var(--text-muted,#aaa);">No file selected</span>
+                </div>
+
+                <button id="restore-all-btn" class="btn btn-danger" onclick="restoreAllServers()" disabled>
+                  🔄 Restore Servers
+                </button>
+                <div id="restore-all-status" class="jar-status" style="margin-top:0.75rem;"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- Custom Tools -->
           <div class="tool-panel">
             <div class="tool-panel-header">
@@ -893,6 +942,10 @@
         <button class="btn" onclick="closeEditUserModal()">Cancel</button>
       </div>
     </div>
+        <!-- Footer -->
+    <footer id="app-footer" class="app-footer">
+      Made By TwiStarSystems © All Rights Reserved
+    </footer>
   </div>
   
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>

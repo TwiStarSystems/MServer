@@ -2,6 +2,28 @@
 
 // Note: CSRF token management is in utils.js (window.csrfToken and fetchCSRFToken)
 
+// Utility: promise-based sleep
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// ==================== Helpers ====================
+
+/**
+ * Poll until a server's status is 'stopped' or until timeoutMs elapses.
+ * Returns true if the server stopped, false on timeout.
+ */
+async function waitForServerStopped(serverId, timeoutMs = 40000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const serverList = await apiRequest('/api/servers');
+      const s = serverList.find(sv => sv.id === serverId);
+      if (!s || s.status === 'stopped') return true;
+    } catch (_) {}
+    await sleep(2000);
+  }
+  return false;
+}
+
 // Global fetch wrapper to handle authentication errors and CSRF tokens
 // Store original fetch for utils.js to use when fetching CSRF token
 window.originalFetch = window.fetch;
@@ -521,6 +543,13 @@ function connectWebSocket() {
       const status = data.status || (data.running ? 'running' : 'stopped');
       updateServerInList(data.serverId, data.running, status);
     }
+    // Track online players from join/leave events
+    if (data.type === 'player_join' || data.type === 'player_leave') {
+      const tab = document.getElementById('players-tab');
+      if (tab && tab.classList.contains('active') && data.serverId === currentServerId) {
+        loadOnlinePlayers();
+      }
+    }
   });
   
   socket.on('disconnect', (reason) => {
@@ -545,6 +574,32 @@ function connectWebSocket() {
   socket.on('backup_failed', (data) => {
     if (data.scheduled) {
       showNotification(`❌ Scheduled backup failed: ${data.error}`, 'error');
+    }
+  });
+
+  // Manual backup async events
+  socket.on('backup_manual_completed', (data) => {
+    if (data.serverId === currentServerId) {
+      loadBackups();
+    }
+  });
+
+  socket.on('backup_manual_failed', (data) => {
+    if (data.serverId === currentServerId) {
+      showNotification(`❌ Backup failed: ${data.error}`, 'error');
+    }
+  });
+
+  // Restore async events
+  socket.on('restore_completed', (data) => {
+    if (data.serverId === currentServerId) {
+      showNotification(`✅ Restore complete: ${data.backup}`, 'success');
+    }
+  });
+
+  socket.on('restore_failed', (data) => {
+    if (data.serverId === currentServerId) {
+      showNotification(`❌ Restore failed: ${data.error}`, 'error');
     }
   });
 }
@@ -1108,18 +1163,25 @@ async function startAllServers() {
   }
 
   const btn = document.getElementById('start-all-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+  if (btn) { btn.disabled = true; btn.textContent = `Starting 1/${stoppedServers.length}...`; }
 
   let started = 0;
   let failed = 0;
 
-  for (const server of stoppedServers) {
+  for (let i = 0; i < stoppedServers.length; i++) {
+    const server = stoppedServers[i];
+    if (btn) btn.textContent = `Starting ${i + 1}/${stoppedServers.length}...`;
     try {
       const result = await apiRequest(`/api/servers/${server.id}/start`, { method: 'POST' });
       if (result.success) started++;
       else failed++;
     } catch (_) {
       failed++;
+    }
+    // Stagger each startup by 30 seconds (except after the last one) so JVM
+    // initialization does not overlap and spike the host CPU.
+    if (i < stoppedServers.length - 1) {
+      await sleep(30000);
     }
   }
 
@@ -1142,19 +1204,37 @@ async function stopAllServers() {
   }
 
   const btn = document.getElementById('stop-all-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Stopping...'; }
+  if (btn) { btn.disabled = true; btn.textContent = `Stopping 1/${runningServers.length}...`; }
 
   let stopped = 0;
   let failed = 0;
 
-  for (const server of runningServers) {
+  for (let i = 0; i < runningServers.length; i++) {
+    const server = runningServers[i];
+    if (btn) btn.textContent = `Stopping ${i + 1}/${runningServers.length}...`;
     try {
       const result = await apiRequest(`/api/servers/${server.id}/stop`, { method: 'POST' });
-      if (result.success) stopped++;
-      else failed++;
+      if (result.success) {
+        // Wait for the process to actually exit before stopping the next server.
+        // The backend already sends a force-kill after 30 s; we allow up to 40 s
+        // before declaring a timeout and moving on.
+        const didStop = await waitForServerStopped(server.id, 40000);
+        if (didStop) {
+          stopped++;
+        } else {
+          // Backend force-kill should have fired by now – try an explicit kill as
+          // a last resort so the next server can cleanly shut down.
+          try { await apiRequest(`/api/servers/${server.id}/kill`, { method: 'POST' }); } catch (_) {}
+          failed++;
+        }
+      } else {
+        failed++;
+      }
     } catch (_) {
       failed++;
     }
+    // Brief pause between sequential stop commands
+    if (i < runningServers.length - 1) await sleep(500);
   }
 
   if (btn) { btn.disabled = false; btn.textContent = 'Stop All'; }
@@ -1305,6 +1385,7 @@ async function openAddServerModal() {
   document.getElementById('input-min-ram').value = '1G';
   document.getElementById('input-max-ram').value = '2G';
   document.getElementById('input-jvm-args').value = '';
+  document.getElementById('input-auto-start').checked = false;
   
   // Update path hint with actual default path
   const pathHint = document.getElementById('path-hint');
@@ -1661,6 +1742,7 @@ async function openEditServerModal() {
     document.getElementById('input-min-ram').value = minRamMatch ? minRamMatch[1] : '1G';
     document.getElementById('input-max-ram').value = maxRamMatch ? maxRamMatch[1] : '2G';
     document.getElementById('input-jvm-args').value = extraArgs;
+    document.getElementById('input-auto-start').checked = !!server.autoStart;
     
     // Show version management section and load current version
     const versionSection = document.getElementById('version-management-section');
@@ -1997,7 +2079,8 @@ async function saveServer(e) {
     serverPath: document.getElementById('input-path').value,
     executable: executable,
     javaArgs: isBedrock ? '' : javaArgs,
-    category: category
+    category: category,
+    autoStart: document.getElementById('input-auto-start').checked
   };
   
   try {
@@ -3193,6 +3276,16 @@ function createFileRow(file, filePath) {
         downloadFile(filePath);
       };
       actionsDiv.appendChild(downloadBtn);
+    } else {
+      const zipBtn = document.createElement('button');
+      zipBtn.textContent = 'ZIP';
+      zipBtn.className = 'btn btn-small action-btn';
+      zipBtn.title = 'Download folder as ZIP';
+      zipBtn.onclick = (e) => {
+        e.stopPropagation();
+        downloadFolderAsZip(filePath);
+      };
+      actionsDiv.appendChild(zipBtn);
     }
     
     const deleteBtn = document.createElement('button');
@@ -3614,7 +3707,6 @@ async function saveNbtFile() {
       })
     });
     
-    closeNbtEditor();
     showNotification('NBT file saved successfully', 'success');
   } catch (error) {
     console.error('Failed to save NBT file:', error);
@@ -3711,6 +3803,11 @@ function downloadFile(filePath) {
   window.location.href = `/api/servers/${currentServerId}/files/download?path=${encodeURIComponent(filePath)}`;
 }
 
+function downloadFolderAsZip(folderPath) {
+  if (!currentServerId) return;
+  window.location.href = `/api/servers/${currentServerId}/files/zip?path=${encodeURIComponent(folderPath)}`;
+}
+
 async function uploadFile(file) {
   if (!currentServerId) return;
   
@@ -3803,27 +3900,17 @@ async function createBackup() {
   const incremental = document.getElementById('backup-incremental').checked;
 
   closeCreateBackupModal();
+  showNotification('⏳ Backup started. The server will be stopped if running, backed up, then restarted.', 'info');
 
-  const btn = document.getElementById('create-backup-btn');
-  btn.disabled = true;
-  btn.textContent = 'Creating...';
-  
   try {
-    const result = await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
+    await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
       method: 'POST',
       body: JSON.stringify({ compressionLevel, incremental, backupType: 'manual' })
     });
-    if (result.success) {
-      const typeLabel = result.is_incremental ? 'Incremental backup' : 'Backup';
-      const checksumNote = result.checksum ? ` | SHA-256: ${result.checksum.substring(0, 12)}…` : '';
-      showNotification(`${typeLabel} created: ${result.backup} (${formatBytes(result.size)}${checksumNote})`, 'success');
-      loadBackups();
-    }
+    // Backup runs in the background; the list will refresh via the backup_manual_completed socket event
   } catch (error) {
-    console.error('Failed to create backup:', error);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Create Backup';
+    console.error('Failed to start backup:', error);
+    showNotification('Failed to start backup', 'error');
   }
 }
 
@@ -3832,22 +3919,65 @@ function downloadBackup(name) {
   window.location.href = `/api/servers/${currentServerId}/backups/download?name=${encodeURIComponent(name)}`;
 }
 
-async function restoreBackup(name) {
+let _restoreTargetName = null;
+
+function restoreBackup(name) {
   if (!currentServerId) return;
-  if (!confirm(`Restore backup "${name}"?\n\nWARNING: This will replace all current server files!\nMake sure the server is stopped.`)) return;
-  
+  _restoreTargetName = name;
+  document.getElementById('restore-backup-name').textContent = name;
+  document.getElementById('restore-confirm-modal').classList.add('active');
+}
+
+function closeRestoreModal() {
+  document.getElementById('restore-confirm-modal').classList.remove('active');
+  _restoreTargetName = null;
+}
+
+async function confirmRestore() {
+  if (!currentServerId || !_restoreTargetName) return;
+  const name = _restoreTargetName;
+  closeRestoreModal();
+  showNotification('🔄 Restore started. The server will be stopped, files replaced, then restarted.', 'info');
   try {
-    const result = await apiRequest(`/api/servers/${currentServerId}/backups/restore`, {
+    await apiRequest(`/api/servers/${currentServerId}/backups/restore`, {
       method: 'POST',
       body: JSON.stringify({ name })
     });
-    
+  } catch (error) {
+    console.error('Failed to start restore:', error);
+    showNotification('Failed to start restore', 'error');
+  }
+}
+
+function triggerImportBackup() {
+  if (!currentServerId) return;
+  document.getElementById('import-backup-input').click();
+}
+
+async function importBackup(input) {
+  if (!currentServerId || !input.files || !input.files[0]) return;
+  const file = input.files[0];
+  input.value = '';
+  showNotification(`Uploading ${file.name}…`, 'info');
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const response = await fetch(`/api/servers/${currentServerId}/backups/import`, {
+      method: 'POST',
+      body: formData
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      showNotification(`Import failed: ${result.error}`, 'error');
+      return;
+    }
     if (result.success) {
-      alert('Backup restored successfully!');
-      loadFiles('');
+      showNotification(`✅ Backup imported: ${result.backup} (${formatBytes(result.size)})`, 'success');
+      loadBackups();
     }
   } catch (error) {
-    console.error('Failed to restore backup:', error);
+    console.error('Failed to import backup:', error);
+    showNotification('Failed to import backup', 'error');
   }
 }
 
@@ -4775,10 +4905,12 @@ async function loadAllPlayerData() {
   if (!currentServerId) return;
   
   await Promise.all([
+    loadOnlinePlayers(),
     loadOperators(),
     loadPlayerData(),
     loadWhitelist(),
-    loadBannedPlayers()
+    loadBannedPlayers(),
+    loadBannedIPs()
   ]);
 }
 
@@ -4872,7 +5004,9 @@ async function loadPlayerData() {
           <td>${new Date(player.modified).toLocaleString()}</td>
           <td>${formatBytes(player.size)}</td>
           <td class="actions-cell">
-            <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}')">Edit NBT</button>
+            <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}', '${escapeHtml(player.path || '')}')">Edit NBT</button>
+            <button class="btn btn-small" onclick="viewPlayerStats('${player.uuid}')">📊 Stats</button>
+            <button class="btn btn-small" onclick="viewPlayerInventory('${player.uuid}')">🎒 Inventory</button>
             ${opButton}
             ${wlButton}
             ${banButton}
@@ -4986,30 +5120,36 @@ async function loadBannedPlayers() {
   if (!currentServerId) return;
   
   const tbody = document.getElementById('banned-list');
-  tbody.innerHTML = '<tr><td colspan="5" class="empty-message">Loading...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="empty-message">Loading...</td></tr>';
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/players/banned`);
     const banned = data.banned || [];
     
     if (banned.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty-message">No banned players</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-message">No banned players</td></tr>';
       return;
     }
     
-    tbody.innerHTML = banned.map(player => `
-      <tr>
-        <td><strong>${escapeHtml(player.name)}</strong></td>
-        <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
-        <td>${escapeHtml(player.reason || 'No reason')}</td>
-        <td>${escapeHtml(player.source || 'Unknown')}</td>
-        <td class="actions-cell">
-          <button class="btn btn-success btn-small" onclick="unbanPlayer('${player.uuid}', '${escapeHtml(player.name)}')">Unban</button>
-        </td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = banned.map(player => {
+      const expiresDisplay = (!player.expires || player.expires === 'forever')
+        ? '<span class="badge badge-danger">Permanent</span>'
+        : escapeHtml(player.expires);
+      return `
+        <tr>
+          <td><strong>${escapeHtml(player.name)}</strong></td>
+          <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
+          <td>${escapeHtml(player.reason || 'No reason')}</td>
+          <td>${expiresDisplay}</td>
+          <td>${escapeHtml(player.source || 'Unknown')}</td>
+          <td class="actions-cell">
+            <button class="btn btn-success btn-small" onclick="unbanPlayer('${player.uuid}', '${escapeHtml(player.name)}')">Unban</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
   } catch (error) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-message error">Failed to load banned players</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-message error">Failed to load banned players</td></tr>';
   }
 }
 
@@ -5162,6 +5302,8 @@ async function removeFromWhitelist(uuid, name) {
 function openBanPlayerModal() {
   document.getElementById('ban-player-name').value = '';
   document.getElementById('ban-reason').value = '';
+  document.getElementById('ban-expires-type').value = 'forever';
+  document.getElementById('ban-expires-date-group').style.display = 'none';
   document.getElementById('ban-player-modal').classList.add('active');
 }
 
@@ -5172,6 +5314,16 @@ function closeBanPlayerModal() {
 async function banPlayer() {
   const name = document.getElementById('ban-player-name').value.trim();
   const reason = document.getElementById('ban-reason').value.trim() || 'Banned By Admin';
+  const expiresType = document.getElementById('ban-expires-type').value;
+  let expires = 'forever';
+  if (expiresType === 'date') {
+    const dateVal = document.getElementById('ban-expires-date').value;
+    if (!dateVal) {
+      alert('Please select an expiry date');
+      return;
+    }
+    expires = new Date(dateVal).toISOString();
+  }
   
   if (!name) {
     alert('Please enter a player name');
@@ -5181,7 +5333,7 @@ async function banPlayer() {
   try {
     await apiRequest(`/api/servers/${currentServerId}/players/banned`, {
       method: 'POST',
-      body: JSON.stringify({ name, reason })
+      body: JSON.stringify({ name, reason, expires })
     });
     
     closeBanPlayerModal();
@@ -5208,17 +5360,299 @@ async function unbanPlayer(uuid, name) {
 }
 
 // Player NBT Editor
-async function openPlayerNbtEditor(uuid) {
-  // Find the world folder with playerdata
-  const worldFolders = ['world', 'world_nether', 'world_the_end'];
-  
-  for (const world of worldFolders) {
-    const path = `${world}/playerdata/${uuid}.dat`;
+// Online Players
+async function loadOnlinePlayers() {
+  if (!currentServerId) return;
+  const tbody = document.getElementById('online-players-list');
+  if (!tbody) return;
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/online`);
+    const online = data.online || [];
+    if (online.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty-message">No players online</td></tr>';
+      return;
+    }
+    tbody.innerHTML = online.map(p => `
+      <tr>
+        <td><strong>${escapeHtml(p.name)}</strong></td>
+        <td>${p.since ? new Date(p.since * 1000).toLocaleTimeString() : '—'}</td>
+        <td class="actions-cell">
+          <button class="btn btn-small" onclick="openMessagePlayersModal('${escapeHtml(p.name)}')">Message</button>
+          <button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeHtml(p.name)}')">Ban</button>
+        </td>
+      </tr>
+    `).join('');
+  } catch (error) {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Server offline or no player data</td></tr>';
+  }
+}
+
+async function banPlayerOnline(name) {
+  const reason = prompt(`Reason for banning ${name}:`) ?? '';
+  if (reason === null) return;
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/banned`, {
+      method: 'POST',
+      body: JSON.stringify({ name, reason: reason.trim() || 'Banned By Admin', expires: 'forever' })
+    });
+    showNotification(result.message || `${name} has been banned`, 'success');
+    loadAllPlayerData();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// Player Stats
+async function viewPlayerStats(uuid) {
+  const modal = document.getElementById('player-stats-modal');
+  const content = document.getElementById('player-stats-content');
+  content.innerHTML = '<p class="empty-message">Loading...</p>';
+  modal.classList.add('active');
+
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/${uuid}/stats`);
+    const h = data.highlights || {};
+    const allStats = data.stats || {};
+
+    const playtimeTicks = h.playtime_ticks || 0;
+    const playtimeHours = (playtimeTicks / 72000).toFixed(1);
+    const distanceKm = ((h.distance_walked_cm || 0) / 100000).toFixed(2);
+
+    content.innerHTML = `
+      <div style="margin-bottom: 16px;">
+        <h4 style="margin-bottom: 8px;">Highlights</h4>
+        <table class="players-table">
+          <tr><td>⏱ Playtime</td><td><strong>${playtimeHours} hours</strong></td></tr>
+          <tr><td>💀 Deaths</td><td><strong>${h.deaths || 0}</strong></td></tr>
+          <tr><td>⚔️ Player Kills</td><td><strong>${h.player_kills || 0}</strong></td></tr>
+          <tr><td>🐾 Mob Kills</td><td><strong>${h.mob_kills || 0}</strong></td></tr>
+          <tr><td>🏃 Distance Walked</td><td><strong>${distanceKm} km</strong></td></tr>
+          <tr><td>⬆️ Jumps</td><td><strong>${h.jumps || 0}</strong></td></tr>
+        </table>
+      </div>
+      <details>
+        <summary style="cursor:pointer; margin-bottom: 8px;"><strong>All Statistics (${Object.keys(allStats).length})</strong></summary>
+        <table class="players-table" style="font-size:0.85em;">
+          <thead><tr><th>Statistic</th><th>Value</th></tr></thead>
+          <tbody>
+            ${Object.entries(allStats).sort((a,b) => a[0].localeCompare(b[0])).map(([k,v]) =>
+              `<tr><td>${escapeHtml(k)}</td><td>${v}</td></tr>`
+            ).join('')}
+          </tbody>
+        </table>
+      </details>
+    `;
+  } catch (error) {
+    content.innerHTML = '<p class="empty-message error">No stats available for this player.</p>';
+  }
+}
+
+function closePlayerStatsModal() {
+  document.getElementById('player-stats-modal').classList.remove('active');
+}
+
+// Player Inventory
+async function viewPlayerInventory(uuid) {
+  const modal = document.getElementById('player-inventory-modal');
+  const content = document.getElementById('player-inventory-content');
+  content.innerHTML = '<p class="empty-message">Loading...</p>';
+  modal.classList.add('active');
+
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/${uuid}/inventory`);
+    const gameTypes = { 0: 'Survival', 1: 'Creative', 2: 'Adventure', 3: 'Spectator' };
+    const gameType = gameTypes[data.gameType] || 'Unknown';
+
+    function renderItems(items) {
+      const list = Array.isArray(items) ? items : (items ? [items] : []);
+      const filled = list.filter(i => i && i.id);
+      if (!filled.length) return '<p style="color:var(--text-muted);font-style:italic;">Empty</p>';
+      return `<ul style="margin:0;padding-left:20px;font-size:0.9em;">${
+        filled.map(item => {
+          const id = (item.id || '').replace('minecraft:', '');
+          const count = item.Count || item.count || 1;
+          const slot = item.Slot !== undefined ? `[${item.Slot}] ` : '';
+          return `<li>${escapeHtml(slot)}<strong>${escapeHtml(id)}</strong> ×${count}</li>`;
+        }).join('')
+      }</ul>`;
+    }
+
+    content.innerHTML = `
+      <div style="margin-bottom:8px;">
+        <strong>Health:</strong> ${data.health != null ? Math.round(data.health * 5) + '%' : '—'} &nbsp;
+        <strong>Food:</strong> ${data.food != null ? data.food + '/20' : '—'} &nbsp;
+        <strong>XP Level:</strong> ${data.xpLevel != null ? data.xpLevel : '—'} &nbsp;
+        <strong>Game Mode:</strong> ${escapeHtml(gameType)}
+      </div>
+      <div style="margin-bottom:12px;"><strong>🗡️ Armor</strong>${renderItems(data.armor)}</div>
+      <div style="margin-bottom:12px;"><strong>🤚 Off-hand</strong>${renderItems(data.offhand)}</div>
+      <div style="margin-bottom:12px;"><strong>🎒 Inventory</strong>${renderItems(data.inventory)}</div>
+      <div><strong>📦 Ender Chest</strong>${renderItems(data.enderChest)}</div>
+    `;
+  } catch (error) {
+    content.innerHTML = '<p class="empty-message error">Could not load inventory data.</p>';
+  }
+}
+
+function closePlayerInventoryModal() {
+  document.getElementById('player-inventory-modal').classList.remove('active');
+}
+
+// IP Bans
+async function loadBannedIPs() {
+  if (!currentServerId) return;
+  const tbody = document.getElementById('banned-ips-list');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="5" class="empty-message">Loading...</td></tr>';
+
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/players/banned-ips`);
+    const banned = data.banned_ips || [];
+    if (banned.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-message">No banned IPs</td></tr>';
+      return;
+    }
+    tbody.innerHTML = banned.map(entry => {
+      const expiresDisplay = (!entry.expires || entry.expires === 'forever')
+        ? '<span class="badge badge-danger">Permanent</span>'
+        : escapeHtml(entry.expires);
+      return `
+        <tr>
+          <td><strong>${escapeHtml(entry.ip)}</strong></td>
+          <td>${escapeHtml(entry.reason || 'No reason')}</td>
+          <td>${expiresDisplay}</td>
+          <td>${escapeHtml(entry.source || 'Unknown')}</td>
+          <td class="actions-cell">
+            <button class="btn btn-success btn-small" onclick="unbanIp('${escapeHtml(entry.ip)}')">Unban</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (error) {
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="empty-message error">Failed to load banned IPs</td></tr>';
+  }
+}
+
+function openBanIpModal() {
+  document.getElementById('ban-ip-address').value = '';
+  document.getElementById('ban-ip-reason').value = '';
+  document.getElementById('ban-ip-expires-type').value = 'forever';
+  document.getElementById('ban-ip-expires-date-group').style.display = 'none';
+  document.getElementById('ban-ip-modal').classList.add('active');
+}
+
+function closeBanIpModal() {
+  document.getElementById('ban-ip-modal').classList.remove('active');
+}
+
+function toggleBanExpiry() {
+  const val = document.getElementById('ban-expires-type').value;
+  document.getElementById('ban-expires-date-group').style.display = val === 'date' ? 'block' : 'none';
+}
+
+function toggleBanIpExpiry() {
+  const val = document.getElementById('ban-ip-expires-type').value;
+  document.getElementById('ban-ip-expires-date-group').style.display = val === 'date' ? 'block' : 'none';
+}
+
+async function banIp() {
+  const ip = document.getElementById('ban-ip-address').value.trim();
+  const reason = document.getElementById('ban-ip-reason').value.trim() || 'Banned By Admin';
+  const expiresType = document.getElementById('ban-ip-expires-type').value;
+  let expires = 'forever';
+  if (expiresType === 'date') {
+    const dateVal = document.getElementById('ban-ip-expires-date').value;
+    if (!dateVal) { alert('Please select an expiry date'); return; }
+    expires = new Date(dateVal).toISOString();
+  }
+  if (!ip) { alert('Please enter an IP address'); return; }
+
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/banned-ips`, {
+      method: 'POST',
+      body: JSON.stringify({ ip, reason, expires })
+    });
+    closeBanIpModal();
+    showNotification(result.message || `${ip} has been banned`, 'success');
+    loadBannedIPs();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function unbanIp(ip) {
+  if (!confirm(`Unban IP ${ip}?`)) return;
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/players/banned-ips/${encodeURIComponent(ip)}`, {
+      method: 'DELETE'
+    });
+    showNotification(`${ip} has been unbanned`, 'success');
+    loadBannedIPs();
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// Player Messaging
+function openMessagePlayersModal(targetPlayer) {
+  document.getElementById('msg-target').value = targetPlayer || '@a';
+  document.getElementById('msg-type').value = 'chat';
+  document.getElementById('msg-text').value = '';
+  document.getElementById('message-players-modal').classList.add('active');
+}
+
+function closeMessagePlayersModal() {
+  document.getElementById('message-players-modal').classList.remove('active');
+}
+
+async function sendPlayerMessage() {
+  const target = document.getElementById('msg-target').value.trim();
+  const type = document.getElementById('msg-type').value;
+  const message = document.getElementById('msg-text').value.trim();
+
+  if (!message) { alert('Please enter a message'); return; }
+  if (!target) { alert('Please enter a target'); return; }
+
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/message`, {
+      method: 'POST',
+      body: JSON.stringify({ target, type, message })
+    });
+    closeMessagePlayersModal();
+    showNotification(result.message || 'Message sent', 'success');
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// Player NBT Editor
+async function openPlayerNbtEditor(uuid, path) {
+  if (path) {
     try {
       await openNbtEditor(path);
       return;
     } catch (e) {
-      // Try next folder
+      // fall through to legacy scan below
+    }
+  }
+
+  // Legacy fallback: scan known world folder / layout combinations
+  // Pre-1.26: world/playerdata/<uuid>.dat
+  // 1.26+:    world/players/data/<uuid>.dat
+  const worldFolders = ['world', 'world_nether', 'world_the_end'];
+  const layouts = [
+    (world) => `${world}/players/data/${uuid}.dat`,
+    (world) => `${world}/playerdata/${uuid}.dat`,
+  ];
+
+  for (const world of worldFolders) {
+    for (const buildPath of layouts) {
+      try {
+        await openNbtEditor(buildPath(world));
+        return;
+      } catch (e) {
+        // Try next
+      }
     }
   }
   

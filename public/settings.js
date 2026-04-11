@@ -805,6 +805,121 @@ async function saveBranding(e) {
 
 // ==================== Tools Functions ====================
 
+// ---- Server Backup / Restore ----
+
+async function backupAllServers() {
+  const btn = document.getElementById('backup-all-btn');
+  const status = document.getElementById('backup-all-status');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating archive…';
+  status.textContent = '';
+  status.className = 'jar-status';
+
+  try {
+    const response = await fetch('/api/tools/servers/backup-all', { method: 'POST' });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Server error ${response.status}`);
+    }
+
+    // Trigger browser download
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : 'mserver_backup_all.zip';
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    status.textContent = `✅ Archive downloaded: ${filename}`;
+    status.classList.add('status-success');
+  } catch (err) {
+    status.textContent = `❌ Backup failed: ${err.message}`;
+    status.classList.add('status-error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📥 Download All Servers';
+  }
+}
+
+function onRestoreFileSelected(input) {
+  const label = document.getElementById('restore-filename');
+  const restoreBtn = document.getElementById('restore-all-btn');
+  if (input.files && input.files.length > 0) {
+    label.textContent = input.files[0].name;
+    restoreBtn.disabled = false;
+  } else {
+    label.textContent = 'No file selected';
+    restoreBtn.disabled = true;
+  }
+}
+
+async function restoreAllServers() {
+  const fileInput = document.getElementById('restore-file-input');
+  const mode = document.getElementById('restore-mode').value;
+  const btn = document.getElementById('restore-all-btn');
+  const status = document.getElementById('restore-all-status');
+
+  if (!fileInput.files || fileInput.files.length === 0) {
+    alert('Please select a backup ZIP file first.');
+    return;
+  }
+
+  const warningMsg = mode === 'replace'
+    ? 'REPLACE mode will DELETE ALL existing servers before restoring.\n\nAre you absolutely sure? This cannot be undone.'
+    : `Merge mode will overwrite servers found in the archive.\n\nContinue?`;
+
+  if (!confirm(warningMsg)) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Restoring…';
+  status.textContent = '';
+  status.className = 'jar-status';
+
+  try {
+    const formData = new FormData();
+    formData.append('backup', fileInput.files[0]);
+
+    // Use originalFetch so the global wrapper's header injection doesn't
+    // interfere with FormData (multipart) boundary — CSRF is still sent via
+    // the X-CSRF-Token header added on POST by the wrapper.
+    const response = await fetch(`/api/tools/servers/restore-all?mode=${encodeURIComponent(mode)}`, {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Server error ${response.status}`);
+
+    const serverList = data.serversRestored.length > 0
+      ? data.serversRestored.join(', ')
+      : 'none';
+    status.textContent = `✅ Restored ${data.serversRestored.length} server(s): ${serverList}  (${data.filesRestored} files)`;
+    status.classList.add('status-success');
+
+    // Reset file input
+    fileInput.value = '';
+    document.getElementById('restore-filename').textContent = 'No file selected';
+    btn.disabled = true;
+    btn.textContent = '🔄 Restore Servers';
+  } catch (err) {
+    status.textContent = `❌ Restore failed: ${err.message}`;
+    status.classList.add('status-error');
+    btn.disabled = false;
+    btn.textContent = '🔄 Restore Servers';
+  }
+}
+
+// ---- End Server Backup / Restore ----
+
 async function loadTools() {
   const container = document.getElementById('tools-container');
   

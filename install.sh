@@ -268,7 +268,15 @@ install_dependencies() {
     apt-get upgrade -y
 
     print_info "Installing required packages..."
-    apt-get install -y curl wget git python3 python3-pip python3-venv
+    # Core runtime tools
+    apt-get install -y curl wget git unzip
+
+    # Python runtime + build tools needed to compile C extensions
+    # (cryptography, Pillow/qrcode, eventlet all require headers at build time)
+    apt-get install -y \
+        python3 python3-pip python3-venv python3-dev \
+        build-essential libffi-dev \
+        libjpeg-dev libpng-dev zlib1g-dev
 
     install_java
 
@@ -305,6 +313,8 @@ create_directories() {
     mkdir -p "$INSTALL_DIR/servers"
     mkdir -p "$INSTALL_DIR/backups"
     mkdir -p "$INSTALL_DIR/uploads"
+    mkdir -p "$INSTALL_DIR/tools"
+    mkdir -p "$INSTALL_DIR/serverexecutables"/{vanilla,paper,purpur,spigot,fabric,folia,forge,neoforge,bedrock}
     print_success "Directories created"
 }
 
@@ -322,8 +332,8 @@ set_permissions() {
 create_service() {
     print_info "Creating systemd service..."
     
-    local exec_start="$INSTALL_DIR/venv/bin/python server.py --port 3000"
-    local service_port="3000"
+    local exec_start="$INSTALL_DIR/venv/bin/python server.py --port ${SERVER_PORT:-3000}"
+    local service_port="${SERVER_PORT:-3000}"
     
     cat > /etc/systemd/system/mservercontroller.service <<EOF
 [Unit]

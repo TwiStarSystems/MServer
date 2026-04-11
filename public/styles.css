@@ -109,7 +109,8 @@ body {
     "sidebar main";
   grid-template-columns: 250px 1fr;
   grid-template-rows: 60px 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* ==================== Top Bar ==================== */
@@ -210,7 +211,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding-bottom: 44px;
+  height: 100%;
 }
 
 .sidebar-header {
@@ -306,6 +307,7 @@ body {
   flex-direction: column;
   min-width: 0;
   overflow-y: auto;
+  height: 100%;
 }
 
 .no-server-view {
@@ -1246,6 +1248,13 @@ body {
   max-width: 800px;
 }
 
+.modal-content.modal-editor {
+  width: min(1280px, 95vw);
+  height: min(720px, 90vh);
+  display: flex;
+  flex-direction: column;
+}
+
 .modal-content.modal-xlarge {
   width: 85%;
   max-width: 1400px;
@@ -1260,6 +1269,13 @@ body {
   flex: 1;
   height: auto;
   min-height: 0;
+}
+
+.modal-content.modal-editor .nbt-editor-container,
+.modal-content.modal-editor .modal-body {
+  flex: 1;
+  min-height: 0;
+  height: auto;
 }
 
 .modal-content.modal-medium {
@@ -1800,14 +1816,15 @@ select.form-control:disabled {
 
 .file-editor {
   width: 100%;
-  min-height: 400px;
+  flex: 1;
+  min-height: 0;
   padding: 20px;
   background: #0d0d0d;
   border: none;
   font-family: 'Courier New', monospace;
   font-size: 13px;
   color: #00ff00;
-  resize: vertical;
+  resize: none;
 }
 
 .file-editor:focus {

@@ -3493,11 +3493,13 @@ class ServerInstance:
         self.server_port = None
         self._status_monitor_thread = None
         self._stop_status_monitor = False
+        self.online_players = {}  # name -> join_time (epoch float)
     
     def start(self):
         """Start the server process"""
         # Clear the output buffer on start for fresh logs
         self.output_buffer = []
+        self.online_players = {}
         self.status = ServerStatus.STARTING
         self.start_time = time.time()
         self.server_port = None  # Will be read from properties
@@ -3564,6 +3566,7 @@ class ServerInstance:
                                 line = line_bytes.decode('latin-1', errors='replace')
                             self._broadcast({'type': 'output', 'data': line, 'serverId': self.server_id})
                             self._add_to_buffer(line)
+                            self._parse_player_events(line)
                             last_partial_send = 0  # Reset partial send timer
                         
                         # Send partial line only if:
@@ -3601,8 +3604,42 @@ class ServerInstance:
             code = self.process.returncode
             self._stop_status_monitor = True
             self.status = ServerStatus.STOPPED
+            self.online_players = {}
             self._broadcast({'type': 'info', 'data': f'Server stopped with code {code}\n', 'serverId': self.server_id})
             self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': False})
+
+    def _parse_player_events(self, line):
+        """Parse console output for player join/leave events and update online_players"""
+        # Java Minecraft: "[HH:MM:SS] [Server thread/INFO]: PlayerName joined the game"
+        # Also handles Paper/Spigot/Folia variants
+        join_match = re.search(r':\s+(\S+) joined the game', line)
+        if join_match:
+            name = join_match.group(1)
+            self.online_players[name] = time.time()
+            self._broadcast({'type': 'player_join', 'serverId': self.server_id, 'player': name})
+            return
+
+        leave_match = re.search(r':\s+(\S+) left the game', line)
+        if leave_match:
+            name = leave_match.group(1)
+            self.online_players.pop(name, None)
+            self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
+            return
+
+        # Bedrock: "Player connected: PlayerName, xuid: ..."
+        bedrock_join = re.search(r'Player connected:\s+([^,]+)', line)
+        if bedrock_join:
+            name = bedrock_join.group(1).strip()
+            self.online_players[name] = time.time()
+            self._broadcast({'type': 'player_join', 'serverId': self.server_id, 'player': name})
+            return
+
+        bedrock_leave = re.search(r'Player disconnected:\s+([^,]+)', line)
+        if bedrock_leave:
+            name = bedrock_leave.group(1).strip()
+            self.online_players.pop(name, None)
+            self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
+
     
     def _broadcast(self, data):
         """Broadcast message to all clients"""
@@ -3759,6 +3796,38 @@ class ServerInstance:
 
 # Initialize server manager
 server_manager = ServerManager()
+
+# ---- Auto-start servers after a short delay ----
+def _auto_start_servers():
+    """Start all servers marked autoStart=True, 15 seconds after the controller launches.
+
+    The delay gives the web server, database, and networking time to fully
+    initialise before Minecraft JVMs start competing for CPU.  Servers are
+    started sequentially (30-second gap between each) to reduce the CPU spike
+    that occurs during JVM initialisation.
+    """
+    time.sleep(15)
+    servers_cfg = server_manager.config.get('servers', {})
+    auto_start_ids = [
+        sid for sid, cfg in servers_cfg.items()
+        if cfg.get('autoStart', False) and cfg.get('approved', True)
+    ]
+    if not auto_start_ids:
+        return
+    print(f"[AutoStart] {len(auto_start_ids)} server(s) queued for auto-start")
+    for idx, server_id in enumerate(auto_start_ids):
+        name = server_manager.config['servers'][server_id].get('name', server_id)
+        success, msg = server_manager.start_server(server_id)
+        if success:
+            print(f"[AutoStart] Started: {name}")
+        else:
+            print(f"[AutoStart] Failed to start '{name}': {msg}")
+        # Stagger subsequent starts to prevent overlapping JVM init CPU spikes
+        if idx < len(auto_start_ids) - 1:
+            time.sleep(30)
+
+threading.Thread(target=_auto_start_servers, daemon=True).start()
+# ------------------------------------------------
 
 # Initialize backup scheduler
 backup_scheduler = BackupScheduler()
@@ -5646,6 +5715,227 @@ def get_player_uuid(player_name):
     except:
         return None, None
 
+@app.route('/api/servers/<server_id>/players/online', methods=['GET'])
+@server_access_required
+def get_online_players(server_id):
+    """Get currently online players tracked from console output"""
+    instance = server_manager.servers.get(server_id)
+    if not instance or not instance.is_running():
+        return jsonify({'online': [], 'count': 0})
+    players = [
+        {'name': name, 'since': since}
+        for name, since in instance.online_players.items()
+    ]
+    return jsonify({'online': players, 'count': len(players)})
+
+@app.route('/api/servers/<server_id>/players/<uuid>/stats', methods=['GET'])
+@server_access_required
+def get_player_stats(server_id, uuid):
+    """Read player statistics from world/stats/<uuid>.json"""
+    server_path = server_manager.get_server_path(server_id)
+    stats_file = None
+
+    for item in server_path.iterdir():
+        if not item.is_dir():
+            continue
+        # 1.26+ path: world/players/stats/<uuid>.json
+        new_path = item / 'players' / 'stats' / f'{uuid}.json'
+        if new_path.exists():
+            stats_file = new_path
+            break
+        # Legacy path: world/stats/<uuid>.json
+        old_path = item / 'stats' / f'{uuid}.json'
+        if old_path.exists():
+            stats_file = old_path
+            break
+
+    if not stats_file:
+        return jsonify({'error': 'Stats file not found for this player'}), 404
+
+    try:
+        with open(stats_file, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+
+        # Flatten nested stat categories
+        stats = raw.get('stats', raw)
+        flat = {}
+        for category, entries in stats.items():
+            if isinstance(entries, dict):
+                for stat_key, value in entries.items():
+                    display_cat = category.replace('minecraft:', '')
+                    display_key = stat_key.replace('minecraft:', '')
+                    flat[f'{display_cat}.{display_key}'] = value
+
+        highlights = {
+            'playtime_ticks': flat.get('custom.play_time', flat.get('custom.play_one_minute', 0)),
+            'deaths': flat.get('custom.deaths', 0),
+            'player_kills': flat.get('custom.player_kills', 0),
+            'mob_kills': flat.get('custom.mob_kills', 0),
+            'damage_dealt': flat.get('custom.damage_dealt', 0),
+            'damage_taken': flat.get('custom.damage_taken', 0),
+            'jumps': flat.get('custom.jump', 0),
+            'distance_walked_cm': flat.get('custom.walk_one_cm', 0),
+        }
+        return jsonify({'stats': flat, 'highlights': highlights})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/<uuid>/inventory', methods=['GET'])
+@server_access_required
+def get_player_inventory(server_id, uuid):
+    """Extract inventory, armor and ender chest from player NBT data"""
+    server_path = server_manager.get_server_path(server_id)
+    player_dat = None
+
+    for item in server_path.iterdir():
+        if not item.is_dir():
+            continue
+        new_path = item / 'players' / 'data' / f'{uuid}.dat'
+        if new_path.exists():
+            player_dat = new_path
+            break
+        old_path = item / 'playerdata' / f'{uuid}.dat'
+        if old_path.exists():
+            player_dat = old_path
+            break
+
+    if not player_dat:
+        return jsonify({'error': 'Player data file not found'}), 404
+
+    try:
+        nbt_data = nbt_editor.read_file(player_dat)
+        nbt_json = nbt_editor.nbt_to_json(nbt_data)
+
+        return jsonify({
+            'inventory': nbt_json.get('Inventory', []),
+            'armor': nbt_json.get('ArmorItems', []),
+            'enderChest': nbt_json.get('EnderItems', []),
+            'offhand': nbt_json.get('OffhandItem', []),
+            'health': nbt_json.get('Health'),
+            'food': nbt_json.get('foodLevel'),
+            'xpLevel': nbt_json.get('XpLevel'),
+            'gameType': nbt_json.get('playerGameType'),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/banned-ips', methods=['GET'])
+@server_access_required
+def get_banned_ips(server_id):
+    """Get banned IPs list"""
+    server_path = server_manager.get_server_path(server_id)
+    banned_ips_file = server_path / 'banned-ips.json'
+    try:
+        if banned_ips_file.exists():
+            with open(banned_ips_file, 'r') as f:
+                banned_ips = json.load(f)
+            return jsonify({'banned_ips': banned_ips})
+        return jsonify({'banned_ips': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/banned-ips', methods=['POST'])
+@server_access_required
+def ban_ip(server_id):
+    """Ban an IP address"""
+    data = request.get_json()
+    ip_address = data.get('ip', '').strip()
+    reason = data.get('reason', 'Banned By Admin')
+    expires = data.get('expires', 'forever')
+
+    if not ip_address:
+        return jsonify({'error': 'IP address is required'}), 400
+
+    # Validate IP address format (IPv4/IPv6/wildcards Minecraft allows)
+    if not re.match(r'^[\d\.\:a-fA-F\*]+$', ip_address):
+        return jsonify({'error': 'Invalid IP address format'}), 400
+
+    server_path = server_manager.get_server_path(server_id)
+    banned_ips_file = server_path / 'banned-ips.json'
+
+    try:
+        banned_ips = []
+        if banned_ips_file.exists():
+            with open(banned_ips_file, 'r') as f:
+                banned_ips = json.load(f)
+
+        for entry in banned_ips:
+            if entry.get('ip') == ip_address:
+                return jsonify({'error': f'{ip_address} is already banned'}), 400
+
+        banned_ips.append({
+            'ip': ip_address,
+            'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S +0000'),
+            'source': 'MServerController',
+            'expires': expires,
+            'reason': reason
+        })
+
+        with open(banned_ips_file, 'w') as f:
+            json.dump(banned_ips, f, indent=2)
+
+        return jsonify({'success': True, 'message': f'{ip_address} has been banned'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/banned-ips/<path:ip_address>', methods=['DELETE'])
+@server_access_required
+def unban_ip(server_id, ip_address):
+    """Unban an IP address"""
+    server_path = server_manager.get_server_path(server_id)
+    banned_ips_file = server_path / 'banned-ips.json'
+
+    try:
+        if not banned_ips_file.exists():
+            return jsonify({'error': 'Banned IPs file not found'}), 404
+
+        with open(banned_ips_file, 'r') as f:
+            banned_ips = json.load(f)
+
+        original_len = len(banned_ips)
+        banned_ips = [e for e in banned_ips if e.get('ip') != ip_address]
+
+        if len(banned_ips) == original_len:
+            return jsonify({'error': 'IP not found in ban list'}), 404
+
+        with open(banned_ips_file, 'w') as f:
+            json.dump(banned_ips, f, indent=2)
+
+        return jsonify({'success': True, 'message': f'{ip_address} has been unbanned'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/players/message', methods=['POST'])
+@server_access_required
+def message_players(server_id):
+    """Send a message to players via console commands (tellraw/title/actionbar)"""
+    data = request.get_json()
+    msg_type = data.get('type', 'chat')
+    target = data.get('target', '@a').strip()
+    message = data.get('message', '').strip()
+
+    if not message:
+        return jsonify({'error': 'Message is required'}), 400
+
+    safe = message.replace('\\', '\\\\').replace('"', '\\"')
+
+    if msg_type == 'chat':
+        command = f'tellraw {target} {{"text":"{safe}","color":"white"}}'
+    elif msg_type == 'title':
+        command = f'title {target} title {{"text":"{safe}","bold":true}}'
+    elif msg_type == 'subtitle':
+        command = f'title {target} subtitle {{"text":"{safe}"}}'
+    elif msg_type == 'actionbar':
+        command = f'title {target} actionbar {{"text":"{safe}"}}'
+    else:
+        return jsonify({'error': f'Unknown message type: {msg_type}'}), 400
+
+    success, msg = server_manager.send_command(server_id, command)
+    if not success:
+        return jsonify({'error': msg}), 400
+
+    return jsonify({'success': True, 'message': f'Message sent to {target}'})
+
 @app.route('/api/servers/<server_id>/players/ops', methods=['GET'])
 @server_access_required
 def get_operators(server_id):
@@ -5916,6 +6206,7 @@ def ban_player(server_id):
     player_name = data.get('name', '').strip()
     player_uuid = data.get('uuid', '').strip()
     reason = data.get('reason', 'Banned By Admin')
+    expires = data.get('expires', 'forever')  # 'forever' or ISO datetime string
 
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
@@ -5961,7 +6252,7 @@ def ban_player(server_id):
             'name': actual_name,
             'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S +0000'),
             'source': 'MServerController',
-            'expires': 'forever',
+            'expires': expires,
             'reason': reason
         })
         
@@ -6089,6 +6380,7 @@ def get_playerdata(server_id):
                 players.append({
                     'uuid': item.stem,
                     'filename': item.name,
+                    'path': str(item.relative_to(server_path)),
                     'size': stat.st_size,
                     'modified': datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
@@ -6162,6 +6454,43 @@ def download_server_file(server_id):
         return jsonify({'error': 'File not found'}), 404
     
     return send_file(full_path, as_attachment=True)
+
+
+@app.route('/api/servers/<server_id>/files/zip', methods=['GET'])
+@server_access_required
+def zip_server_folder(server_id):
+    """Download a folder as a ZIP archive"""
+    requested_path = request.args.get('path', '')
+    server_path = server_manager.get_server_path(server_id)
+
+    if not is_safe_path(server_path, requested_path):
+        return jsonify({'error': 'Access denied'}), 403
+
+    full_path = server_path / requested_path
+
+    if not full_path.exists():
+        return jsonify({'error': 'Path not found'}), 404
+
+    if not full_path.is_dir():
+        return jsonify({'error': 'Path is not a directory'}), 400
+
+    folder_name = full_path.name or 'server'
+    zip_filename = f"{folder_name}.zip"
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file_path in full_path.rglob('*'):
+            if file_path.is_file():
+                arcname = file_path.relative_to(full_path)
+                zf.write(str(file_path), str(arcname))
+    zip_buffer.seek(0)
+
+    return send_file(
+        zip_buffer,
+        as_attachment=True,
+        download_name=zip_filename,
+        mimetype='application/zip'
+    )
 
 @app.route('/api/servers/<server_id>/files/upload', methods=['POST'])
 @limiter.limit("10 per 15 minutes")
@@ -6650,12 +6979,11 @@ def list_backups(server_id):
 @limiter.limit("5 per 15 minutes")
 @server_access_required
 def create_backup(server_id):
-    """Create a backup for a server.
+    """Start an async manual backup.
 
-    Optional JSON body:
-      - compressionLevel (int 0-9, default 6)
-      - incremental (bool, default False) — only back up files changed since last backup
-      - backupType (str) — label for the history log (e.g. 'manual', 'pre-update')
+    Stops the server if running, creates the backup, then restarts the server.
+    Returns 202 immediately; completion is pushed via socket events:
+      backup_manual_completed / backup_manual_failed
     """
     server_path = server_manager.get_server_path(server_id)
 
@@ -6664,91 +6992,111 @@ def create_backup(server_id):
 
     data = request.get_json(silent=True) or {}
     compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
-    is_incremental = bool(data.get('incremental', False))
+    is_incremental_req = bool(data.get('incremental', False))
     backup_type = str(data.get('backupType', 'manual'))
 
-    # Create backup directory for this server
-    backup_dir = BACKUPS_DIR / server_id
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    def run_backup():
+        timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+        backup_dir = BACKUPS_DIR / server_id
+        backup_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-    if is_incremental:
-        backup_name = f'incremental-backup-{timestamp}.zip'
-    else:
-        backup_name = f'backup-{timestamp}.zip'
-    backup_path = backup_dir / backup_name
+        # Stop server if running
+        instance = server_manager.servers.get(server_id)
+        was_running = instance is not None and instance.is_running()
+        if was_running:
+            server_manager.send_command(server_id, "say [Backup] Server is being stopped for a manual backup...")
+            time.sleep(2)
+            server_manager.stop_server(server_id)
+            for _ in range(60):
+                time.sleep(1)
+                inst = server_manager.servers.get(server_id)
+                if inst is None or not inst.is_running():
+                    break
 
-    try:
-        # Determine cutoff time for incremental
-        cutoff_time = None
-        if is_incremental:
-            cutoff_time = backup_scheduler._get_last_backup_time(server_id)
-            if cutoff_time is None:
-                is_incremental = False  # fall back to full
+        is_incremental = is_incremental_req
+        backup_name = f'incremental-backup-{timestamp}.zip' if is_incremental else f'backup-{timestamp}.zip'
+        backup_path = backup_dir / backup_name
 
-        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
-                             compresslevel=compression_level) as zipf:
-            file_count = 0
-            for root, dirs, files in os.walk(server_path):
-                for file in files:
-                    file_path = Path(root) / file
-                    if cutoff_time is not None:
-                        mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                        if mtime < cutoff_time:
-                            continue
-                    arcname = file_path.relative_to(server_path)
-                    zipf.write(file_path, arcname)
-                    file_count += 1
+        try:
+            cutoff_time = None
+            if is_incremental:
+                cutoff_time = backup_scheduler._get_last_backup_time(server_id)
+                if cutoff_time is None:
+                    is_incremental = False
 
-            manifest = {
-                'type': 'incremental' if cutoff_time else 'full',
-                'created': timestamp,
-                'file_count': file_count
-            }
-            if cutoff_time:
-                manifest['base_time'] = cutoff_time.isoformat()
-            zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
+            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
+                                 compresslevel=compression_level) as zipf:
+                file_count = 0
+                for root, dirs, files in os.walk(server_path):
+                    for file in files:
+                        file_path = Path(root) / file
+                        if cutoff_time is not None:
+                            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+                            if mtime < cutoff_time:
+                                continue
+                        arcname = file_path.relative_to(server_path)
+                        zipf.write(file_path, arcname)
+                        file_count += 1
 
-        size = backup_path.stat().st_size
+                manifest = {
+                    'type': 'incremental' if cutoff_time else 'full',
+                    'created': timestamp,
+                    'file_count': file_count
+                }
+                if cutoff_time:
+                    manifest['base_time'] = cutoff_time.isoformat()
+                zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
 
-        # Verify backup integrity
-        ok, checksum, verify_err = verify_backup_file(backup_path)
+            size = backup_path.stat().st_size
+            ok, checksum, verify_err = verify_backup_file(backup_path)
 
-        # Upload to external storage if configured
-        ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
-        if not ext_ok:
-            print(f"[Backup] External upload warning: {ext_msg}")
+            ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
+            if not ext_ok:
+                print(f"[Backup] External upload warning: {ext_msg}")
 
-        # Log backup event
-        backup_scheduler._log_backup_event(server_id, {
-            'type': backup_type,
-            'backup_name': backup_name,
-            'size': size,
-            'is_incremental': cutoff_time is not None,
-            'compression_level': compression_level,
-            'verified': ok,
-            'checksum': checksum,
-            'uploaded_to_external': ext_ok,
-            'success': True
-        })
+            backup_scheduler._log_backup_event(server_id, {
+                'type': backup_type,
+                'backup_name': backup_name,
+                'size': size,
+                'is_incremental': cutoff_time is not None,
+                'compression_level': compression_level,
+                'verified': ok,
+                'checksum': checksum,
+                'uploaded_to_external': ext_ok,
+                'success': True
+            })
 
-        return jsonify({
-            'success': True,
-            'backup': backup_name,
-            'size': size,
-            'verified': ok,
-            'checksum': checksum,
-            'is_incremental': cutoff_time is not None,
-            'uploaded_to_external': ext_ok
-        })
-    except Exception as e:
-        backup_scheduler._log_backup_event(server_id, {
-            'type': backup_type,
-            'backup_name': backup_name,
-            'success': False,
-            'error': str(e)
-        })
-        return jsonify({'error': str(e)}), 500
+            if was_running:
+                server_manager.start_server(server_id)
+
+            socketio.emit('backup_manual_completed', {
+                'serverId': server_id,
+                'backup': backup_name,
+                'size': size,
+                'is_incremental': cutoff_time is not None,
+                'verified': ok,
+                'checksum': checksum
+            })
+
+        except Exception as e:
+            backup_scheduler._log_backup_event(server_id, {
+                'type': backup_type,
+                'backup_name': backup_name,
+                'success': False,
+                'error': str(e)
+            })
+            if was_running:
+                try:
+                    server_manager.start_server(server_id)
+                except Exception:
+                    pass
+            socketio.emit('backup_manual_failed', {
+                'serverId': server_id,
+                'error': str(e)
+            })
+
+    socketio.start_background_task(run_backup)
+    return jsonify({'started': True}), 202
 
 @app.route('/api/servers/<server_id>/backups/download', methods=['GET'])
 @server_access_required
@@ -6810,17 +7158,21 @@ def delete_backup(server_id):
 @app.route('/api/servers/<server_id>/backups/restore', methods=['POST'])
 @server_access_required
 def restore_backup(server_id):
-    """Restore a backup"""
+    """Restore a backup. Stops the server if running, clears the server directory,
+    extracts the backup, then restarts the server if it was running.
+    Returns 202 immediately; result is pushed via socket events:
+      restore_completed / restore_failed
+    """
     data = request.get_json()
     backup_name = data.get('name', '')
-    
+
     # Security: sanitize filename and prevent path traversal
     backup_name = secure_filename(backup_name)
     if not backup_name or '..' in backup_name or '/' in backup_name:
         return jsonify({'error': 'Invalid backup name'}), 400
-    
+
     backup_path = BACKUPS_DIR / server_id / backup_name
-    
+
     # Additional security check: ensure path is within backups directory
     try:
         backup_path = backup_path.resolve()
@@ -6828,31 +7180,100 @@ def restore_backup(server_id):
             return jsonify({'error': 'Invalid backup path'}), 400
     except Exception:
         return jsonify({'error': 'Invalid backup path'}), 400
-    
+
     if not backup_path.exists():
         return jsonify({'error': 'Backup not found'}), 404
-    
-    # Check if server is running
-    instance = server_manager.servers.get(server_id)
-    if instance and instance.is_running():
-        return jsonify({'error': 'Stop the server before restoring a backup'}), 400
-    
+
     server_path = server_manager.get_server_path(server_id)
-    
+
+    def run_restore():
+        instance = server_manager.servers.get(server_id)
+        was_running = instance is not None and instance.is_running()
+        if was_running:
+            server_manager.send_command(server_id, "say [Restore] Server is being stopped to restore a backup...")
+            time.sleep(2)
+            server_manager.stop_server(server_id)
+            for _ in range(60):
+                time.sleep(1)
+                inst = server_manager.servers.get(server_id)
+                if inst is None or not inst.is_running():
+                    break
+
+        try:
+            # Clear server directory
+            for item in server_path.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+
+            # Extract backup
+            with zipfile.ZipFile(backup_path, 'r') as zipf:
+                zipf.extractall(server_path)
+
+            if was_running:
+                server_manager.start_server(server_id)
+
+            socketio.emit('restore_completed', {
+                'serverId': server_id,
+                'backup': backup_name
+            })
+
+        except Exception as e:
+            if was_running:
+                try:
+                    server_manager.start_server(server_id)
+                except Exception:
+                    pass
+            socketio.emit('restore_failed', {
+                'serverId': server_id,
+                'error': str(e)
+            })
+
+    socketio.start_background_task(run_restore)
+    return jsonify({'started': True}), 202
+
+
+@app.route('/api/servers/<server_id>/backups/import', methods=['POST'])
+@server_access_required
+def import_backup(server_id):
+    """Import a backup ZIP file uploaded by the user"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    f = request.files['file']
+    if not f or not f.filename:
+        return jsonify({'error': 'No file selected'}), 400
+
+    filename = secure_filename(f.filename)
+    if not filename.lower().endswith('.zip'):
+        return jsonify({'error': 'Only .zip files are supported'}), 400
+
+    backup_dir = BACKUPS_DIR / server_id
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    dest_path = backup_dir / filename
+
+    # Avoid overwriting an existing file by appending a timestamp
+    if dest_path.exists():
+        ts = datetime.now().strftime('%Y%m%dT%H%M%S')
+        stem = filename[:-4]
+        filename = f"{stem}-imported-{ts}.zip"
+        dest_path = backup_dir / filename
+
     try:
-        # Clear server directory (except the backup)
-        for item in server_path.iterdir():
-            if item.is_dir():
-                shutil.rmtree(item)
-            else:
-                item.unlink()
-        
-        # Extract backup
-        with zipfile.ZipFile(backup_path, 'r') as zipf:
-            zipf.extractall(server_path)
-        
-        return jsonify({'success': True, 'message': 'Backup restored successfully'})
+        f.save(str(dest_path))
+
+        # Validate it is a real zip
+        if not zipfile.is_zipfile(dest_path):
+            dest_path.unlink()
+            return jsonify({'error': 'Uploaded file is not a valid ZIP archive'}), 400
+
+        size = dest_path.stat().st_size
+        return jsonify({'success': True, 'backup': filename, 'size': size})
     except Exception as e:
+        if dest_path.exists():
+            dest_path.unlink()
         return jsonify({'error': str(e)}), 500
 
 
@@ -7212,6 +7633,146 @@ def test_external_backup_settings():
         if ok:
             return jsonify({'success': True, 'message': msg})
         return jsonify({'error': msg}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== Server Backup/Restore (All Servers) ====================
+
+@app.route('/api/tools/servers/backup-all', methods=['POST'])
+@admin_required
+def backup_all_servers():
+    """Create a ZIP archive of all server directories and stream it for download.
+    Running servers are NOT stopped; their files are snapshotted live.
+    The archive preserves the directory structure: servers/<server_id>/...
+    """
+    try:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        archive_name = f'mserver_backup_all_{timestamp}.zip'
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            if SERVERS_DIR.exists():
+                for server_dir in sorted(SERVERS_DIR.iterdir()):
+                    if not server_dir.is_dir():
+                        continue
+                    for file_path in server_dir.rglob('*'):
+                        if file_path.is_file():
+                            # Store as servers/<server_id>/... so it restores cleanly
+                            arcname = file_path.relative_to(SERVERS_DIR.parent)
+                            try:
+                                zf.write(file_path, arcname)
+                            except (PermissionError, OSError):
+                                pass  # Skip locked / unreadable files
+
+        buf.seek(0)
+        response = make_response(buf.read())
+        response.headers['Content-Type'] = 'application/zip'
+        response.headers['Content-Disposition'] = f'attachment; filename="{archive_name}"'
+        return response
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tools/servers/restore-all', methods=['POST'])
+@admin_required
+def restore_all_servers():
+    """Restore servers from an uploaded backup ZIP.
+    Expects a multipart/form-data POST with a 'backup' file field.
+    Query param ?mode=merge (default) keeps existing servers not in the archive.
+    Query param ?mode=replace stops and removes ALL existing server data first.
+    Running servers inside the archive are stopped before their data is replaced.
+    """
+    if 'backup' not in request.files:
+        return jsonify({'error': 'No backup file provided'}), 400
+
+    backup_file = request.files['backup']
+    if not backup_file.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    filename = secure_filename(backup_file.filename)
+    if not filename.lower().endswith('.zip'):
+        return jsonify({'error': 'Only ZIP archives are supported'}), 400
+
+    mode = request.args.get('mode', 'merge')
+    if mode not in ('merge', 'replace'):
+        return jsonify({'error': 'Invalid mode; use "merge" or "replace"'}), 400
+
+    try:
+        data = backup_file.read()
+        buf = io.BytesIO(data)
+
+        if not zipfile.is_zipfile(buf):
+            return jsonify({'error': 'Uploaded file is not a valid ZIP archive'}), 400
+
+        buf.seek(0)
+        restored = []
+        skipped = []
+
+        with zipfile.ZipFile(buf, 'r') as zf:
+            # Collect server IDs inside the archive (top-level dirs under servers/)
+            server_ids_in_archive = set()
+            for name in zf.namelist():
+                parts = Path(name).parts
+                # Expected layout: servers/<server_id>/...
+                if len(parts) >= 2 and parts[0] == 'servers':
+                    server_ids_in_archive.add(parts[1])
+
+            if not server_ids_in_archive:
+                return jsonify({'error': 'No server directories found in archive (expected servers/<id>/...)'}), 400
+
+            if mode == 'replace':
+                # Stop all running servers and wipe SERVERS_DIR
+                for sid in list(server_manager.servers.keys()):
+                    inst = server_manager.servers.get(sid)
+                    if inst and inst.is_running():
+                        server_manager.stop_server(sid)
+                if SERVERS_DIR.exists():
+                    shutil.rmtree(SERVERS_DIR)
+                SERVERS_DIR.mkdir(parents=True, exist_ok=True)
+            else:
+                # Merge: stop only the servers that will be overwritten
+                for sid in server_ids_in_archive:
+                    inst = server_manager.servers.get(sid)
+                    if inst and inst.is_running():
+                        server_manager.stop_server(sid)
+                    target = SERVERS_DIR / sid
+                    if target.exists():
+                        shutil.rmtree(target)
+
+            # Extract
+            for name in zf.namelist():
+                parts = Path(name).parts
+                if len(parts) >= 2 and parts[0] == 'servers':
+                    # Security: prevent path traversal
+                    safe_relative = Path(*parts)
+                    dest = SERVERS_DIR.parent / safe_relative
+                    try:
+                        resolved = dest.resolve()
+                        if not str(resolved).startswith(str(SERVERS_DIR.resolve())):
+                            skipped.append(name)
+                            continue
+                    except Exception:
+                        skipped.append(name)
+                        continue
+
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not name.endswith('/'):
+                        with zf.open(name) as src, open(dest, 'wb') as dst:
+                            shutil.copyfileobj(src, dst)
+                        restored.append(name)
+
+        return jsonify({
+            'success': True,
+            'mode': mode,
+            'serversRestored': list(server_ids_in_archive),
+            'filesRestored': len(restored),
+            'filesSkipped': len(skipped)
+        })
+
+    except zipfile.BadZipFile:
+        return jsonify({'error': 'Corrupt or invalid ZIP archive'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
