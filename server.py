@@ -40,7 +40,7 @@ from flask import Flask, request, jsonify, send_from_directory, send_file, sessi
 from flask_socketio import SocketIO, emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_wtf.csrf import CSRFProtect, generate_csrf
+from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -56,12 +56,18 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = False  # HTTP only - no HTTPS
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
+app.config['WTF_CSRF_TIME_LIMIT'] = None     # Token valid for full session lifetime
 
 # Configure ProxyFix for reverse proxy (e.g., Nginx) headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Initialize CSRF Protection
 csrf = CSRFProtect(app)
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(e):
+    """Return JSON instead of HTML for CSRF failures so the frontend can parse the error"""
+    return jsonify({'error': 'CSRF token missing or invalid. Please refresh the page and try again.'}), 403
 
 # Initialize SocketIO with threading async mode and tuned ping settings.
 # Threading mode works natively with the existing subprocess/thread-based
@@ -4897,6 +4903,8 @@ def import_server():
             return jsonify(response)
         else:
             return jsonify({'error': result}), 400
+    except Exception as e:
+        return jsonify({'error': f'Import failed: {str(e)}'}), 500
     finally:
         # Clean up temp file
         if temp_path.exists():

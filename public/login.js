@@ -5,6 +5,29 @@
 // Prevent multiple auth checks
 let authCheckDone = false;
 
+/**
+ * POST helper that auto-refreshes the CSRF token on 403 and retries once.
+ */
+async function csrfPost(url, payload) {
+    const makeRequest = () => fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.csrfToken },
+        body: JSON.stringify(payload)
+    });
+
+    let response = await makeRequest();
+
+    if (response.status === 403) {
+        const data = await response.clone().json().catch(() => ({}));
+        if (data.error && data.error.includes('CSRF')) {
+            await fetchCSRFToken();
+            response = await makeRequest();
+        }
+    }
+
+    return response;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     // Fetch CSRF token first
     await fetchCSRFToken();
@@ -46,14 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         submitBtn.textContent = 'Signing in...';
         
         try {
-            const response = await fetch('/api/auth/login', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': window.csrfToken
-                },
-                body: JSON.stringify({ username, password })
-            });
+            const response = await csrfPost('/api/auth/login', { username, password });
             
             const data = await response.json();
             
@@ -107,14 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         submitBtn.textContent = 'Creating account...';
         
         try {
-            const response = await fetch('/api/auth/register', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': window.csrfToken
-                },
-                body: JSON.stringify({ username, password })
-            });
+            const response = await csrfPost('/api/auth/register', { username, password });
             
             const data = await response.json();
             
@@ -241,14 +250,7 @@ async function verifyMFACode() {
     submitBtn.textContent = 'Verifying...';
     
     try {
-        const response = await fetch('/api/auth/mfa/verify-login', {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': window.csrfToken
-            },
-            body: JSON.stringify({ code, useRecovery: false })
-        });
+        const response = await csrfPost('/api/auth/mfa/verify-login', { code, useRecovery: false });
         
         const data = await response.json();
         
@@ -278,14 +280,7 @@ async function verifyMFARecovery() {
     }
     
     try {
-        const response = await fetch('/api/auth/mfa/verify-login', {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': window.csrfToken
-            },
-            body: JSON.stringify({ code, useRecovery: true })
-        });
+        const response = await csrfPost('/api/auth/mfa/verify-login', { code, useRecovery: true });
         
         const data = await response.json();
         

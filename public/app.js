@@ -29,25 +29,42 @@ async function waitForServerStopped(serverId, timeoutMs = 40000) {
 window.originalFetch = window.fetch;
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
-  // Add CSRF token to POST, PUT, DELETE, PATCH requests
+  // Ensure options object exists before mutating
+  if (!args[1]) args[1] = {};
+
+  // Add CSRF token to state-changing requests
   const method = args[1]?.method?.toUpperCase();
   if (method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
     if (!args[1].headers) {
       args[1].headers = {};
     }
-    // Add CSRF token if available and not already present
     if (window.csrfToken && !args[1].headers['X-CSRF-Token']) {
       args[1].headers['X-CSRF-Token'] = window.csrfToken;
     }
   }
-  
-  const response = await originalFetch.apply(this, args);
-  
+
+  let response = await originalFetch.apply(this, args);
+
+  // If CSRF token expired/invalid, refresh and retry once
+  if (response.status === 403) {
+    const clone = response.clone();
+    try {
+      const data = await clone.json();
+      if (data.error && data.error.includes('CSRF')) {
+        await fetchCSRFToken();
+        if (args[1].headers) {
+          args[1].headers['X-CSRF-Token'] = window.csrfToken;
+        }
+        response = await originalFetch.apply(this, args);
+      }
+    } catch (_) { /* not JSON — leave original 403 response */ }
+  }
+
   // Redirect to login if authentication fails (except for auth endpoints)
   if (response.status === 401 && !args[0].includes('/api/auth/')) {
     window.location.href = '/login.html';
   }
-  
+
   return response;
 };
 
@@ -2435,6 +2452,7 @@ async function createFreshServer(e) {
       
       const uploadResponse = await fetch(`/api/servers/${result.serverId}/upload-jar`, {
         method: 'POST',
+        headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
         body: formData
       });
       
@@ -2911,6 +2929,7 @@ async function importWorld(e) {
 
     const worldResponse = await fetch(`/api/servers/${serverResult.serverId}/import-world`, {
       method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
       body: formData
     });
 
@@ -2979,6 +2998,7 @@ async function importServer(e) {
     
     const response = await fetch('/api/servers/import', {
       method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
       body: formData
     });
     
@@ -3818,6 +3838,7 @@ async function uploadFile(file) {
   try {
     const response = await fetch(`/api/servers/${currentServerId}/files/upload`, {
       method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
       body: formData
     });
     
@@ -3964,6 +3985,7 @@ async function importBackup(input) {
   try {
     const response = await fetch(`/api/servers/${currentServerId}/backups/import`, {
       method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
       body: formData
     });
     const result = await response.json();
@@ -4825,6 +4847,7 @@ async function uploadMod(file, type) {
   try {
     const response = await fetch(`/api/servers/${currentServerId}/mods/upload`, {
       method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
       body: formData
     });
     
@@ -6539,6 +6562,7 @@ async function uploadResourcePack(file) {
     
     const response = await fetch(`/api/servers/${currentServerId}/resourcepack/upload`, {
       method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
       body: formData
     });
     

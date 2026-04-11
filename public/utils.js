@@ -65,44 +65,31 @@ async function apiRequest(url, options = {}) {
   if (!options.headers) {
     options.headers = {};
   }
-  
-  // Add CSRF token for state-changing requests
-  const method = options.method?.toUpperCase() || 'GET';
-  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
-    if (window.csrfToken && !options.headers['X-CSRF-Token']) {
-      options.headers['X-CSRF-Token'] = window.csrfToken;
-    }
-  }
-  
+
   // Add Content-Type if body is present and not FormData
+  // (CSRF token + 401 redirect handled by the global fetch wrapper in app.js/settings.js)
   if (options.body && !(options.body instanceof FormData)) {
     if (!options.headers['Content-Type']) {
       options.headers['Content-Type'] = 'application/json';
     }
   }
-  
+
   const response = await fetch(url, options);
-  
-  // Check for authentication errors
-  if (response.status === 401 && !url.includes('/api/auth/')) {
-    window.location.href = '/login.html';
-    throw new Error('Authentication required');
-  }
-  
+
   // Parse response
   const contentType = response.headers.get('content-type');
   let data;
-  
+
   if (contentType && contentType.includes('application/json')) {
     data = await response.json();
   } else {
     data = await response.text();
   }
-  
+
   if (!response.ok) {
     throw new Error(data.error || data.message || `HTTP ${response.status}`);
   }
-  
+
   return data;
 }
 

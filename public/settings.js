@@ -11,25 +11,42 @@ let currentUser = null;
 window.originalFetch = window.fetch;
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
-  // Add CSRF token to POST, PUT, DELETE, PATCH requests
+  // Ensure options object exists before mutating
+  if (!args[1]) args[1] = {};
+
+  // Add CSRF token to state-changing requests
   const method = args[1]?.method?.toUpperCase();
   if (method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
     if (!args[1].headers) {
       args[1].headers = {};
     }
-    // Add CSRF token if available and not already present
     if (window.csrfToken && !args[1].headers['X-CSRF-Token']) {
       args[1].headers['X-CSRF-Token'] = window.csrfToken;
     }
   }
-  
-  const response = await originalFetch.apply(this, args);
-  
+
+  let response = await originalFetch.apply(this, args);
+
+  // If CSRF token expired/invalid, refresh and retry once
+  if (response.status === 403) {
+    const clone = response.clone();
+    try {
+      const data = await clone.json();
+      if (data.error && data.error.includes('CSRF')) {
+        await fetchCSRFToken();
+        if (args[1].headers) {
+          args[1].headers['X-CSRF-Token'] = window.csrfToken;
+        }
+        response = await originalFetch.apply(this, args);
+      }
+    } catch (_) { /* not JSON — leave original 403 response */ }
+  }
+
   // Redirect to login if authentication fails
   if (response.status === 401) {
     window.location.href = '/login.html';
   }
-  
+
   return response;
 };
 
