@@ -140,7 +140,27 @@ prompt_env_config() {
     read -p "Session lifetime in seconds [default: 604800 = 7 days]: " session_lifetime
     PERMANENT_SESSION_LIFETIME=${session_lifetime:-604800}
     echo ""
-    
+
+    # HTTPS / secure cookie
+    read -p "Are you deploying behind HTTPS? [y/N]: " https_choice
+    if [[ "$https_choice" =~ ^[Yy]$ ]]; then
+        SESSION_COOKIE_SECURE="true"
+        print_info "SESSION_COOKIE_SECURE enabled (cookies require HTTPS)"
+    else
+        SESSION_COOKIE_SECURE="false"
+    fi
+    echo ""
+
+    # CORS origins
+    read -p "Allowed WebSocket/CORS origins (comma-separated, e.g. https://panel.example.com) [default: *]: " cors_input
+    CORS_ORIGINS="${cors_input:-*}"
+    if [ "$CORS_ORIGINS" = "*" ]; then
+        print_info "CORS set to wildcard (*). Restrict this in .env for production."
+    else
+        print_info "CORS origins: $CORS_ORIGINS"
+    fi
+    echo ""
+
     print_success "Environment configuration complete"
     echo ""
 }
@@ -184,6 +204,13 @@ EOF
 # Session lifetime in seconds (default: 604800 = 7 days)
 PERMANENT_SESSION_LIFETIME=$PERMANENT_SESSION_LIFETIME
 
+# Set to true when serving over HTTPS to enforce secure cookies
+SESSION_COOKIE_SECURE=$SESSION_COOKIE_SECURE
+
+# Comma-separated allowed WebSocket/CORS origins (use * to allow all)
+# Example: CORS_ORIGINS=https://panel.example.com,https://example.com
+CORS_ORIGINS=$CORS_ORIGINS
+
 EOF
 
     cat >> "$INSTALL_DIR/.env" <<EOF
@@ -192,6 +219,8 @@ EOF
 # 1. This file contains sensitive information - keep it secure
 # 2. Never commit this file to version control
 # 3. In production, always use FLASK_ENV=production
+# 4. Set SESSION_COOKIE_SECURE=true when behind HTTPS
+# 5. Restrict CORS_ORIGINS to your domain for production deployments
 EOF
 
     # Set proper permissions on .env file

@@ -50,11 +50,30 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='public', static_url_path='')
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
+
+# --- SECRET_KEY validation ---
+_raw_secret = os.environ.get('SECRET_KEY', '')
+if not _raw_secret:
+    import warnings
+    warnings.warn(
+        "SECRET_KEY not set in environment — a random key has been generated. "
+        "Sessions will be invalidated on every restart. Set SECRET_KEY in .env to persist sessions.",
+        stacklevel=2
+    )
+    _raw_secret = secrets.token_hex(32)
+elif len(_raw_secret) < 32:
+    raise RuntimeError(
+        f"SECRET_KEY is too short ({len(_raw_secret)} characters). "
+        "Minimum 32 characters required for production security. "
+        "Regenerate your SECRET_KEY in .env."
+    )
+app.config['SECRET_KEY'] = _raw_secret
+
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False  # HTTP only - no HTTPS
+# Set to True when serving over HTTPS (SESSION_COOKIE_SECURE=true in .env)
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 app.config['WTF_CSRF_TIME_LIMIT'] = None     # Token valid for full session lifetime
 
@@ -73,13 +92,20 @@ def handle_csrf_error(e):
 # Threading mode works natively with the existing subprocess/thread-based
 # architecture. The simple-websocket package provides real WebSocket support
 # (not just long-polling) without requiring gevent monkey-patching.
+#
+# CORS: set CORS_ORIGINS in .env to a comma-separated list of allowed origins,
+# e.g. CORS_ORIGINS=https://panel.example.com,https://example.com
+# Leave unset (or set to *) only for local/dev use.
+_cors_env = os.environ.get('CORS_ORIGINS', '').strip()
+_socketio_cors: object = [o.strip() for o in _cors_env.split(',') if o.strip()] if _cors_env and _cors_env != '*' else '*'
+
 socketio = SocketIO(
     app,
     manage_session=False,
     async_mode='threading',
     ping_interval=25,
     ping_timeout=60,
-    cors_allowed_origins='*'
+    cors_allowed_origins=_socketio_cors
 )
 
 # Rate limiting
@@ -1900,12 +1926,9 @@ An emergency admin account has been created:
 """
             print(log_message)
             
-            # Also write to a log file
-            try:
-                with open('anti_lockout_credentials.log', 'a') as f:
-                    f.write(f"\n{datetime.now().isoformat()} - {log_message}\n")
-            except Exception as e:
-                print(f"Failed to write to log file: {e}")
+            # NOTE: Credentials are intentionally NOT written to a log file to
+            # avoid plaintext credential storage. The console output above is
+            # the only record — administrators must note them immediately.
             
             return username, password
         return None, None
@@ -4336,10 +4359,16 @@ def api_reset_user_password(user_id):
     """Reset user password (admin only)"""
     data = request.get_json()
     new_password = data.get('password', '')
-    
-    if len(new_password) < 6:
-        return jsonify({'error': 'Password must be at least 6 characters'}), 400
-    
+
+    if len(new_password) < 12:
+        return jsonify({'error': 'Password must be at least 12 characters'}), 400
+    if not any(c.isupper() for c in new_password):
+        return jsonify({'error': 'Password must contain at least one uppercase letter'}), 400
+    if not any(c.islower() for c in new_password):
+        return jsonify({'error': 'Password must contain at least one lowercase letter'}), 400
+    if not any(c.isdigit() for c in new_password):
+        return jsonify({'error': 'Password must contain at least one number'}), 400
+
     if user_manager.reset_password(user_id, new_password):
         return jsonify({'success': True})
     return jsonify({'error': 'User not found'}), 404
@@ -9731,16 +9760,35 @@ Examples:
 
 def run_server(host='0.0.0.0', port=3000):
     """Run the MServerController server"""
+    _is_dev = os.environ.get('FLASK_ENV', 'production') == 'development'
+    _cors_display = os.environ.get('CORS_ORIGINS', '*') or '*'
+    _cookie_secure = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+
     print('=' * 60)
     print('MServerController')
     print('=' * 60)
-    print(f'Web Interface: http://localhost:{port}')
-    print(f'Listening on: {host}:{port}')
+    print(f'Web Interface: http{"s" if _cookie_secure else ""}://localhost:{port}')
+    print(f'Listening on:  {host}:{port}')
+    print(f'Environment:   {"development" if _is_dev else "production"}')
+    print(f'CORS origins:  {_cors_display}')
+    if _cors_display == '*':
+        print('  ⚠️  CORS is open to all origins. Set CORS_ORIGINS in .env for production.')
+    if not _cookie_secure:
+        print('  ⚠️  SESSION_COOKIE_SECURE is False. Set SESSION_COOKIE_SECURE=true in .env when using HTTPS.')
     print('⚠️  WARNING: Default admin credentials are admin/admin')
     print('            Change immediately after first login!')
+    if not _is_dev:
+        print()
+        print('  ℹ️  Production mode: for best results run via gunicorn instead of')
+        print('     the built-in Werkzeug server:')
+        print('       gunicorn -k eventlet -w 1 "server:app"')
     print('=' * 60)
 
-    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+    # allow_unsafe_werkzeug=True is required when running under Werkzeug's dev
+    # server (threading mode). In production we still allow it so that
+    # `python server.py` works for simple deployments, but print the notice
+    # above encouraging gunicorn for exposed instances.
+    socketio.run(app, host=host, port=port, debug=_is_dev, allow_unsafe_werkzeug=True)
 
 
 if __name__ == '__main__':

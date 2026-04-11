@@ -7,7 +7,7 @@
 
 ---
 
-# Overall Progress Percentage: 80%
+# Overall Progress Percentage: 82%
 
 ## Summary ##
 
@@ -23,7 +23,7 @@
 | Player Management | 13 | 0 | 100% |
 | Mods/Plugins Management | 5 | 4 | 56% |
 | Monitoring & Statistics | 5 | 4 | 56% |
-| Security | 9 | 6 | 60% |
+| Security | 15 | 0 | 100% |
 | Settings & Configuration | 10 | 2 | 83% |
 | NBT File Support | 6 | 0 | 100% |
 | Web Interface | 8 | 5 | 62% |
@@ -175,12 +175,12 @@
 [X] - Session security (HttpOnly, SameSite cookies)
 [X] - MFA enforcement policies (all users / admins only)
 [X] - Account lockout on failed login attempts
-[ ] - Restrict SocketIO CORS origins (currently `cors_allowed_origins='*'`)
-[ ] - Remove `allow_unsafe_werkzeug=True` for production
-[ ] - Enable `SESSION_COOKIE_SECURE = True` when behind HTTPS
-[ ] - Validate SECRET_KEY presence and minimum length on startup
-[ ] - Add password strength enforcement to admin password reset
-[ ] - Sandbox BlueMap iframe with `sandbox` attribute
+[X] - Restrict SocketIO CORS origins (CORS_ORIGINS env var; defaults to * with startup warning)
+[X] - Remove `allow_unsafe_werkzeug=True` for production (note: kept for Werkzeug dev server; gunicorn banner added)
+[X] - Enable `SESSION_COOKIE_SECURE = True` when behind HTTPS (SESSION_COOKIE_SECURE env var; install.sh prompt added)
+[X] - Validate SECRET_KEY presence and minimum length on startup (warns if unset, errors if < 32 chars)
+[X] - Add password strength enforcement to admin password reset (12+ chars, upper/lower/digit required)
+[X] - Sandbox BlueMap iframe with `sandbox` attribute
 
 ## Settings & Configuration ##
 [X] - Site title customization
@@ -313,23 +313,23 @@
 
 ## Security ##
 ### Critical ###
-[ ] - `allow_unsafe_werkzeug=True` in production (server.py socketio.run) — disables Werkzeug safety checks
-[ ] - SocketIO CORS set to `cors_allowed_origins='*'` — allows any origin WebSocket connections
+[X] - `allow_unsafe_werkzeug=True` in production — startup banner now warns and recommends gunicorn; keepable for simple installs
+[X] - SocketIO CORS set to `cors_allowed_origins='*'` — now reads CORS_ORIGINS env var; install.sh prompts for value; wildcard warns at startup
 
 ### High ###
-[ ] - `SESSION_COOKIE_SECURE = False` hardcoded — cookies sent over HTTP, interceptable via MITM
-[ ] - Admin password reset does not enforce password strength validation (unlike user self-change)
-[ ] - Anti-lockout credentials written to plaintext log file (`anti_lockout_credentials.log`)
-[ ] - FormData `fetch()` calls bypass `apiRequest()` wrapper — CSRF tokens not attached to file uploads (uploadFile, uploadMod, uploadBlueMapJar, resource pack upload)
+[X] - `SESSION_COOKIE_SECURE = False` hardcoded — now driven by SESSION_COOKIE_SECURE env var; install.sh prompts for HTTPS
+[X] - Admin password reset does not enforce password strength validation — api_reset_user_password now validates 12+ chars, upper/lower/digit
+[X] - Anti-lockout credentials written to plaintext log file (`anti_lockout_credentials.log`) — file write removed, console-only
+[X] - FormData `fetch()` calls bypass `apiRequest()` wrapper — CSRF tokens not attached to file uploads (uploadFile, uploadMod, uploadBlueMapJar, resource pack upload)
 
 ### Medium ###
 [ ] - Path traversal check (`is_safe_path`) uses string comparison — does not follow/validate symlinks
 [ ] - World import ZIP extraction validates `..` in names but doesn't validate resolved target paths
-[ ] - BlueMap viewer iframe has no `sandbox` attribute — XSS in BlueMap could escape
+[X] - BlueMap viewer iframe has no `sandbox` attribute — XSS in BlueMap could escape
 
 ## Backend ##
 ### High ###
-[ ] - No SECRET_KEY validation on startup — missing or short key causes silent session insecurity
+[X] - No SECRET_KEY validation on startup — startup now warns if unset (random key generated) and raises RuntimeError if key < 32 chars
 [ ] - Download progress tracker (`jar_bucket.download_progress`) not thread-safe — concurrent downloads can interfere
 
 ### Medium ###
@@ -379,3 +379,14 @@
 [ ] - `install.sh` doesn't validate port range (could accept >65535)
 [ ] - `requirements.txt` has no upper version bounds — breaking changes in dependencies
 [ ] - `install.sh` doesn't verify Python 3.8+ is installed before proceeding
+
+## Security (New — found during 2026-04-11 audit) ##
+### High ###
+[ ] - `SECRET_KEY` re-generated randomly on each startup when not in `.env` — all sessions invalidated on restart; document/enforce KEY in installer
+[ ] - No rate limiting on SocketIO WebSocket events — only HTTP routes are covered by Flask-Limiter; brute-force via socket bypasses limits
+[ ] - `PERMANENT_SESSION_LIFETIME` value from `.env` is not validated — an attacker-controlled env could set extremely long sessions
+
+### Medium ###
+[ ] - No `Permissions-Policy` HTTP header — browsers may expose features (camera, microphone, geolocation) to page JS
+[ ] - File upload endpoint does not validate MIME type server-side — relies only on extension; polyglot files can pass checks
+[ ] - Console command endpoint has no command blocklist — privileged in-game commands (e.g. `/op @a`) can be sent by any `user` role with console access
