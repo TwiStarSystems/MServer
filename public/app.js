@@ -730,11 +730,11 @@ async function loadServerDetails() {
   try {
     const server = await apiRequest(`/api/servers/${currentServerId}`);
     
-    // Update header — show Name - Type - Version
-    const _typeLabel = (server.serverType || server.category || '').toUpperCase();
-    const _verLabel = server.version || '';
+    // Update header — show Name - Engine - Version
+    const _typeLabel = (server.serverType || '').toUpperCase();
+    const _verLabel = (server.version && server.version.toLowerCase() !== 'unknown') ? server.version : '';
     const _nameParts = [server.name];
-    if (_typeLabel && _typeLabel !== 'UNMODDED') _nameParts.push(_typeLabel);
+    if (_typeLabel && _typeLabel !== 'UNMODDED' && _typeLabel !== 'IMPORTED') _nameParts.push(_typeLabel);
     if (_verLabel) _nameParts.push(_verLabel);
     document.getElementById('server-name').textContent = _nameParts.join(' - ');
     const status = server.status || (server.running ? 'running' : 'stopped');
@@ -1759,22 +1759,35 @@ async function openEditServerModal() {
     document.getElementById('input-min-ram').value = minRamMatch ? minRamMatch[1] : '1G';
     document.getElementById('input-max-ram').value = maxRamMatch ? maxRamMatch[1] : '2G';
     document.getElementById('input-jvm-args').value = extraArgs;
-    document.getElementById('input-auto-start').checked = !!server.autoStart;
-    
-    // Show version management section and load current version
+    // Show version management section and load current version + AutoStart from managed.conf
     const versionSection = document.getElementById('version-management-section');
     const versionDisplay = document.getElementById('current-version-display');
+    
+    // Default autoStart from config.json; may be overridden by managed.conf below
+    document.getElementById('input-auto-start').checked = !!server.autoStart;
     
     if (versionSection && versionDisplay) {
       versionSection.style.display = 'block';
       versionDisplay.textContent = 'Loading...';
       
-      // Load current version from managed.conf
+      // Load current version and AutoStart from managed.conf
       try {
         const managedData = await apiRequest(`/api/servers/${currentServerId}/managed`);
-        if (managedData.managed && managedData.data && managedData.data.Version) {
-          versionDisplay.textContent = managedData.data.Version;
-          versionDisplay.style.color = '#4CAF50';
+        if (managedData.managed && managedData.data) {
+          if (managedData.data.Version) {
+            versionDisplay.textContent = managedData.data.Version;
+            versionDisplay.style.color = '#4CAF50';
+          } else if (server.version) {
+            versionDisplay.textContent = server.version;
+            versionDisplay.style.color = '#FF9800';
+          } else {
+            versionDisplay.textContent = 'Unknown';
+            versionDisplay.style.color = '#888';
+          }
+          // Sync AutoStart from managed.conf (it is the master)
+          if (managedData.data.AutoStart !== undefined) {
+            document.getElementById('input-auto-start').checked = managedData.data.AutoStart.toLowerCase() === 'true';
+          }
         } else if (server.version) {
           versionDisplay.textContent = server.version;
           versionDisplay.style.color = '#FF9800';
@@ -1850,7 +1863,7 @@ async function openVersionChangeModal() {
     
     // Load versions from JAR Bucket
     try {
-      const versionsResult = await apiRequest(`/api/jar-bucket/versions?type=${engineKey}`);
+      const versionsResult = await apiRequest(`/api/jar-bucket/versions/${engineKey}`);
       const versions = versionsResult.versions || [];
       
       versionChangeData.availableVersions = versions;

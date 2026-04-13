@@ -10,6 +10,8 @@ import re
 import gzip
 import json
 import shutil
+import signal
+import atexit
 import zipfile
 import subprocess
 import threading
@@ -2954,6 +2956,17 @@ class ServerManager:
             # Get server port if available
             port = self.get_server_port(server_id)
             
+            # Enrich with managed.conf data (authoritative source for Engine/Version)
+            server_dir = Path(server_config.get('serverPath', ''))
+            managed = self._read_managed_conf(server_dir) if server_dir.exists() else {}
+            
+            # Use managed.conf Engine/Version when present, fall back to config.json
+            engine_from_conf = managed.get('Engine') or server_config.get('serverType')
+            version_from_conf = managed.get('Version') or server_config.get('version')
+            # Don't surface the literal string 'imported' as a type label
+            if engine_from_conf and engine_from_conf.lower() == 'imported':
+                engine_from_conf = managed.get('Engine') or None
+            
             servers.append({
                 'id': server_id,
                 'name': server_config.get('name', 'Unnamed Server'),
@@ -2961,14 +2974,15 @@ class ServerManager:
                 'executable': server_config.get('executable', 'server.jar'),
                 'javaArgs': server_config.get('javaArgs', '-Xmx4G -Xms1G'),
                 'autoStart': server_config.get('autoStart', False),
-                'serverType': server_config.get('serverType'),
-                'version': server_config.get('version'),
+                'serverType': engine_from_conf,
+                'version': version_from_conf,
                 'owner': server_config.get('owner'),
                 'created': server_config.get('created'),
                 'approved': is_approved,
                 'running': is_running,
                 'status': status,
-                'port': port
+                'port': port,
+                'category': server_config.get('category', 'unmodded')
             })
         return servers
     
@@ -3392,6 +3406,16 @@ class ServerManager:
             if managed_conf_path.exists():
                 managed_config = self._read_managed_conf(server_dir)
                 managed_config.pop('Modded', None)
+                self._write_managed_conf(server_dir, managed_config)
+        
+        # If autoStart was updated, sync to managed.conf AutoStart
+        if 'autoStart' in kwargs:
+            server_config = self.config['servers'][server_id]
+            server_dir = Path(server_config.get('serverPath', ''))
+            managed_conf_path = server_dir / 'managed.conf'
+            if managed_conf_path.exists():
+                managed_config = self._read_managed_conf(server_dir)
+                managed_config['AutoStart'] = 'true' if kwargs['autoStart'] else 'false'
                 self._write_managed_conf(server_dir, managed_config)
         
         return True
@@ -5234,11 +5258,21 @@ def get_server(server_id):
     is_running = instance is not None and instance.is_running()
     status = instance.get_status().value if instance else ServerStatus.STOPPED.value
     
+    # Enrich with managed.conf Engine/Version (authoritative source)
+    server_dir = Path(config.get('serverPath', ''))
+    managed = server_manager._read_managed_conf(server_dir) if server_dir.exists() else {}
+    engine = managed.get('Engine') or config.get('serverType')
+    version = managed.get('Version') or config.get('version')
+    if engine and engine.lower() == 'imported':
+        engine = None
+    
     return jsonify({
         'id': server_id,
         'running': is_running,
         'status': status,
-        **config
+        **config,
+        'serverType': engine,
+        'version': version
     })
 
 @app.route('/api/servers/<server_id>', methods=['PUT'])
@@ -9822,6 +9856,66 @@ Examples:
     )
     
     return parser.parse_args()
+
+
+def _graceful_shutdown(signum=None, frame=None):
+    """
+    Gracefully stop all running Minecraft servers before the process exits.
+    Called on SIGTERM (systemd stop/restart) and at Python interpreter exit.
+    Sends the 'stop' command to each server and waits up to 60 seconds for
+    them to save and shut down before allowing the process to end.
+    """
+    running_ids = [
+        sid for sid, inst in list(server_manager.servers.items())
+        if inst.is_running()
+    ]
+
+    if running_ids:
+        print(f"[Shutdown] Stopping {len(running_ids)} Minecraft server(s) gracefully...")
+        for server_id in running_ids:
+            try:
+                inst = server_manager.servers.get(server_id)
+                if inst and inst.is_running():
+                    name = server_manager.config.get('servers', {}).get(server_id, {}).get('name', server_id)
+                    print(f"[Shutdown] Sending stop to '{name}' ({server_id})")
+                    inst.send_command('stop')
+            except Exception as e:
+                print(f"[Shutdown] Error stopping {server_id}: {e}")
+
+        # Wait up to 60 seconds for all servers to stop
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if not any(
+                inst.is_running()
+                for inst in server_manager.servers.values()
+            ):
+                break
+            time.sleep(1)
+
+        # Force-kill anything still alive
+        for server_id, inst in list(server_manager.servers.items()):
+            if inst.is_running():
+                name = server_manager.config.get('servers', {}).get(server_id, {}).get('name', server_id)
+                print(f"[Shutdown] Force-killing '{name}' ({server_id}) after timeout")
+                try:
+                    inst.process.kill()
+                    inst.process.wait()
+                except Exception:
+                    pass
+
+        print("[Shutdown] All servers stopped.")
+
+    if signum is not None:
+        # Exit cleanly when invoked as a signal handler
+        os._exit(0)
+
+
+# Register graceful shutdown for normal interpreter exit (e.g. gunicorn reload)
+atexit.register(_graceful_shutdown)
+
+# Register for SIGTERM (systemd stop) and SIGINT (Ctrl-C)
+signal.signal(signal.SIGTERM, _graceful_shutdown)
+signal.signal(signal.SIGINT, _graceful_shutdown)
 
 
 def run_server(host='0.0.0.0', port=3000):

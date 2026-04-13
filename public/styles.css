@@ -109,7 +109,7 @@ body {
     "sidebar main";
   grid-template-columns: 250px 1fr;
   grid-template-rows: 60px 1fr;
-  height: 100vh;
+  height: calc(100vh - 44px);
   overflow: hidden;
 }
 
@@ -2353,7 +2353,7 @@ select.form-control:disabled {
 
 /* Adjust main content to account for footer */
 .main-content {
-  padding-bottom: 50px;
+  padding-bottom: 20px;
 }
 
 /* ==================== Settings Page ==================== */
