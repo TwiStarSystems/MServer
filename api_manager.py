@@ -17,8 +17,8 @@ api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
 
 # Configuration
 BASE_DIR = Path(__file__).parent.absolute()
-API_KEYS_PATH = BASE_DIR / 'api_keys.json'
-API_STATS_PATH = BASE_DIR / 'api_stats.json'
+
+from db import get_db
 
 # API Key permissions
 class APIPermission:
@@ -32,71 +32,51 @@ class APIPermission:
 
 # ==================== Data Storage ====================
 
-def load_api_keys():
-    """Load API keys from file."""
-    if not API_KEYS_PATH.exists():
-        return {}
-    try:
-        return json.loads(API_KEYS_PATH.read_text())
-    except (json.JSONDecodeError, IOError):
-        return {}
-
-
-def save_api_keys(keys):
-    """Save API keys to file."""
-    API_KEYS_PATH.write_text(json.dumps(keys, indent=2, default=str))
-
-
 def load_api_stats():
-    """Load API statistics from file."""
-    if not API_STATS_PATH.exists():
-        return {
-            'total_requests': 0,
-            'successful_requests': 0,
-            'failed_requests': 0,
-            'requests_by_key': {},
-            'requests_by_endpoint': {},
-            'last_reset': datetime.now().isoformat()
-        }
-    try:
-        return json.loads(API_STATS_PATH.read_text())
-    except (json.JSONDecodeError, IOError):
-        return {
-            'total_requests': 0,
-            'successful_requests': 0,
-            'failed_requests': 0,
-            'requests_by_key': {},
-            'requests_by_endpoint': {},
-            'last_reset': datetime.now().isoformat()
-        }
-
-
-def save_api_stats(stats):
-    """Save API statistics to file."""
-    API_STATS_PATH.write_text(json.dumps(stats, indent=2, default=str))
+    """Load API statistics from SQLite."""
+    conn = get_db()
+    row = conn.execute('SELECT * FROM api_stats WHERE id=1').fetchone()
+    stats = {
+        'total_requests':       row['total_requests']      if row else 0,
+        'successful_requests':  row['successful_requests'] if row else 0,
+        'failed_requests':      row['failed_requests']     if row else 0,
+        'last_reset':           row['last_reset']          if row else datetime.now().isoformat(),
+        'requests_by_key':      {},
+        'requests_by_endpoint': {},
+    }
+    for r in conn.execute('SELECT * FROM api_requests_by_key').fetchall():
+        stats['requests_by_key'][r['key_id']] = r['count']
+    for r in conn.execute('SELECT * FROM api_requests_by_endpoint').fetchall():
+        stats['requests_by_endpoint'][r['endpoint']] = r['count']
+    return stats
 
 
 def increment_api_stats(key_id=None, endpoint=None, success=True):
-    """Increment API usage statistics."""
-    stats = load_api_stats()
-    stats['total_requests'] = stats.get('total_requests', 0) + 1
-    
+    """Atomically increment API usage statistics in SQLite."""
+    conn = get_db()
     if success:
-        stats['successful_requests'] = stats.get('successful_requests', 0) + 1
+        conn.execute(
+            'UPDATE api_stats SET total_requests=total_requests+1, '
+            'successful_requests=successful_requests+1 WHERE id=1'
+        )
     else:
-        stats['failed_requests'] = stats.get('failed_requests', 0) + 1
-    
+        conn.execute(
+            'UPDATE api_stats SET total_requests=total_requests+1, '
+            'failed_requests=failed_requests+1 WHERE id=1'
+        )
     if key_id:
-        if 'requests_by_key' not in stats:
-            stats['requests_by_key'] = {}
-        stats['requests_by_key'][key_id] = stats['requests_by_key'].get(key_id, 0) + 1
-    
+        conn.execute(
+            'INSERT INTO api_requests_by_key (key_id, count) VALUES (?,1) '
+            'ON CONFLICT(key_id) DO UPDATE SET count=count+1',
+            (key_id,)
+        )
     if endpoint:
-        if 'requests_by_endpoint' not in stats:
-            stats['requests_by_endpoint'] = {}
-        stats['requests_by_endpoint'][endpoint] = stats['requests_by_endpoint'].get(endpoint, 0) + 1
-    
-    save_api_stats(stats)
+        conn.execute(
+            'INSERT INTO api_requests_by_endpoint (endpoint, count) VALUES (?,1) '
+            'ON CONFLICT(endpoint) DO UPDATE SET count=count+1',
+            (endpoint,)
+        )
+    conn.commit()
 
 
 # ==================== API Key Management ====================
@@ -111,134 +91,145 @@ def hash_api_key(key):
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def _row_to_key_dict(row):
+    """Convert an api_keys DB row to the dict shape the app expects."""
+    if row is None:
+        return None
+    return {
+        'id':            row['id'],
+        'name':          row['name'],
+        'key_hash':      row['key_hash'],
+        'key_prefix':    row['key_prefix'],
+        'permissions':   json.loads(row['permissions']),
+        'rate_limit':    row['rate_limit'],
+        'created_at':    row['created'],
+        'expires_at':    row['expires'],
+        'last_used':     row['last_used'],
+        'request_count': row['use_count'],
+        'active':        bool(row['enabled']),
+    }
+
+
 def create_api_key(name, permissions=None, rate_limit=60, expires_days=None):
     """
     Create a new API key.
-    
+
     Args:
         name: Display name for the key
         permissions: List of permissions (default: ['read'])
         rate_limit: Requests per minute (default: 60)
         expires_days: Days until expiration (None = never expires)
-    
+
     Returns:
         Tuple of (key_id, full_key, key_data)
     """
-    keys = load_api_keys()
-    
-    key_id = secrets.token_hex(8)
-    full_key = generate_api_key()
-    key_hash = hash_api_key(full_key)
-    
-    expires_at = None
-    if expires_days:
-        expires_at = (datetime.now() + timedelta(days=expires_days)).isoformat()
-    
-    key_data = {
-        'id': key_id,
-        'name': name,
-        'key_hash': key_hash,
-        'key_prefix': full_key[:12],  # Store prefix for identification
-        'permissions': permissions or [APIPermission.READ],
-        'rate_limit': rate_limit,
-        'created_at': datetime.now().isoformat(),
-        'expires_at': expires_at,
-        'last_used': None,
-        'request_count': 0,
-        'active': True
-    }
-    
-    keys[key_id] = key_data
-    save_api_keys(keys)
-    
-    return key_id, full_key, key_data
+    key_id     = secrets.token_hex(8)
+    full_key   = generate_api_key()
+    key_hash   = hash_api_key(full_key)
+    key_prefix = full_key[:12]
+    expires_at = (
+        (datetime.now() + timedelta(days=expires_days)).isoformat()
+        if expires_days else None
+    )
+    perms = json.dumps(permissions or [APIPermission.READ])
+    now   = datetime.now().isoformat()
+
+    conn = get_db()
+    conn.execute(
+        '''INSERT INTO api_keys
+           (id, name, key_hash, key_prefix, permissions, rate_limit, created, expires, use_count, enabled)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)''',
+        (key_id, name, key_hash, key_prefix, perms, rate_limit, now, expires_at)
+    )
+    conn.commit()
+
+    row = conn.execute('SELECT * FROM api_keys WHERE id=?', (key_id,)).fetchone()
+    return key_id, full_key, _row_to_key_dict(row)
 
 
 def validate_api_key(provided_key):
     """
     Validate an API key.
-    
+
     Args:
         provided_key: The full API key to validate
-    
+
     Returns:
         key_data dict if valid, None otherwise
     """
     if not provided_key:
         return None
-    
-    keys = load_api_keys()
+
     key_hash = hash_api_key(provided_key)
-    
-    for key_id, key_data in keys.items():
-        if key_data.get('key_hash') == key_hash:
-            # Check if key is active
-            if not key_data.get('active', True):
+    conn = get_db()
+    row = conn.execute('SELECT * FROM api_keys WHERE key_hash=?', (key_hash,)).fetchone()
+    if row is None:
+        return None
+    if not row['enabled']:
+        return None
+    if row['expires']:
+        try:
+            if datetime.now() > datetime.fromisoformat(row['expires']):
                 return None
-            
-            # Check expiration
-            if key_data.get('expires_at'):
-                expires = datetime.fromisoformat(key_data['expires_at'])
-                if datetime.now() > expires:
-                    return None
-            
-            # Update last used and request count
-            key_data['last_used'] = datetime.now().isoformat()
-            key_data['request_count'] = key_data.get('request_count', 0) + 1
-            keys[key_id] = key_data
-            save_api_keys(keys)
-            
-            return key_data
-    
-    return None
+        except Exception:
+            pass
+
+    conn.execute(
+        'UPDATE api_keys SET last_used=?, use_count=use_count+1 WHERE id=?',
+        (datetime.now().isoformat(), row['id'])
+    )
+    conn.commit()
+    row = conn.execute('SELECT * FROM api_keys WHERE id=?', (row['id'],)).fetchone()
+    return _row_to_key_dict(row)
 
 
 def update_api_key(key_id, updates):
     """Update an API key."""
-    keys = load_api_keys()
-    if key_id not in keys:
+    conn = get_db()
+    row = conn.execute('SELECT * FROM api_keys WHERE id=?', (key_id,)).fetchone()
+    if row is None:
         return None
-    
-    allowed_updates = ['name', 'permissions', 'rate_limit', 'active']
-    for field in allowed_updates:
-        if field in updates:
-            keys[key_id][field] = updates[field]
-    
-    save_api_keys(keys)
-    return keys[key_id]
+
+    current    = _row_to_key_dict(row)
+    name       = updates.get('name',        current['name'])
+    perms      = json.dumps(updates.get('permissions', current['permissions']))
+    rate_limit = updates.get('rate_limit',  current['rate_limit'])
+    enabled    = 1 if updates.get('active', current['active']) else 0
+
+    conn.execute(
+        'UPDATE api_keys SET name=?, permissions=?, rate_limit=?, enabled=? WHERE id=?',
+        (name, perms, rate_limit, enabled, key_id)
+    )
+    conn.commit()
+    return _row_to_key_dict(conn.execute('SELECT * FROM api_keys WHERE id=?', (key_id,)).fetchone())
 
 
 def delete_api_key(key_id):
     """Delete an API key."""
-    keys = load_api_keys()
-    if key_id in keys:
-        del keys[key_id]
-        save_api_keys(keys)
-        return True
-    return False
+    conn = get_db()
+    result = conn.execute('DELETE FROM api_keys WHERE id=?', (key_id,))
+    conn.commit()
+    return result.rowcount > 0
 
 
 def list_api_keys():
     """List all API keys (without sensitive data)."""
-    keys = load_api_keys()
+    rows = get_db().execute('SELECT * FROM api_keys ORDER BY created').fetchall()
     result = []
-    
-    for key_id, key_data in keys.items():
-        # Don't expose the hash, only the prefix for identification
-        safe_data = {
-            'id': key_data['id'],
-            'name': key_data.get('name', 'Unnamed'),
-            'key': key_data.get('key_prefix', '****') + '...',  # Show only prefix
-            'permissions': key_data.get('permissions', []),
-            'rate_limit': key_data.get('rate_limit', 60),
-            'created_at': key_data.get('created_at'),
-            'expires_at': key_data.get('expires_at'),
-            'last_used': key_data.get('last_used'),
-            'request_count': key_data.get('request_count', 0),
-            'active': key_data.get('active', True)
-        }
-        result.append(safe_data)
-    
+    for row in rows:
+        k = _row_to_key_dict(row)
+        result.append({
+            'id':            k['id'],
+            'name':          k['name'],
+            'key':           k['key_prefix'] + '...', 
+            'permissions':   k['permissions'],
+            'rate_limit':    k['rate_limit'],
+            'created_at':    k['created_at'],
+            'expires_at':    k['expires_at'],
+            'last_used':     k['last_used'],
+            'request_count': k['request_count'],
+            'active':        k['active'],
+        })
     return result
 
 

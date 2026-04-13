@@ -2438,6 +2438,8 @@ async function loadAppSettings() {
       document.getElementById('enable-registration').checked = settings.enableRegistration ?? true;
       document.getElementById('require-approval').checked = settings.requireApproval ?? true;
       document.getElementById('require-server-approval').checked = settings.requireServerApproval ?? false;
+      document.getElementById('global-max-backups').value = settings.globalMaxBackups ?? 10;
+      document.getElementById('auto-delete-expired-backups').checked = settings.autoDeleteExpiredBackups ?? false;
     }
     
     // Load MFA settings
@@ -2456,6 +2458,22 @@ async function loadAppSettings() {
     await loadEmailTemplates();
   } catch (err) {
     console.error('Failed to load app settings:', err);
+  }
+}
+
+async function deleteAllExpiredBackups() {
+  if (!await confirmAction('Delete all expired backups across every server? This cannot be undone.', { title: 'Delete All Expired Backups', icon: '🗑️', okText: 'Delete All Expired', okClass: 'btn-danger' })) return;
+  try {
+    const response = await fetch('/api/backups/delete-expired', { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) {
+      showNotification(result.error || 'Failed to delete expired backups', 'error');
+      return;
+    }
+    showNotification(`Deleted ${result.deleted} expired backup(s) across all servers`, 'success');
+  } catch (err) {
+    console.error('Failed to delete expired backups:', err);
+    showNotification('Failed to delete expired backups', 'error');
   }
 }
 
@@ -2496,7 +2514,9 @@ async function saveAppSettings() {
   const settings = {
     enableRegistration: document.getElementById('enable-registration').checked,
     requireApproval: document.getElementById('require-approval').checked,
-    requireServerApproval: document.getElementById('require-server-approval').checked
+    requireServerApproval: document.getElementById('require-server-approval').checked,
+    globalMaxBackups: parseInt(document.getElementById('global-max-backups').value) || 0,
+    autoDeleteExpiredBackups: document.getElementById('auto-delete-expired-backups').checked
   };
   
   const mfaSettings = {

@@ -4094,13 +4094,15 @@ async function loadBackups() {
     data.backups.forEach(backup => {
       const row = document.createElement('tr');
       let prefix = '';
-      if (backup.is_incremental) prefix = '🔼 ';
-      else if (backup.is_scheduled) prefix = '📅 ';
+      if (backup.is_scheduled) prefix = '📅 ';
+      const expiredBadge = backup.expired
+        ? '<span class="badge badge-warning" title="This backup exceeds the retention limit">⚠️ Expired</span> '
+        : '';
       const checksumBadge = backup.has_checksum
         ? '<span class="badge badge-success" title="Checksum present">✓</span>'
         : '';
       row.innerHTML = `
-        <td>${prefix}${escapeHtml(backup.name)} ${checksumBadge}</td>
+        <td>${prefix}${escapeHtml(backup.name)} ${expiredBadge}${checksumBadge}</td>
         <td>${formatBytes(backup.size)}</td>
         <td>${new Date(backup.created).toLocaleString()}</td>
         <td>
@@ -4124,7 +4126,6 @@ function openCreateBackupModal() {
   // Reset to defaults
   document.getElementById('backup-compression-level').value = 6;
   document.getElementById('backup-compression-level-val').textContent = '6';
-  document.getElementById('backup-incremental').checked = false;
   document.getElementById('create-backup-modal').classList.add('active');
 }
 
@@ -4136,7 +4137,6 @@ async function createBackup() {
   if (!currentServerId) return;
 
   const compressionLevel = parseInt(document.getElementById('backup-compression-level').value) || 6;
-  const incremental = document.getElementById('backup-incremental').checked;
 
   closeCreateBackupModal();
   showNotification('⏳ Backup started. The server will be stopped if running, backed up, then restarted.', 'info');
@@ -4144,7 +4144,7 @@ async function createBackup() {
   try {
     await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
       method: 'POST',
-      body: JSON.stringify({ compressionLevel, incremental, backupType: 'manual' })
+      body: JSON.stringify({ compressionLevel, backupType: 'manual' })
     });
     // Backup runs in the background; the list will refresh via the backup_manual_completed socket event
   } catch (error) {
@@ -4302,7 +4302,7 @@ async function loadBackupHistory() {
         : '—';
       const size = evt.size ? formatBytes(evt.size) : '—';
       const status = evt.success
-        ? `<span class="badge badge-success">${evt.is_incremental ? '🔼 Incremental' : '✅ OK'}</span>`
+        ? `<span class="badge badge-success">✅ OK</span>`
         : `<span class="badge badge-danger" title="${escapeHtml(evt.error || '')}">❌ Failed</span>`;
       const checksum = evt.checksum
         ? `<span class="badge badge-secondary" title="${escapeHtml(evt.checksum)}">${evt.checksum.substring(0, 8)}…</span>`
@@ -4396,7 +4396,6 @@ async function loadScheduleIntoModal() {
       const compLvl = (s.compressionLevel !== undefined) ? s.compressionLevel : 6;
       document.getElementById('schedule-compression-level').value = compLvl;
       document.getElementById('schedule-compression-level-val').textContent = compLvl;
-      document.getElementById('schedule-incremental').checked = !!s.incremental;
       
       updateScheduleOptions();
     }
@@ -4446,9 +4445,7 @@ async function saveSchedule() {
     minute: parseInt(document.getElementById('schedule-minute').value) || 0,
     dayOfWeek: parseInt(document.getElementById('schedule-day').value) || 0,
     cron: document.getElementById('schedule-cron').value,
-    maxBackups: parseInt(document.getElementById('schedule-max-backups').value) || 7,
     compressionLevel: parseInt(document.getElementById('schedule-compression-level').value) || 6,
-    incremental: document.getElementById('schedule-incremental').checked,
     stopServer: document.getElementById('schedule-stop-server').checked,
     restartAfter: document.getElementById('schedule-restart-after').checked
   };
@@ -4467,6 +4464,22 @@ async function saveSchedule() {
   } catch (error) {
     console.error('Failed to save schedule:', error);
     showNotification('Failed to save backup schedule', 'error');
+  }
+}
+
+async function deleteExpiredBackups() {
+  if (!currentServerId) return;
+  if (!await confirmAction('Delete all backups beyond the retention limit for this server?', { title: 'Delete Expired Backups', icon: '🗑️', okText: 'Delete Expired', okClass: 'btn-danger' })) return;
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/delete-expired`, { method: 'POST' });
+    if (result.success) {
+      showNotification(`Deleted ${result.deleted} expired backup(s)`, 'success');
+      loadBackups();
+    }
+  } catch (error) {
+    console.error('Failed to delete expired backups:', error);
+    const msg = error?.data?.error || 'Failed to delete expired backups';
+    showNotification(msg, 'error');
   }
 }
 

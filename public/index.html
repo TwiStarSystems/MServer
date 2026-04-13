@@ -518,6 +518,7 @@
             <button id="schedule-backup-btn" class="btn btn-primary">📅 Schedule Backup</button>
             <button class="btn" onclick="triggerImportBackup()">📥 Import Backup</button>
             <input type="file" id="import-backup-input" accept=".zip" style="display:none" onchange="importBackup(this)">
+            <button id="delete-expired-backups-btn" class="btn btn-warning" onclick="deleteExpiredBackups()" title="Delete all backups beyond the retention limit">🗑️ Delete Expired</button>
             <button id="refresh-backups-btn" class="btn">Refresh</button>
           </div>
           
@@ -1615,12 +1616,6 @@
           </div>
           
           <div class="form-group">
-            <label>Maximum Backups to Keep</label>
-            <input type="number" id="schedule-max-backups" class="form-control" min="1" max="100" value="7">
-            <small class="form-help">Older scheduled backups will be automatically deleted</small>
-          </div>
-          
-          <div class="form-group">
             <label>Compression Level (0 = none, 9 = maximum)</label>
             <input type="range" id="schedule-compression-level" class="form-control" min="0" max="9" value="6" oninput="document.getElementById('schedule-compression-level-val').textContent = this.value">
             <small class="form-help">Level: <span id="schedule-compression-level-val">6</span> — higher level = smaller file, slower backup</small>
@@ -1640,13 +1635,6 @@
             </label>
           </div>
 
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="schedule-incremental">
-              Incremental backup (only files changed since last backup)
-            </label>
-            <small class="form-help">⚠️ First run will be a full backup. Incremental backups require the previous full backup to restore.</small>
-          </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-success" onclick="saveSchedule()">Save Schedule</button>
@@ -1670,13 +1658,6 @@
             <label>Compression Level (0 = none, 9 = maximum)</label>
             <input type="range" id="backup-compression-level" class="form-control" min="0" max="9" value="6" oninput="document.getElementById('backup-compression-level-val').textContent = this.value">
             <small class="form-help">Level: <span id="backup-compression-level-val">6</span> — higher = smaller file, slower</small>
-          </div>
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="backup-incremental">
-              Incremental backup (only files changed since last backup)
-            </label>
-            <small class="form-help">⚠️ Requires a previous full backup to restore. Falls back to full if none exists.</small>
           </div>
         </div>
         <div class="modal-footer">

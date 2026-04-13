@@ -18,7 +18,7 @@
 | File Management | 10 | 0 | 100% |
 | JAR Management | 10 | 0 | 100% |
 | User Management | 10 | 0 | 100% |
-| Backup System | 15 | 0 | 100% |
+| Backup System | 16 | 0 | 100% |
 | Task Scheduler | 7 | 2 | 78% |
 | Player Management | 13 | 0 | 100% |
 | Mods/Plugins Management | 8 | 1 | 89% |
@@ -110,7 +110,8 @@
 [X] - Pre-backup server shutdown option
 [X] - Post-backup server restart option
 [X] - Backup email notifications on completion/failure
-[X] - Incremental backups
+[X] - Global backup retention: "Hold X Number of Backups" setting per server; expired backups marked in UI with badge
+[X] - Auto-delete expired backups toggle (Settings > Game Server Settings); manual "Delete Expired" button per-server and globally
 [X] - Backup compression options (level selection)
 [X] - Backup to external storage (S3, FTP, etc.)
 [X] - Backup verification/integrity checking

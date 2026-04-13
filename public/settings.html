@@ -286,6 +286,37 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
+
+            <div class="settings-divider" style="margin: 16px 0; border-top: 1px solid var(--border-color);"></div>
+            <h4 style="margin: 0 0 12px; font-size: 0.95rem; color: var(--text-secondary);">💾 Backup Retention</h4>
+
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Hold X Number of Backups</label>
+                <small>Maximum number of backups to keep per server. Backups beyond this limit are marked as expired. Set to 0 for unlimited.</small>
+              </div>
+              <input type="number" id="global-max-backups" class="form-control" min="0" max="999" value="10"
+                style="width: 90px; text-align: center;" onchange="saveAppSettings()">
+            </div>
+
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Automatically Delete Expired Backups</label>
+                <small>When enabled, expired backups are deleted immediately after each new backup is created. When disabled, they are only marked and must be removed manually.</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="auto-delete-expired-backups" onchange="saveAppSettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Delete All Expired Backups Now</label>
+                <small>Immediately remove all backups across every server that exceed the retention limit.</small>
+              </div>
+              <button class="btn btn-danger btn-small" onclick="deleteAllExpiredBackups()">🗑️ Delete Expired Now</button>
+            </div>
           </div>
           
           <div class="settings-card">

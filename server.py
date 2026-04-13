@@ -48,6 +48,8 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from db import get_db, init_db
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -128,12 +130,8 @@ SERVERS_DIR = BASE_DIR / 'servers'
 BACKUPS_DIR = BASE_DIR / 'backups'
 UPLOADS_DIR = BASE_DIR / 'uploads'
 RESOURCEPACKS_DIR = BASE_DIR / 'public' / 'resourcepacks'
-CONFIG_PATH = BASE_DIR / 'config.json'
-USERS_PATH = BASE_DIR / 'users.json'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
-SCHEDULES_PATH = BASE_DIR / 'schedules.json'
-TASKS_PATH = BASE_DIR / 'tasks.json'
-STATS_PATH = BASE_DIR / 'stats.json'
+DB_PATH = BASE_DIR / 'msc.db'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
@@ -314,7 +312,9 @@ class SettingsManager:
         'app': {
             'enableRegistration': True,
             'requireApproval': True,
-            'requireServerApproval': False
+            'requireServerApproval': False,
+            'globalMaxBackups': 10,
+            'autoDeleteExpiredBackups': False
         },
         'mfa': {
             'requireMfaForAdmins': False,
@@ -413,7 +413,8 @@ class SettingsManager:
         if 'app' not in self.settings:
             self.settings['app'] = {}
         
-        for key in ['enableRegistration', 'requireApproval', 'requireServerApproval']:
+        for key in ['enableRegistration', 'requireApproval', 'requireServerApproval',
+                     'globalMaxBackups', 'autoDeleteExpiredBackups']:
             if key in app_data:
                 self.settings['app'][key] = app_data[key]
         
@@ -898,40 +899,19 @@ class WebhookService:
 # ==================== System Stats Manager ====================
 
 class StatsManager:
-    """Manages system statistics collection and storage"""
-    
+    """Manages system statistics collection and storage — backed by SQLite."""
+
     RETENTION_DAYS = 7
-    
+
     def __init__(self):
-        self.stats = self._load_stats()
         self._start_collection()
-    
-    def _load_stats(self):
-        """Load stats from file"""
-        if STATS_PATH.exists():
-            try:
-                with open(STATS_PATH, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {'history': []}
-    
-    def _save_stats(self):
-        """Save stats to file"""
-        try:
-            with open(STATS_PATH, 'w') as f:
-                json.dump(self.stats, f)
-        except Exception as e:
-            print(f"Failed to save stats: {e}")
-    
+
     def _cleanup_old_stats(self):
-        """Remove stats older than retention period"""
-        cutoff = datetime.now() - timedelta(days=self.RETENTION_DAYS)
-        cutoff_ts = cutoff.isoformat()
-        self.stats['history'] = [
-            s for s in self.stats['history']
-            if s.get('timestamp', '') > cutoff_ts
-        ]
+        """Delete stats older than the retention period from the DB."""
+        cutoff = (datetime.now() - timedelta(days=self.RETENTION_DAYS)).isoformat()
+        conn = get_db()
+        conn.execute('DELETE FROM stats_history WHERE timestamp < ?', (cutoff,))
+        conn.commit()
     
     def _get_system_stats(self):
         """Get current system statistics"""
@@ -1012,37 +992,66 @@ class StatsManager:
         return stats
     
     def _collect_stats(self):
-        """Background thread to collect stats every 10 seconds"""
+        """Background thread: collect stats every 10 seconds and persist to SQLite."""
         while True:
             try:
                 stats = self._get_system_stats()
-                self.stats['history'].append(stats)
+                conn = get_db()
+                conn.execute(
+                    '''INSERT INTO stats_history
+                       (timestamp, cpu, memory_used, memory_total, memory_percent,
+                        disk_used, disk_total, disk_percent)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (stats['timestamp'],
+                     stats['cpu'],
+                     stats['memory']['used'],
+                     stats['memory']['total'],
+                     stats['memory']['percent'],
+                     stats['disk']['used'],
+                     stats['disk']['total'],
+                     stats['disk']['percent'])
+                )
+                conn.commit()
                 self._cleanup_old_stats()
-                self._save_stats()
-                
-                # Emit to connected clients
+
                 socketio.emit('stats_update', stats)
             except Exception as e:
                 print(f"Stats collection error: {e}")
-            
+
             time.sleep(10)
-    
+
     def _start_collection(self):
-        """Start the stats collection thread"""
+        """Start the stats collection thread."""
         thread = threading.Thread(target=self._collect_stats, daemon=True)
         thread.start()
-    
+
     def get_current_stats(self):
-        """Get the most recent stats"""
+        """Get the most recent stats (live reading, not from DB)."""
         return self._get_system_stats()
-    
+
     def get_history(self, hours=24):
-        """Get stats history for the specified number of hours"""
-        cutoff = datetime.now() - timedelta(hours=hours)
-        cutoff_ts = cutoff.isoformat()
+        """Get stats history for the specified number of hours from SQLite."""
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        rows = get_db().execute(
+            'SELECT * FROM stats_history WHERE timestamp > ? ORDER BY timestamp',
+            (cutoff,)
+        ).fetchall()
         return [
-            s for s in self.stats['history']
-            if s.get('timestamp', '') > cutoff_ts
+            {
+                'timestamp': r['timestamp'],
+                'cpu':       r['cpu'],
+                'memory': {
+                    'used':    r['memory_used'],
+                    'total':   r['memory_total'],
+                    'percent': r['memory_percent'],
+                },
+                'disk': {
+                    'used':    r['disk_used'],
+                    'total':   r['disk_total'],
+                    'percent': r['disk_percent'],
+                },
+            }
+            for r in rows
         ]
 
 
@@ -1155,89 +1164,86 @@ def upload_backup_to_external(backup_path, server_id, backup_name):
 # ==================== Backup Scheduler ====================
 
 class BackupScheduler:
-    """Manages scheduled automated backups for servers"""
-    
+    """Manages scheduled automated backups for servers — backed by SQLite."""
+
     def __init__(self):
-        self.schedules = self._load_schedules()
         self.scheduler = BackgroundScheduler()
         self.scheduler.start()
         self._restore_schedules()
-    
-    def _load_schedules(self):
-        """Load schedules from file"""
-        if SCHEDULES_PATH.exists():
-            try:
-                with open(SCHEDULES_PATH, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {'schedules': {}}
-    
-    def _save_schedules(self):
-        """Save schedules to file"""
-        with open(SCHEDULES_PATH, 'w') as f:
-            json.dump(self.schedules, f, indent=2)
-    
+
+    # ── Row helpers ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _row_to_schedule_dict(row):
+        """Convert a backup_schedules DB row to the camelCase dict the app expects."""
+        if row is None:
+            return None
+        return {
+            'enabled':          bool(row['enabled']),
+            'type':             row['schedule_type'],
+            'hour':             row['hour'],
+            'minute':           row['minute'],
+            'dayOfWeek':        row['day_of_week'],
+            'cron':             row['cron'],
+            'compressionLevel': row['compression_level'],
+            'stopServer':       bool(row['stop_server']),
+            'restartAfter':     bool(row['restart_after']),
+        }
+
+    # ── Startup restore ───────────────────────────────────────────────────────
+
     def _restore_schedules(self):
-        """Restore all schedules from saved config on startup"""
-        for server_id, schedule in self.schedules.get('schedules', {}).items():
-            if schedule.get('enabled', False):
-                self._add_job(server_id, schedule)
-    
+        """Re-register APScheduler jobs from the database on startup."""
+        rows = get_db().execute(
+            'SELECT * FROM backup_schedules WHERE enabled=1'
+        ).fetchall()
+        for row in rows:
+            self._add_job(row['server_id'], self._row_to_schedule_dict(row))
+
+    # ── APScheduler job management ────────────────────────────────────────────
+
     def _add_job(self, server_id, schedule):
-        """Add a scheduled backup job"""
+        """Add (or replace) the APScheduler cron job for a server's backup schedule."""
         job_id = f"backup_{server_id}"
-        
-        # Remove existing job if any
         try:
             self.scheduler.remove_job(job_id)
-        except:
+        except Exception:
             pass
-        
-        # Create cron trigger based on schedule type
+
         schedule_type = schedule.get('type', 'daily')
-        hour = schedule.get('hour', 3)
+        hour   = schedule.get('hour', 3)
         minute = schedule.get('minute', 0)
-        
+
         if schedule_type == 'hourly':
             trigger = CronTrigger(minute=minute)
         elif schedule_type == 'daily':
             trigger = CronTrigger(hour=hour, minute=minute)
         elif schedule_type == 'weekly':
-            day_of_week = schedule.get('dayOfWeek', 0)  # 0 = Monday
-            trigger = CronTrigger(day_of_week=day_of_week, hour=hour, minute=minute)
+            trigger = CronTrigger(day_of_week=schedule.get('dayOfWeek', 0),
+                                  hour=hour, minute=minute)
         elif schedule_type == 'custom':
-            # Custom cron expression
-            cron_expr = schedule.get('cron', '0 3 * * *')
-            parts = cron_expr.split()
+            parts = schedule.get('cron', '0 3 * * *').split()
             if len(parts) == 5:
-                trigger = CronTrigger(
-                    minute=parts[0],
-                    hour=parts[1],
-                    day=parts[2],
-                    month=parts[3],
-                    day_of_week=parts[4]
-                )
+                trigger = CronTrigger(minute=parts[0], hour=parts[1],
+                                      day=parts[2], month=parts[3],
+                                      day_of_week=parts[4])
             else:
                 trigger = CronTrigger(hour=3, minute=0)
         else:
             trigger = CronTrigger(hour=hour, minute=minute)
-        
-        self.scheduler.add_job(
-            self._execute_backup,
-            trigger,
-            args=[server_id],
-            id=job_id,
-            replace_existing=True,
-            max_instances=1
-        )
-    
-    def _execute_backup(self, server_id):
-        """Execute a scheduled backup for a server"""
-        print(f"[Scheduler] Starting scheduled backup for server: {server_id}")
 
+        self.scheduler.add_job(
+            self._execute_backup, trigger,
+            args=[server_id], id=job_id,
+            replace_existing=True, max_instances=1
+        )
+
+    # ── Backup execution ──────────────────────────────────────────────────────
+
+    def _execute_backup(self, server_id):
+        """Execute a scheduled backup for a server."""
+        print(f"[Scheduler] Starting scheduled backup for server: {server_id}")
         try:
-            # Get server config
             server_config = server_manager.get_server_config(server_id)
             if not server_config:
                 print(f"[Scheduler] Server {server_id} not found")
@@ -1248,8 +1254,7 @@ class BackupScheduler:
                 print(f"[Scheduler] Server path not found for {server_id}")
                 return
 
-            # Check if server is running and stop it if configured to do so
-            schedule = self.schedules['schedules'].get(server_id, {})
+            schedule = self.get_schedule(server_id) or {}
             was_running = False
             instance = server_manager.servers.get(server_id)
 
@@ -1257,146 +1262,91 @@ class BackupScheduler:
                 if schedule.get('stopServer', True):
                     print(f"[Scheduler] Stopping server {server_id} for backup")
                     was_running = True
-
-                    # Send warning to players
                     server_manager.send_command(server_id, "say [Backup] Server will restart in 30 seconds for scheduled backup!")
                     time.sleep(10)
                     server_manager.send_command(server_id, "say [Backup] Server restarting in 20 seconds...")
                     time.sleep(10)
                     server_manager.send_command(server_id, "say [Backup] Server restarting in 10 seconds...")
                     time.sleep(10)
-
-                    # Stop the server gracefully
                     server_manager.stop_server(server_id)
-
-                    # Wait for server to stop (max 60 seconds)
                     for _ in range(60):
                         if server_id not in server_manager.servers or not server_manager.servers[server_id].is_running():
                             break
                         time.sleep(1)
-
-                    # Force kill if still running
                     if server_id in server_manager.servers and server_manager.servers[server_id].is_running():
                         server_manager.kill_server(server_id)
                         time.sleep(2)
                 else:
                     print(f"[Scheduler] Server {server_id} is running, backup may be inconsistent (stopServer=False)")
 
-            # Create backup directory for this server
             backup_dir = BACKUPS_DIR / server_id
             backup_dir.mkdir(parents=True, exist_ok=True)
 
-            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            is_incremental = schedule.get('incremental', False)
+            timestamp         = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
             compression_level = max(0, min(9, int(schedule.get('compressionLevel', 6))))
+            backup_name       = f'scheduled-backup-{timestamp}.zip'
+            backup_path       = backup_dir / backup_name
 
-            if is_incremental:
-                backup_name = f'incremental-backup-{timestamp}.zip'
-            else:
-                backup_name = f'scheduled-backup-{timestamp}.zip'
-            backup_path = backup_dir / backup_name
-
-            # Determine cutoff time for incremental backups
-            cutoff_time = None
-            if is_incremental:
-                cutoff_time = self._get_last_backup_time(server_id)
-                if cutoff_time:
-                    print(f"[Scheduler] Incremental backup since: {cutoff_time.isoformat()}")
-                else:
-                    print(f"[Scheduler] No previous backup found; performing full backup")
-                    is_incremental = False  # fall back to full
-
-            # Create the backup
-            print(f"[Scheduler] Creating backup: {backup_name}")
+            print(f"[Scheduler] Creating full backup: {backup_name}")
             included_files = []
             with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
                                  compresslevel=compression_level) as zipf:
                 for root, dirs, files in os.walk(server_path):
                     for file in files:
                         file_path = Path(root) / file
-                        if cutoff_time is not None:
-                            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                            if mtime < cutoff_time:
-                                continue
-                        arcname = file_path.relative_to(server_path)
+                        arcname   = file_path.relative_to(server_path)
                         zipf.write(file_path, arcname)
                         included_files.append(str(arcname))
-
-                # Write manifest for incremental backups
-                if cutoff_time is not None:
-                    manifest = {
-                        'type': 'incremental',
-                        'base_time': cutoff_time.isoformat(),
-                        'created': timestamp,
-                        'file_count': len(included_files)
-                    }
-                    zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
-                else:
-                    manifest = {
-                        'type': 'full',
-                        'created': timestamp,
-                        'file_count': len(included_files)
-                    }
-                    zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
+                manifest = {
+                    'type': 'full',
+                    'created': timestamp,
+                    'file_count': len(included_files)
+                }
+                zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
 
             size = backup_path.stat().st_size
             print(f"[Scheduler] Backup created: {backup_name} ({size} bytes)")
 
-            # Verify backup integrity
             ok, checksum, verify_err = verify_backup_file(backup_path)
             if not ok:
                 print(f"[Scheduler] Backup verification warning: {verify_err}")
 
-            # Upload to external storage if configured
             ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
             if not ext_ok:
                 print(f"[Scheduler] External upload warning: {ext_msg}")
 
-            # Update last backup time
-            self.schedules['schedules'][server_id]['lastBackup'] = datetime.now().isoformat()
-            self._save_schedules()
-
-            # Log backup event
             self._log_backup_event(server_id, {
                 'type': 'scheduled',
                 'backup_name': backup_name,
                 'size': size,
-                'is_incremental': cutoff_time is not None,
-                'compression_level': compression_level,
-                'verified': ok,
+                'success': True,
                 'checksum': checksum,
-                'uploaded_to_external': ext_ok,
-                'success': True
             })
 
-            # Clean up old backups if retention is set
-            max_backups = schedule.get('maxBackups', 0)
-            if max_backups > 0:
-                self._cleanup_old_backups(server_id, max_backups)
+            if settings_manager.get_app_settings().get('autoDeleteExpiredBackups', False):
+                self._cleanup_old_backups(server_id)
 
-            # Restart server if it was running
             if was_running and schedule.get('restartAfter', True):
                 print(f"[Scheduler] Restarting server {server_id}")
                 server_manager.start_server(server_id)
 
-            # Emit notification to connected clients
             socketio.emit('backup_completed', {
                 'serverId': server_id,
-                'backup': backup_name,
-                'size': size,
+                'backup':   backup_name,
+                'size':     size,
                 'scheduled': True,
-                'verified': ok,
-                'checksum': checksum
+                'verified':  ok,
+                'checksum':  checksum,
             })
 
-            # Send email/webhook notifications (fixed: was previously dead code)
             _backup_ctx = {
                 'server_name': server_config.get('name', server_id),
                 'backup_name': backup_name,
-                'size': size,
+                'size':        size,
             }
             threading.Thread(
-                target=dispatch_notification, args=('backup_complete', _backup_ctx), daemon=True
+                target=dispatch_notification,
+                args=('backup_complete', _backup_ctx), daemon=True
             ).start()
 
             print(f"[Scheduler] Scheduled backup completed for server: {server_id}")
@@ -1404,19 +1354,14 @@ class BackupScheduler:
         except Exception as e:
             print(f"[Scheduler] Backup failed for server {server_id}: {e}")
             self._log_backup_event(server_id, {
-                'type': 'scheduled',
+                'type':        'scheduled',
                 'backup_name': None,
-                'success': False,
-                'error': str(e)
+                'success':     False,
+                'error':       str(e),
             })
-            socketio.emit('backup_failed', {
-                'serverId': server_id,
-                'error': str(e),
-                'scheduled': True
-            })
-            # Send failure notification
+            socketio.emit('backup_failed', {'serverId': server_id, 'error': str(e), 'scheduled': True})
             try:
-                _fail_cfg = server_manager.get_server_config(server_id)
+                _fail_cfg  = server_manager.get_server_config(server_id)
                 _fail_name = _fail_cfg.get('name', server_id) if _fail_cfg else server_id
             except Exception:
                 _fail_name = server_id
@@ -1425,243 +1370,270 @@ class BackupScheduler:
                 args=('backup_failure', {'server_name': _fail_name, 'error': str(e)}),
                 daemon=True
             ).start()
-    
-    def _get_history_path(self, server_id):
-        """Return path to the backup history log for a server"""
-        return BACKUPS_DIR / server_id / '_backup_log.json'
+
+    # ── Backup event log ──────────────────────────────────────────────────────
 
     def _log_backup_event(self, server_id, event):
-        """Append a backup event to the per-server history log"""
-        history_path = self._get_history_path(server_id)
+        """Insert a backup event row into backup_events."""
+        conn = get_db()
         try:
-            if history_path.exists():
-                with open(history_path, 'r') as f:
-                    history = json.load(f)
-            else:
-                history = {'events': []}
-
-            event.setdefault('id', str(uuid.uuid4()))
-            event.setdefault('timestamp', datetime.now().isoformat())
-            history['events'].insert(0, event)
-
-            # Keep at most 500 events
-            history['events'] = history['events'][:500]
-
-            history_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(history_path, 'w') as f:
-                json.dump(history, f, indent=2)
+            conn.execute(
+                '''INSERT INTO backup_events
+                   (server_id, timestamp, type, backup_name, size, success, error, checksum)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (server_id,
+                 event.get('timestamp', datetime.now().isoformat()),
+                 event.get('type', 'manual'),
+                 event.get('backup_name'),
+                 event.get('size'),
+                 1 if event.get('success', True) else 0,
+                 event.get('error'),
+                 event.get('checksum'))
+            )
+            conn.commit()
+            # Trim to 500 events per server
+            conn.execute(
+                '''DELETE FROM backup_events WHERE id IN (
+                       SELECT id FROM backup_events WHERE server_id=?
+                       ORDER BY timestamp DESC LIMIT -1 OFFSET 500
+                   )''',
+                (server_id,)
+            )
+            conn.commit()
         except Exception as e:
             print(f"[Backup] Failed to log backup event: {e}")
 
     def get_backup_history(self, server_id):
-        """Return backup event history for a server"""
-        history_path = self._get_history_path(server_id)
-        if not history_path.exists():
-            return []
-        try:
-            with open(history_path, 'r') as f:
-                data = json.load(f)
-            return data.get('events', [])
-        except Exception:
-            return []
+        """Return backup event history for a server (newest first, max 500)."""
+        rows = get_db().execute(
+            '''SELECT * FROM backup_events WHERE server_id=?
+               ORDER BY timestamp DESC LIMIT 500''',
+            (server_id,)
+        ).fetchall()
+        return [
+            {
+                'id':          r['id'],
+                'timestamp':   r['timestamp'],
+                'type':        r['type'],
+                'backup_name': r['backup_name'],
+                'size':        r['size'],
+                'success':     bool(r['success']),
+                'error':       r['error'],
+                'checksum':    r['checksum'],
+            }
+            for r in rows
+        ]
 
     def _get_last_backup_time(self, server_id):
-        """Return datetime of the most recent successful backup, or None"""
-        history = self.get_backup_history(server_id)
-        for event in history:
-            if event.get('success'):
-                try:
-                    return datetime.fromisoformat(event['timestamp'])
-                except Exception:
-                    pass
+        """Return datetime of the most recent successful backup, or None."""
+        row = get_db().execute(
+            '''SELECT timestamp FROM backup_events
+               WHERE server_id=? AND success=1
+               ORDER BY timestamp DESC LIMIT 1''',
+            (server_id,)
+        ).fetchone()
+        if row:
+            try:
+                return datetime.fromisoformat(row['timestamp'])
+            except Exception:
+                pass
         return None
 
-    def _cleanup_old_backups(self, server_id, max_backups):
-        """Remove old scheduled backups exceeding the maximum count"""
+    # ── Backup retention ──────────────────────────────────────────────────────
+
+    def _cleanup_old_backups(self, server_id, max_backups=None):
+        """Remove backups exceeding the global retention limit. Returns deleted count."""
+        if max_backups is None:
+            max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
+        if max_backups <= 0:
+            return 0
+
         backup_dir = BACKUPS_DIR / server_id
         if not backup_dir.exists():
-            return
-        
-        # Get all scheduled backups sorted by date
-        backups = []
-        for item in backup_dir.iterdir():
-            if item.name.startswith('scheduled-backup-') and item.suffix == '.zip':
-                backups.append((item, item.stat().st_mtime))
-        
+            return 0
+
+        backups = [
+            (item, item.stat().st_mtime)
+            for item in backup_dir.iterdir()
+            if item.suffix == '.zip' and not item.name.startswith('_')
+        ]
         backups.sort(key=lambda x: x[1], reverse=True)
-        
-        # Remove backups exceeding max count
+
+        deleted = 0
         for backup_file, _ in backups[max_backups:]:
             try:
                 backup_file.unlink()
-                # Remove sidecar checksum file if present
                 sidecar = backup_file.with_suffix('.sha256')
                 if sidecar.exists():
                     sidecar.unlink()
-                print(f"[Scheduler] Removed old backup: {backup_file.name}")
+                print(f"[Backup] Removed expired backup: {backup_file.name}")
+                deleted += 1
             except Exception as e:
-                print(f"[Scheduler] Failed to remove old backup {backup_file.name}: {e}")
-    
+                print(f"[Backup] Failed to remove expired backup {backup_file.name}: {e}")
+        return deleted
+
+    # ── Schedule CRUD ─────────────────────────────────────────────────────────
+
     def set_schedule(self, server_id, schedule_config):
-        """Set or update a backup schedule for a server"""
-        if 'schedules' not in self.schedules:
-            self.schedules['schedules'] = {}
-        
-        self.schedules['schedules'][server_id] = {
-            'enabled': schedule_config.get('enabled', True),
-            'type': schedule_config.get('type', 'daily'),
-            'hour': schedule_config.get('hour', 3),
-            'minute': schedule_config.get('minute', 0),
-            'dayOfWeek': schedule_config.get('dayOfWeek', 0),
-            'cron': schedule_config.get('cron', ''),
-            'stopServer': schedule_config.get('stopServer', True),
-            'restartAfter': schedule_config.get('restartAfter', True),
-            'maxBackups': schedule_config.get('maxBackups', 7),
-            'compressionLevel': schedule_config.get('compressionLevel', 6),
-            'incremental': schedule_config.get('incremental', False),
-            'lastBackup': self.schedules.get('schedules', {}).get(server_id, {}).get('lastBackup'),
-            'createdAt': datetime.now().isoformat()
-        }
-        
-        self._save_schedules()
-        
+        """Upsert a backup schedule for a server."""
+        conn = get_db()
+        conn.execute(
+            '''INSERT OR REPLACE INTO backup_schedules
+               (server_id, enabled, schedule_type, hour, minute, day_of_week, cron,
+                compression_level, stop_server, restart_after)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (server_id,
+             1 if schedule_config.get('enabled', True) else 0,
+             schedule_config.get('type', 'daily'),
+             int(schedule_config.get('hour', 3)),
+             int(schedule_config.get('minute', 0)),
+             int(schedule_config.get('dayOfWeek', 0)),
+             schedule_config.get('cron', ''),
+             int(schedule_config.get('compressionLevel', 6)),
+             1 if schedule_config.get('stopServer', True) else 0,
+             1 if schedule_config.get('restartAfter', True) else 0)
+        )
+        conn.commit()
+
         if schedule_config.get('enabled', True):
-            self._add_job(server_id, self.schedules['schedules'][server_id])
+            self._add_job(server_id, self.get_schedule(server_id))
         else:
-            # Remove job if disabled
             try:
                 self.scheduler.remove_job(f"backup_{server_id}")
-            except:
+            except Exception:
                 pass
-        
-        return self.schedules['schedules'][server_id]
-    
+
+        return self.get_schedule(server_id)
+
     def get_schedule(self, server_id):
-        """Get the backup schedule for a server"""
-        schedule = self.schedules.get('schedules', {}).get(server_id)
-        if schedule:
-            # Add next run time if job exists
-            try:
-                job = self.scheduler.get_job(f"backup_{server_id}")
-                if job and job.next_run_time:
-                    schedule['nextRun'] = job.next_run_time.isoformat()
-            except:
-                pass
+        """Get the backup schedule dict for a server, enriched with next-run time."""
+        row = get_db().execute(
+            'SELECT * FROM backup_schedules WHERE server_id=?', (server_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        schedule = self._row_to_schedule_dict(row)
+        try:
+            job = self.scheduler.get_job(f"backup_{server_id}")
+            if job and job.next_run_time:
+                schedule['nextRun'] = job.next_run_time.isoformat()
+        except Exception:
+            pass
         return schedule
-    
+
     def delete_schedule(self, server_id):
-        """Delete a backup schedule for a server"""
-        if server_id in self.schedules.get('schedules', {}):
-            del self.schedules['schedules'][server_id]
-            self._save_schedules()
-            
-            try:
-                self.scheduler.remove_job(f"backup_{server_id}")
-            except:
-                pass
-            
-            return True
-        return False
-    
+        """Delete a backup schedule for a server."""
+        conn = get_db()
+        result = conn.execute(
+            'DELETE FROM backup_schedules WHERE server_id=?', (server_id,)
+        )
+        conn.commit()
+        try:
+            self.scheduler.remove_job(f"backup_{server_id}")
+        except Exception:
+            pass
+        return result.rowcount > 0
+
     def get_all_schedules(self):
-        """Get all backup schedules"""
-        schedules = {}
-        for server_id, schedule in self.schedules.get('schedules', {}).items():
-            schedules[server_id] = schedule.copy()
+        """Get all backup schedules as dicts, enriched with next-run times."""
+        rows = get_db().execute('SELECT * FROM backup_schedules').fetchall()
+        result = {}
+        for row in rows:
+            s = self._row_to_schedule_dict(row)
             try:
-                job = self.scheduler.get_job(f"backup_{server_id}")
+                job = self.scheduler.get_job(f"backup_{row['server_id']}")
                 if job and job.next_run_time:
-                    schedules[server_id]['nextRun'] = job.next_run_time.isoformat()
-            except:
+                    s['nextRun'] = job.next_run_time.isoformat()
+            except Exception:
                 pass
-        return schedules
+            result[row['server_id']] = s
+        return result
 
 
 # ==================== Task Scheduler ====================
 
 class TaskScheduler:
-    """Manages scheduled tasks for servers (start/stop/reboot/commands)"""
-    
+    """Manages scheduled tasks for servers (start/stop/reboot/commands) — backed by SQLite."""
+
     def __init__(self, server_manager, socketio):
         self.server_manager = server_manager
-        self.socketio = socketio
-        self.tasks = self._load_tasks()
-        self.scheduler = BackgroundScheduler()
+        self.socketio       = socketio
+        self.scheduler      = BackgroundScheduler()
         self.scheduler.start()
         self._restore_tasks()
-    
-    def _load_tasks(self):
-        """Load tasks from file"""
-        if TASKS_PATH.exists():
-            try:
-                with open(TASKS_PATH, 'r') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {'tasks': {}}
-    
-    def _save_tasks(self):
-        """Save tasks to file"""
-        with open(TASKS_PATH, 'w') as f:
-            json.dump(self.tasks, f, indent=2)
-    
+
+    # ── Row helper ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _row_to_task_dict(row):
+        """Convert a tasks DB row to the camelCase dict the app expects."""
+        if row is None:
+            return None
+        return {
+            'id':                   row['id'],
+            'name':                 row['name'],
+            'action':               row['action'],
+            'interval':             row['interval'],
+            'enabled':              bool(row['enabled']),
+            'command':              row['command'],
+            'runs':                 row['runs'],
+            'runCount':             row['run_count'],
+            'lastRun':              row['last_run'],
+            'deleteAfterExecution': bool(row['delete_after_execution']),
+            'deleteAfterRunsCount': bool(row['delete_after_runs_count']),
+            'createdAt':            row['created'],
+        }
+
+    # ── Startup restore ───────────────────────────────────────────────────────
+
     def _restore_tasks(self):
-        """Restore all tasks from saved config on startup"""
-        for server_id, server_tasks in self.tasks.get('tasks', {}).items():
-            for task_id, task in server_tasks.items():
-                if task.get('enabled', False):
-                    self._add_job(server_id, task_id, task)
-    
+        """Re-register APScheduler jobs for all enabled tasks on startup."""
+        rows = get_db().execute('SELECT * FROM tasks WHERE enabled=1').fetchall()
+        for row in rows:
+            self._add_job(row['server_id'], row['id'], self._row_to_task_dict(row))
+
+    # ── APScheduler job management ────────────────────────────────────────────
+
     def _add_job(self, server_id, task_id, task):
-        """Add a scheduled task job"""
-        job_id = f"task_{server_id}_{task_id}"
-        
-        # Remove existing job if any
+        """Add (or replace) the APScheduler cron job for a task."""
+        job_id   = f"task_{server_id}_{task_id}"
+        cron_expr = task.get('interval', '0 3 * * *')
         try:
             self.scheduler.remove_job(job_id)
-        except:
+        except Exception:
             pass
-        
-        # Parse cron expression
-        cron_expr = task.get('interval', '0 3 * * *')
         try:
             parts = cron_expr.split()
             if len(parts) == 5:
                 trigger = CronTrigger(
-                    minute=parts[0],
-                    hour=parts[1],
-                    day=parts[2],
-                    month=parts[3],
-                    day_of_week=parts[4]
+                    minute=parts[0], hour=parts[1],
+                    day=parts[2], month=parts[3], day_of_week=parts[4]
                 )
-                
                 self.scheduler.add_job(
-                    self._execute_task,
-                    trigger=trigger,
-                    id=job_id,
-                    args=[server_id, task_id]
+                    self._execute_task, trigger=trigger,
+                    id=job_id, args=[server_id, task_id]
                 )
-                print(f"[TaskScheduler] Added job {job_id} with schedule: {cron_expr}")
+                print(f"[TaskScheduler] Added job {job_id}: {cron_expr}")
         except Exception as e:
             print(f"[TaskScheduler] Failed to add job {job_id}: {e}")
-    
+
+    # ── Task execution ────────────────────────────────────────────────────────
+
     def _execute_task(self, server_id, task_id):
-        """Execute a scheduled task"""
+        """Execute a scheduled task."""
         print(f"[TaskScheduler] Executing task {task_id} for server {server_id}")
-        
         try:
-            task = self.tasks.get('tasks', {}).get(server_id, {}).get(task_id)
-            if not task:
+            conn = get_db()
+            row  = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+            if not row:
                 print(f"[TaskScheduler] Task {task_id} not found")
                 return
-            
-            if not task.get('enabled', False):
+            task = self._row_to_task_dict(row)
+            if not task['enabled']:
                 print(f"[TaskScheduler] Task {task_id} is disabled")
                 return
-            
+
             action = task.get('action', '')
-            
-            # Execute the action
             if action == 'START':
                 self._execute_start(server_id, task)
             elif action == 'STOP':
@@ -1670,55 +1642,42 @@ class TaskScheduler:
                 self._execute_reboot(server_id, task)
             elif action == 'COMMAND':
                 self._execute_command(server_id, task)
-            
-            # Update task execution count
-            if 'tasks' not in self.tasks:
-                self.tasks['tasks'] = {}
-            if server_id not in self.tasks['tasks']:
-                self.tasks['tasks'][server_id] = {}
-            
-            self.tasks['tasks'][server_id][task_id]['lastRun'] = datetime.now().isoformat()
-            self.tasks['tasks'][server_id][task_id]['runCount'] = self.tasks['tasks'][server_id][task_id].get('runCount', 0) + 1
-            
-            # Check if task should be disabled or deleted
-            run_limit = task.get('runs', 0)
-            run_count = self.tasks['tasks'][server_id][task_id]['runCount']
-            delete_after_execution = task.get('deleteAfterExecution', False)
-            delete_after_runs = task.get('deleteAfterRunsCount', False)
-            
-            if delete_after_execution:
-                # Delete task immediately
+
+            # Increment run counter
+            conn.execute(
+                'UPDATE tasks SET run_count=run_count+1, last_run=? WHERE id=?',
+                (datetime.now().isoformat(), task_id)
+            )
+            conn.commit()
+            row       = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+            task      = self._row_to_task_dict(row)
+            run_count = task['runCount']
+
+            if task['deleteAfterExecution']:
                 self.delete_task(server_id, task_id)
                 print(f"[TaskScheduler] Deleted task {task_id} after execution")
-            elif run_limit > 0 and run_count >= run_limit:
-                if delete_after_runs:
-                    # Delete task after reaching run limit
+            elif task['runs'] > 0 and run_count >= task['runs']:
+                if task['deleteAfterRunsCount']:
                     self.delete_task(server_id, task_id)
                     print(f"[TaskScheduler] Deleted task {task_id} after {run_count} runs")
                 else:
-                    # Just disable the task
-                    self.tasks['tasks'][server_id][task_id]['enabled'] = False
-                    self._save_tasks()
+                    conn.execute('UPDATE tasks SET enabled=0 WHERE id=?', (task_id,))
+                    conn.commit()
                     try:
                         self.scheduler.remove_job(f"task_{server_id}_{task_id}")
-                    except:
+                    except Exception:
                         pass
                     print(f"[TaskScheduler] Disabled task {task_id} after {run_count} runs")
-            else:
-                self._save_tasks()
-            
+
             print(f"[TaskScheduler] Task {task_id} executed successfully")
-            
         except Exception as e:
             print(f"[TaskScheduler] Task execution failed for {task_id}: {e}")
-    
+
     def _is_server_running(self, server_id):
-        """Check if a server is running via its ServerInstance"""
         instance = self.server_manager.servers.get(server_id)
         return instance is not None and instance.is_running()
 
     def _execute_start(self, server_id, task):
-        """Start the server"""
         try:
             if not self._is_server_running(server_id):
                 self.server_manager.start_server(server_id)
@@ -1727,9 +1686,8 @@ class TaskScheduler:
                 print(f"[TaskScheduler] Server {server_id} is already running")
         except Exception as e:
             print(f"[TaskScheduler] Failed to start server {server_id}: {e}")
-    
+
     def _execute_stop(self, server_id, task):
-        """Stop the server"""
         try:
             if self._is_server_running(server_id):
                 self.server_manager.stop_server(server_id)
@@ -1738,480 +1696,439 @@ class TaskScheduler:
                 print(f"[TaskScheduler] Server {server_id} is not running")
         except Exception as e:
             print(f"[TaskScheduler] Failed to stop server {server_id}: {e}")
-    
+
     def _execute_reboot(self, server_id, task):
-        """Reboot the server (stop, wait, start)"""
         try:
             if self._is_server_running(server_id):
                 print(f"[TaskScheduler] Rebooting server {server_id}...")
-                
-                # Stop the server
                 self.server_manager.stop_server(server_id)
-                
-                # Wait for process to end
-                max_wait = 60  # Maximum 60 seconds wait
                 waited = 0
-                while self._is_server_running(server_id) and waited < max_wait:
+                while self._is_server_running(server_id) and waited < 60:
                     time.sleep(1)
                     waited += 1
-                
-                # Wait additional 3 seconds
                 time.sleep(3)
-                
-                # Start the server
-                self.server_manager.start_server(server_id)
-                print(f"[TaskScheduler] Server {server_id} rebooted successfully")
-            else:
-                # Server not running, just start it
-                self.server_manager.start_server(server_id)
-                print(f"[TaskScheduler] Server {server_id} was not running, started it")
+            self.server_manager.start_server(server_id)
+            print(f"[TaskScheduler] Server {server_id} rebooted successfully")
         except Exception as e:
             print(f"[TaskScheduler] Failed to reboot server {server_id}: {e}")
-    
+
     def _execute_command(self, server_id, task):
-        """Execute a custom server command"""
         try:
             command = task.get('command', '')
             if command and self._is_server_running(server_id):
                 self.server_manager.send_command(server_id, command)
                 print(f"[TaskScheduler] Executed command '{command}' on server {server_id}")
             elif not command:
-                print(f"[TaskScheduler] No command specified for task")
+                print("[TaskScheduler] No command specified for task")
             else:
                 print(f"[TaskScheduler] Server {server_id} is not running, cannot execute command")
         except Exception as e:
             print(f"[TaskScheduler] Failed to execute command on server {server_id}: {e}")
-    
+
+    # ── Task CRUD ─────────────────────────────────────────────────────────────
+
     def create_task(self, server_id, task_config):
-        """Create a new task for a server"""
-        if 'tasks' not in self.tasks:
-            self.tasks['tasks'] = {}
-        if server_id not in self.tasks['tasks']:
-            self.tasks['tasks'][server_id] = {}
-        
-        # Generate task ID
+        """Create a new scheduled task for a server."""
         task_id = str(int(datetime.now().timestamp() * 1000))
-        
-        self.tasks['tasks'][server_id][task_id] = {
-            'id': task_id,
-            'name': task_config.get('name', 'Unnamed Task'),
-            'action': task_config.get('action', 'START'),
-            'interval': task_config.get('interval', '0 3 * * *'),
-            'command': task_config.get('command', ''),
-            'runs': task_config.get('runs', 0),
-            'runCount': 0,
-            'enabled': task_config.get('enabled', True),
-            'deleteAfterExecution': task_config.get('deleteAfterExecution', False),
-            'deleteAfterRunsCount': task_config.get('deleteAfterRunsCount', False),
-            'createdAt': datetime.now().isoformat(),
-            'lastRun': None
-        }
-        
-        self._save_tasks()
-        
-        if task_config.get('enabled', True):
-            self._add_job(server_id, task_id, self.tasks['tasks'][server_id][task_id])
-        
-        return self.tasks['tasks'][server_id][task_id]
-    
-    def update_task(self, server_id, task_id, task_config):
-        """Update an existing task"""
-        if server_id not in self.tasks.get('tasks', {}) or task_id not in self.tasks['tasks'][server_id]:
-            return None
-        
-        task = self.tasks['tasks'][server_id][task_id]
-        
-        # Update fields
-        task['name'] = task_config.get('name', task['name'])
-        task['action'] = task_config.get('action', task['action'])
-        task['interval'] = task_config.get('interval', task['interval'])
-        task['command'] = task_config.get('command', task.get('command', ''))
-        task['runs'] = task_config.get('runs', task['runs'])
-        task['enabled'] = task_config.get('enabled', task['enabled'])
-        task['deleteAfterExecution'] = task_config.get('deleteAfterExecution', task['deleteAfterExecution'])
-        task['deleteAfterRunsCount'] = task_config.get('deleteAfterRunsCount', task['deleteAfterRunsCount'])
-        
-        self._save_tasks()
-        
-        # Update or remove job
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO tasks
+               (id, server_id, name, action, interval, enabled, command, runs,
+                run_count, last_run, delete_after_execution, delete_after_runs_count, created)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)''',
+            (task_id, server_id,
+             task_config.get('name', 'Unnamed Task'),
+             task_config.get('action', 'START'),
+             task_config.get('interval', '0 3 * * *'),
+             1 if task_config.get('enabled', True) else 0,
+             task_config.get('command', ''),
+             int(task_config.get('runs', 0)),
+             1 if task_config.get('deleteAfterExecution', False) else 0,
+             1 if task_config.get('deleteAfterRunsCount', False) else 0,
+             datetime.now().isoformat())
+        )
+        conn.commit()
+
+        task = self._row_to_task_dict(
+            conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+        )
         if task['enabled']:
             self._add_job(server_id, task_id, task)
+        return task
+
+    def update_task(self, server_id, task_id, task_config):
+        """Update an existing task."""
+        conn = get_db()
+        row = conn.execute('SELECT * FROM tasks WHERE id=? AND server_id=?',
+                           (task_id, server_id)).fetchone()
+        if row is None:
+            return None
+
+        task = self._row_to_task_dict(row)
+        conn.execute(
+            '''UPDATE tasks SET name=?, action=?, interval=?, command=?, runs=?,
+               enabled=?, delete_after_execution=?, delete_after_runs_count=?
+               WHERE id=?''',
+            (task_config.get('name',                 task['name']),
+             task_config.get('action',               task['action']),
+             task_config.get('interval',             task['interval']),
+             task_config.get('command',              task.get('command', '')),
+             int(task_config.get('runs',             task['runs'])),
+             1 if task_config.get('enabled',         task['enabled']) else 0,
+             1 if task_config.get('deleteAfterExecution',  task['deleteAfterExecution']) else 0,
+             1 if task_config.get('deleteAfterRunsCount',  task['deleteAfterRunsCount']) else 0,
+             task_id)
+        )
+        conn.commit()
+
+        updated = self._row_to_task_dict(
+            conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+        )
+        if updated['enabled']:
+            self._add_job(server_id, task_id, updated)
         else:
             try:
                 self.scheduler.remove_job(f"task_{server_id}_{task_id}")
-            except:
+            except Exception:
                 pass
-        
-        return task
-    
+        return updated
+
     def delete_task(self, server_id, task_id):
-        """Delete a task"""
-        if server_id in self.tasks.get('tasks', {}) and task_id in self.tasks['tasks'][server_id]:
-            del self.tasks['tasks'][server_id][task_id]
-            self._save_tasks()
-            
-            try:
-                self.scheduler.remove_job(f"task_{server_id}_{task_id}")
-            except:
-                pass
-            
-            return True
-        return False
-    
+        """Delete a task."""
+        conn = get_db()
+        result = conn.execute('DELETE FROM tasks WHERE id=? AND server_id=?',
+                              (task_id, server_id))
+        conn.commit()
+        try:
+            self.scheduler.remove_job(f"task_{server_id}_{task_id}")
+        except Exception:
+            pass
+        return result.rowcount > 0
+
     def get_tasks(self, server_id):
-        """Get all tasks for a server"""
-        tasks = self.tasks.get('tasks', {}).get(server_id, {})
+        """Get all tasks for a server, enriched with next-run times."""
+        rows = get_db().execute(
+            'SELECT * FROM tasks WHERE server_id=? ORDER BY created', (server_id,)
+        ).fetchall()
         result = []
-        
-        for task_id, task in tasks.items():
-            task_copy = task.copy()
-            # Add next run time if job exists
+        for row in rows:
+            t = self._row_to_task_dict(row)
             try:
-                job = self.scheduler.get_job(f"task_{server_id}_{task_id}")
+                job = self.scheduler.get_job(f"task_{server_id}_{row['id']}")
                 if job and job.next_run_time:
-                    task_copy['nextRun'] = job.next_run_time.isoformat()
-            except:
+                    t['nextRun'] = job.next_run_time.isoformat()
+            except Exception:
                 pass
-            result.append(task_copy)
-        
+            result.append(t)
         return result
-    
+
     def get_task(self, server_id, task_id):
-        """Get a specific task"""
-        task = self.tasks.get('tasks', {}).get(server_id, {}).get(task_id)
-        if task:
-            task_copy = task.copy()
-            try:
-                job = self.scheduler.get_job(f"task_{server_id}_{task_id}")
-                if job and job.next_run_time:
-                    task_copy['nextRun'] = job.next_run_time.isoformat()
-            except:
-                pass
-            return task_copy
-        return None
+        """Get a specific task, enriched with next-run time."""
+        row = get_db().execute(
+            'SELECT * FROM tasks WHERE id=? AND server_id=?', (task_id, server_id)
+        ).fetchone()
+        if row is None:
+            return None
+        t = self._row_to_task_dict(row)
+        try:
+            job = self.scheduler.get_job(f"task_{server_id}_{task_id}")
+            if job and job.next_run_time:
+                t['nextRun'] = job.next_run_time.isoformat()
+        except Exception:
+            pass
+        return t
 
 
 # ==================== User Management & RBAC ====================
 
 class UserManager:
-    """Manages users, authentication, and role-based access control"""
-    
+    """Manages users, authentication, and role-based access control — backed by SQLite."""
+
     ROLES = {
         'public': 0,   # Can only see server status
         'user': 1,     # Can manage own servers
         'admin': 2     # Full access
     }
-    
+
+    _DEFAULT_NOTIF_PREFS = {
+        'backupComplete': False,
+        'backupFailure': False,
+        'serverStart': False,
+        'serverStop': False,
+        'playerJoin': False,
+        'playerLeave': False,
+        'criticalAlerts': False,
+    }
+
     def __init__(self):
-        self.users = self._load_users()
-        self.lock = threading.Lock()
-        self._migrate_users()
         self._ensure_admin_exists()
-    
-    def _load_users(self):
-        """Load users from file"""
-        if USERS_PATH.exists():
-            with open(USERS_PATH, 'r') as f:
-                return json.load(f)
-        return {'users': {}}
-    
-    def _save_users(self):
-        """Save users to file"""
-        with open(USERS_PATH, 'w') as f:
-            json.dump(self.users, f, indent=2)
-    
-    def _migrate_users(self):
-        """Migrate existing users to new schema with brute force protection fields"""
-        migrated = False
-        for user_id, user in self.users.get('users', {}).items():
-            if 'failedLoginAttempts' not in user:
-                user['failedLoginAttempts'] = 0
-                migrated = True
-            if 'accountDisabled' not in user:
-                user['accountDisabled'] = False
-                migrated = True
-            if 'disabledAt' not in user:
-                user['disabledAt'] = None
-                migrated = True
-            if 'isAntiLockout' not in user:
-                user['isAntiLockout'] = False
-                migrated = True
-        
-        if migrated:
-            self._save_users()
-            print("User database migrated to include brute force protection fields")
-    
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _row_to_dict(row):
+        """Convert a sqlite3.Row to the camelCase user dict expected by the rest of the app."""
+        if row is None:
+            return None
+        prefs = {}
+        try:
+            prefs = json.loads(row['notification_prefs'] or '{}')
+        except Exception:
+            pass
+        return {
+            'username':             row['username'],
+            'password':             row['password'],
+            'role':                 row['role'],
+            'name':                 row['name'],
+            'email':                row['email'],
+            'mfaEnabled':           bool(row['mfa_enabled']),
+            'mfaSecret':            row['mfa_secret'],
+            'mfaRecoveryCode':      row['mfa_recovery_code'],
+            'approved':             bool(row['approved']),
+            'created':              row['created'],
+            'lastLogin':            row['last_login'],
+            'failedLoginAttempts':  row['failed_login_attempts'],
+            'accountDisabled':      bool(row['account_disabled']),
+            'disabledAt':           row['disabled_at'],
+            'isAntiLockout':        bool(row['is_anti_lockout']),
+            'notificationPrefs':    prefs,
+        }
+
     def _ensure_admin_exists(self):
-        """Create default admin if no users exist"""
-        if not self.users.get('users'):
-            self.users['users'] = {}
-            # Create default admin account
+        """Create default admin account if the users table is empty."""
+        conn = get_db()
+        count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        if count == 0:
             admin_id = str(uuid.uuid4())[:8]
-            self.users['users'][admin_id] = {
-                'username': 'admin',
-                'password': generate_password_hash('admin'),
-                'role': 'admin',
-                'name': '',
-                'email': 'admin@example.com',
-                'mfaEnabled': False,
-                'mfaSecret': None,
-                'mfaRecoveryCode': None,
-                'approved': True,
-                'created': datetime.now().isoformat(),
-                'lastLogin': None,
-                'failedLoginAttempts': 0,
-                'accountDisabled': False,
-                'disabledAt': None,
-                'isAntiLockout': False
-            }
-            self._save_users()
+            conn.execute(
+                '''INSERT INTO users
+                   (id, username, password, role, name, email, approved, created, is_anti_lockout,
+                    notification_prefs)
+                   VALUES (?, ?, ?, 'admin', '', 'admin@example.com', 1, ?, 0, '{}')''',
+                (admin_id, 'admin', generate_password_hash('admin'), datetime.now().isoformat())
+            )
+            conn.commit()
             print("Default admin created - Username: admin, Password: admin")
             print("WARNING: Change the default password immediately!")
-    
+
+    # ── Authentication ────────────────────────────────────────────────────────
+
     def authenticate(self, username, password):
-        """Authenticate a user and return user data if successful"""
-        with self.lock:
-            for user_id, user in self.users.get('users', {}).items():
-                if user['username'].lower() == username.lower():
-                    # Check if account is disabled
-                    if user.get('accountDisabled', False):
-                        return None, "Account has been disabled due to multiple failed login attempts. Please contact an administrator."
-                    
-                    if check_password_hash(user['password'], password):
-                        if not user.get('approved', False) and user['role'] != 'admin':
-                            return None, "Account pending approval"
-                        
-                        # Reset failed login attempts on successful login
-                        user['failedLoginAttempts'] = 0
-                        user['lastLogin'] = datetime.now().isoformat()
-                        self._save_users()
-                        return user_id, user
-                    else:
-                        # Increment failed login attempts
-                        user['failedLoginAttempts'] = user.get('failedLoginAttempts', 0) + 1
-                        
-                        # Disable account after 5 failed attempts
-                        if user['failedLoginAttempts'] >= 5:
-                            user['accountDisabled'] = True
-                            user['disabledAt'] = datetime.now().isoformat()
-                            self._save_users()
-                            
-                            # Check if we need to create anti-lockout account
-                            self._check_and_create_anti_lockout()
-                            
-                            return None, "Account has been disabled due to multiple failed login attempts."
-                        
-                        self._save_users()
-                        remaining = 5 - user['failedLoginAttempts']
-                        return None, f"Invalid password. {remaining} attempts remaining before account is disabled."
-            
+        """Authenticate a user and return (user_id, user_dict) or (None, error_str)."""
+        conn = get_db()
+        row = conn.execute(
+            'SELECT * FROM users WHERE username=? COLLATE NOCASE', (username,)
+        ).fetchone()
+
+        if row is None:
             return None, "User not found"
-    
+
+        user_id = row['id']
+
+        if row['account_disabled']:
+            return None, "Account has been disabled due to multiple failed login attempts. Please contact an administrator."
+
+        if check_password_hash(row['password'], password):
+            if not row['approved'] and row['role'] != 'admin':
+                return None, "Account pending approval"
+
+            conn.execute(
+                'UPDATE users SET failed_login_attempts=0, last_login=? WHERE id=?',
+                (datetime.now().isoformat(), user_id)
+            )
+            conn.commit()
+            return user_id, self._row_to_dict(row)
+        else:
+            new_attempts = row['failed_login_attempts'] + 1
+            if new_attempts >= 5:
+                conn.execute(
+                    'UPDATE users SET failed_login_attempts=?, account_disabled=1, disabled_at=? WHERE id=?',
+                    (new_attempts, datetime.now().isoformat(), user_id)
+                )
+                conn.commit()
+                self._check_and_create_anti_lockout()
+                return None, "Account has been disabled due to multiple failed login attempts."
+
+            conn.execute(
+                'UPDATE users SET failed_login_attempts=? WHERE id=?',
+                (new_attempts, user_id)
+            )
+            conn.commit()
+            remaining = 5 - new_attempts
+            return None, f"Invalid password. {remaining} attempts remaining before account is disabled."
+
+    # ── Registration / Creation ───────────────────────────────────────────────
+
     def register(self, username, password):
-        """Register a new user (pending approval)"""
-        with self.lock:
-            # Check if username exists
-            for user in self.users.get('users', {}).values():
-                if user['username'].lower() == username.lower():
-                    return None, "Username already exists"
-            
-            # Validate username
-            if len(username) < 3 or len(username) > 32:
-                return None, "Username must be 3-32 characters"
-            if not username.replace('_', '').replace('-', '').isalnum():
-                return None, "Username can only contain letters, numbers, underscores, and hyphens"
-            
-            # Validate password - strengthened for production security
-            if len(password) < 12:
-                return None, "Password must be at least 12 characters"
-            if not any(c.isupper() for c in password):
-                return None, "Password must contain at least one uppercase letter"
-            if not any(c.islower() for c in password):
-                return None, "Password must contain at least one lowercase letter"
-            if not any(c.isdigit() for c in password):
-                return None, "Password must contain at least one number"
-            
-            # Check if approval is required
-            require_approval = settings_manager.get_app_settings().get('requireApproval', True)
-            
-            user_id = str(uuid.uuid4())[:8]
-            self.users['users'][user_id] = {
-                'username': username,
-                'password': generate_password_hash(password),
-                'role': 'user',
-                'name': '',
-                'mfaEnabled': False,
-                'mfaSecret': None,
-                'mfaRecoveryCode': None,
-                'approved': not require_approval,  # Auto-approve if not required
-                'created': datetime.now().isoformat(),
-                'lastLogin': None,
-                'failedLoginAttempts': 0,
-                'accountDisabled': False,
-                'disabledAt': None,
-                'isAntiLockout': False,
-                'notificationPrefs': {
-                    'backupComplete': False, 'backupFailure': False,
-                    'serverStart': False, 'serverStop': False,
-                    'playerJoin': False, 'playerLeave': False,
-                    'criticalAlerts': False
-                }
-            }
-            self._save_users()
-            
-            if require_approval:
-                return user_id, "Registration successful. Please wait for admin approval."
-            return user_id, "Registration successful. You can now log in."
-    
+        """Register a new user (pending approval)."""
+        if len(username) < 3 or len(username) > 32:
+            return None, "Username must be 3-32 characters"
+        if not username.replace('_', '').replace('-', '').isalnum():
+            return None, "Username can only contain letters, numbers, underscores, and hyphens"
+        if len(password) < 12:
+            return None, "Password must be at least 12 characters"
+        if not any(c.isupper() for c in password):
+            return None, "Password must contain at least one uppercase letter"
+        if not any(c.islower() for c in password):
+            return None, "Password must contain at least one lowercase letter"
+        if not any(c.isdigit() for c in password):
+            return None, "Password must contain at least one number"
+
+        require_approval = settings_manager.get_app_settings().get('requireApproval', True)
+        user_id = str(uuid.uuid4())[:8]
+        default_prefs = json.dumps({k: False for k in self._DEFAULT_NOTIF_PREFS})
+
+        conn = get_db()
+        try:
+            conn.execute(
+                '''INSERT INTO users
+                   (id, username, password, role, name, email, approved, created,
+                    failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
+                   VALUES (?, ?, ?, 'user', '', '', ?, ?, 0, 0, 0, ?)''',
+                (user_id, username, generate_password_hash(password),
+                 0 if require_approval else 1,
+                 datetime.now().isoformat(), default_prefs)
+            )
+            conn.commit()
+        except Exception as e:
+            if 'UNIQUE' in str(e).upper():
+                return None, "Username already exists"
+            raise
+
+        if require_approval:
+            return user_id, "Registration successful. Please wait for admin approval."
+        return user_id, "Registration successful. You can now log in."
+
     def create_user(self, username, password, role='user', email=''):
-        """Create a user directly (admin function, auto-approved)"""
-        with self.lock:
-            # Check if username exists
-            for user in self.users.get('users', {}).values():
-                if user['username'].lower() == username.lower():
-                    return None, "Username already exists"
-            
-            # Validate username
-            if len(username) < 3 or len(username) > 32:
-                return None, "Username must be 3-32 characters"
-            if not username.replace('_', '').replace('-', '').isalnum():
-                return None, "Username can only contain letters, numbers, underscores, and hyphens"
-            
-            # Validate password
-            if len(password) < 6:
-                return None, "Password must be at least 6 characters"
-            
-            # Validate role
-            if role not in self.ROLES:
-                return None, "Invalid role"
-            
-            user_id = str(uuid.uuid4())[:8]
-            self.users['users'][user_id] = {
-                'username': username,
-                'password': generate_password_hash(password),
-                'role': role,
-                'name': '',
-                'email': email,
-                'mfaEnabled': False,
-                'mfaSecret': None,
-                'mfaRecoveryCode': None,
-                'approved': True,  # Admin-created users are auto-approved
-                'created': datetime.now().isoformat(),
-                'lastLogin': None,
-                'notificationPrefs': {
-                    'backupComplete': False, 'backupFailure': False,
-                    'serverStart': False, 'serverStop': False,
-                    'playerJoin': False, 'playerLeave': False,
-                    'criticalAlerts': False
-                }
-            }
-            self._save_users()
-            return user_id, "User created successfully"
-    
+        """Create a user directly (admin function, auto-approved)."""
+        if len(username) < 3 or len(username) > 32:
+            return None, "Username must be 3-32 characters"
+        if not username.replace('_', '').replace('-', '').isalnum():
+            return None, "Username can only contain letters, numbers, underscores, and hyphens"
+        if len(password) < 6:
+            return None, "Password must be at least 6 characters"
+        if role not in self.ROLES:
+            return None, "Invalid role"
+
+        user_id = str(uuid.uuid4())[:8]
+        default_prefs = json.dumps({k: False for k in self._DEFAULT_NOTIF_PREFS})
+
+        conn = get_db()
+        try:
+            conn.execute(
+                '''INSERT INTO users
+                   (id, username, password, role, name, email, approved, created,
+                    failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
+                   VALUES (?, ?, ?, ?, '', ?, 1, ?, 0, 0, 0, ?)''',
+                (user_id, username, generate_password_hash(password), role, email,
+                 datetime.now().isoformat(), default_prefs)
+            )
+            conn.commit()
+        except Exception as e:
+            if 'UNIQUE' in str(e).upper():
+                return None, "Username already exists"
+            raise
+
+        return user_id, "User created successfully"
+
+    # ── Lookups ───────────────────────────────────────────────────────────────
+
     def get_user(self, user_id):
-        """Get user by ID"""
-        return self.users.get('users', {}).get(user_id)
-    
+        """Get full user dict by ID (includes password hash — internal use)."""
+        row = get_db().execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+        return self._row_to_dict(row)
+
     def get_user_by_id(self, user_id):
-        """Get user by ID with safe data (for admin panel)"""
-        user = self.users.get('users', {}).get(user_id)
-        if not user:
+        """Get safe user dict by ID (for admin panel — no password)."""
+        row = get_db().execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
             return None
         return {
-            'id': user_id,
-            'username': user['username'],
-            'name': user.get('name', ''),
-            'email': user.get('email', ''),
-            'role': user['role'],
-            'mfaEnabled': user.get('mfaEnabled', False),
-            'approved': user.get('approved', False),
-            'created': user.get('created'),
-            'lastLogin': user.get('lastLogin')
+            'id':        row['id'],
+            'username':  row['username'],
+            'name':      row['name'],
+            'email':     row['email'],
+            'role':      row['role'],
+            'mfaEnabled': bool(row['mfa_enabled']),
+            'approved':  bool(row['approved']),
+            'created':   row['created'],
+            'lastLogin': row['last_login'],
         }
-    
+
     def get_user_by_username(self, username):
-        """Get user by username"""
-        for user_id, user in self.users.get('users', {}).items():
-            if user['username'].lower() == username.lower():
-                return user_id, user
-        return None, None
-    
+        """Get (user_id, user_dict) by username (case-insensitive)."""
+        row = get_db().execute(
+            'SELECT * FROM users WHERE username=? COLLATE NOCASE', (username,)
+        ).fetchone()
+        if row is None:
+            return None, None
+        return row['id'], self._row_to_dict(row)
+
     def get_all_users(self):
-        """Get all users (for admin panel)"""
-        users = []
-        for user_id, user in self.users.get('users', {}).items():
-            users.append({
-                'id': user_id,
-                'username': user['username'],
-                'name': user.get('name', ''),
-                'email': user.get('email', ''),
-                'role': user['role'],
-                'mfaEnabled': user.get('mfaEnabled', False),
-                'approved': user.get('approved', False),
-                'created': user.get('created'),
-                'lastLogin': user.get('lastLogin')
-            })
-        return users
-    
-    def approve_user(self, user_id):
-        """Approve a pending user"""
-        with self.lock:
-            if user_id in self.users.get('users', {}):
-                self.users['users'][user_id]['approved'] = True
-                self._save_users()
-                
-                # If this is an admin being approved, check if we can remove anti-lockout accounts
-                user = self.users['users'][user_id]
-                if user['role'] == 'admin' and self._has_active_admin():
-                    self._remove_anti_lockout_accounts()
-                
-                return True
-        return False
-    
-    def _has_active_admin(self):
-        """Check if there are any active (non-disabled) admin accounts"""
-        for user in self.users.get('users', {}).values():
-            if (user['role'] == 'admin' and 
-                not user.get('accountDisabled', False) and 
-                user.get('approved', False) and
-                not user.get('isAntiLockout', False)):
-                return True
-        return False
-    
-    def _check_and_create_anti_lockout(self):
-        """Create anti-lockout account if no active admins exist"""
-        if not self._has_active_admin():
-            # Remove any existing anti-lockout accounts first
-            self._remove_anti_lockout_accounts()
-            
-            # Generate random credentials
-            import secrets
-            import string
-            
-            username = 'emergency_admin_' + ''.join(secrets.choice(string.digits) for _ in range(4))
-            password = ''.join(secrets.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(16))
-            
-            user_id = str(uuid.uuid4())[:8]
-            self.users['users'][user_id] = {
-                'username': username,
-                'password': generate_password_hash(password),
-                'role': 'admin',
-                'name': 'Emergency Anti-Lockout Account',
-                'mfaEnabled': False,
-                'mfaSecret': None,
-                'mfaRecoveryCode': None,
-                'approved': True,
-                'created': datetime.now().isoformat(),
-                'lastLogin': None,
-                'failedLoginAttempts': 0,
-                'accountDisabled': False,
-                'disabledAt': None,
-                'isAntiLockout': True
+        """Get all users as safe dicts (for admin panel)."""
+        rows = get_db().execute('SELECT * FROM users ORDER BY created').fetchall()
+        return [
+            {
+                'id':        r['id'],
+                'username':  r['username'],
+                'name':      r['name'],
+                'email':     r['email'],
+                'role':      r['role'],
+                'mfaEnabled': bool(r['mfa_enabled']),
+                'approved':  bool(r['approved']),
+                'created':   r['created'],
+                'lastLogin': r['last_login'],
             }
-            self._save_users()
-            
-            # Log to console and file
-            log_message = f"""
+            for r in rows
+        ]
+
+    # ── Approval & role ───────────────────────────────────────────────────────
+
+    def approve_user(self, user_id):
+        """Approve a pending user."""
+        conn = get_db()
+        result = conn.execute(
+            'UPDATE users SET approved=1 WHERE id=?', (user_id,)
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return False
+        row = conn.execute('SELECT role FROM users WHERE id=?', (user_id,)).fetchone()
+        if row and row['role'] == 'admin' and self._has_active_admin():
+            self._remove_anti_lockout_accounts()
+        return True
+
+    def _has_active_admin(self):
+        """Return True if at least one non-disabled, approved, non-anti-lockout admin exists."""
+        row = get_db().execute(
+            '''SELECT COUNT(*) FROM users
+               WHERE role='admin' AND account_disabled=0 AND approved=1 AND is_anti_lockout=0'''
+        ).fetchone()
+        return row[0] > 0
+
+    def _check_and_create_anti_lockout(self):
+        """Create emergency anti-lockout admin if no active admins remain."""
+        if self._has_active_admin():
+            return None, None
+
+        self._remove_anti_lockout_accounts()
+
+        import string
+        username = 'emergency_admin_' + ''.join(secrets.choice(string.digits) for _ in range(4))
+        password = ''.join(secrets.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(16))
+
+        user_id = str(uuid.uuid4())[:8]
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO users
+               (id, username, password, role, name, approved, created,
+                failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
+               VALUES (?, ?, ?, 'admin', 'Emergency Anti-Lockout Account', 1, ?, 0, 0, 1, '{}')''',
+            (user_id, username, generate_password_hash(password), datetime.now().isoformat())
+        )
+        conn.commit()
+
+        print(f"""
 {'='*80}
 ⚠️  ANTI-LOCKOUT ACCOUNT CREATED ⚠️
 {'='*80}
@@ -2227,292 +2144,235 @@ An emergency admin account has been created:
   3. This account will be automatically removed when a regular admin is active
   4. Store these credentials securely - they will not be shown again
 {'='*80}
-"""
-            print(log_message)
-            
-            # NOTE: Credentials are intentionally NOT written to a log file to
-            # avoid plaintext credential storage. The console output above is
-            # the only record — administrators must note them immediately.
-            
-            return username, password
-        return None, None
-    
+""")
+        return username, password
+
     def _remove_anti_lockout_accounts(self):
-        """Remove all anti-lockout accounts"""
-        to_remove = []
-        for user_id, user in self.users.get('users', {}).items():
-            if user.get('isAntiLockout', False):
-                to_remove.append(user_id)
-        
-        for user_id in to_remove:
-            del self.users['users'][user_id]
-        
-        if to_remove:
-            self._save_users()
-            print(f"Removed {len(to_remove)} anti-lockout account(s)")
-    
+        """Remove all anti-lockout accounts."""
+        conn = get_db()
+        result = conn.execute('DELETE FROM users WHERE is_anti_lockout=1')
+        conn.commit()
+        if result.rowcount:
+            print(f"Removed {result.rowcount} anti-lockout account(s)")
+
     def enable_account(self, user_id):
-        """Enable a disabled user account and reset failed attempts"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            user['accountDisabled'] = False
-            user['failedLoginAttempts'] = 0
-            user['disabledAt'] = None
-            self._save_users()
-            
-            # Check if we can remove anti-lockout accounts
-            if self._has_active_admin():
-                self._remove_anti_lockout_accounts()
-            
-            return True, "Account enabled successfully"
-    
+        """Enable a disabled user account and reset failed attempts."""
+        conn = get_db()
+        result = conn.execute(
+            'UPDATE users SET account_disabled=0, failed_login_attempts=0, disabled_at=NULL WHERE id=?',
+            (user_id,)
+        )
+        conn.commit()
+        if result.rowcount == 0:
+            return False, "User not found"
+        if self._has_active_admin():
+            self._remove_anti_lockout_accounts()
+        return True, "Account enabled successfully"
+
     def update_user_role(self, user_id, role):
-        """Update user role"""
+        """Update user role."""
         if role not in self.ROLES:
             return False
-        with self.lock:
-            if user_id in self.users.get('users', {}):
-                self.users['users'][user_id]['role'] = role
-                self._save_users()
-                
-                # If promoting to admin, check if we can remove anti-lockout accounts
-                if role == 'admin' and self._has_active_admin():
-                    self._remove_anti_lockout_accounts()
-                
-                return True
-        return False
-    
+        conn = get_db()
+        result = conn.execute('UPDATE users SET role=? WHERE id=?', (role, user_id))
+        conn.commit()
+        if result.rowcount == 0:
+            return False
+        if role == 'admin' and self._has_active_admin():
+            self._remove_anti_lockout_accounts()
+        return True
+
     def delete_user(self, user_id):
-        """Delete a user"""
-        with self.lock:
-            if user_id in self.users.get('users', {}):
-                del self.users['users'][user_id]
-                self._save_users()
-                return True
-        return False
-    
+        """Delete a user."""
+        conn = get_db()
+        result = conn.execute('DELETE FROM users WHERE id=?', (user_id,))
+        conn.commit()
+        return result.rowcount > 0
+
+    # ── Password management ───────────────────────────────────────────────────
+
     def change_password(self, user_id, old_password, new_password):
-        """Change user password"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            if not check_password_hash(user['password'], old_password):
-                return False, "Current password is incorrect"
-            
-            # Validate password - strengthened for production security
-            if len(new_password) < 12:
-                return False, "New password must be at least 12 characters"
-            if not any(c.isupper() for c in new_password):
-                return False, "Password must contain at least one uppercase letter"
-            if not any(c.islower() for c in new_password):
-                return False, "Password must contain at least one lowercase letter"
-            if not any(c.isdigit() for c in new_password):
-                return False, "Password must contain at least one number"
-            
-            self.users['users'][user_id]['password'] = generate_password_hash(new_password)
-            self._save_users()
-            return True, "Password changed successfully"
-    
+        """Change user password (requires current password)."""
+        row = get_db().execute('SELECT password FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
+            return False, "User not found"
+        if not check_password_hash(row['password'], old_password):
+            return False, "Current password is incorrect"
+        if len(new_password) < 12:
+            return False, "New password must be at least 12 characters"
+        if not any(c.isupper() for c in new_password):
+            return False, "Password must contain at least one uppercase letter"
+        if not any(c.islower() for c in new_password):
+            return False, "Password must contain at least one lowercase letter"
+        if not any(c.isdigit() for c in new_password):
+            return False, "Password must contain at least one number"
+        conn = get_db()
+        conn.execute('UPDATE users SET password=? WHERE id=?',
+                     (generate_password_hash(new_password), user_id))
+        conn.commit()
+        return True, "Password changed successfully"
+
     def reset_password(self, user_id, new_password):
-        """Admin reset user password"""
-        with self.lock:
-            if user_id not in self.users.get('users', {}):
-                return False
-            # Validate password strength
-            if len(new_password) < 12:
-                return False
-            if not any(c.isupper() for c in new_password):
-                return False
-            if not any(c.islower() for c in new_password):
-                return False
-            if not any(c.isdigit() for c in new_password):
-                return False
-            self.users['users'][user_id]['password'] = generate_password_hash(new_password)
-            self._save_users()
-            return True
-    
+        """Admin reset user password (no old password required)."""
+        if len(new_password) < 12: return False
+        if not any(c.isupper() for c in new_password): return False
+        if not any(c.islower() for c in new_password): return False
+        if not any(c.isdigit() for c in new_password): return False
+        conn = get_db()
+        result = conn.execute('UPDATE users SET password=? WHERE id=?',
+                              (generate_password_hash(new_password), user_id))
+        conn.commit()
+        return result.rowcount > 0
+
+    # ── Profile updates ───────────────────────────────────────────────────────
+
     def update_username(self, user_id, new_username):
-        """Update user's username"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            # Validate username
-            if len(new_username) < 3 or len(new_username) > 32:
-                return False, "Username must be 3-32 characters"
-            if not new_username.replace('_', '').replace('-', '').isalnum():
-                return False, "Username can only contain letters, numbers, underscores, and hyphens"
-            
-            # Check if username already exists (case-insensitive)
-            for uid, u in self.users.get('users', {}).items():
-                if uid != user_id and u['username'].lower() == new_username.lower():
-                    return False, "Username already exists"
-            
-            self.users['users'][user_id]['username'] = new_username
-            self._save_users()
-            return True, "Username updated successfully"
-    
+        """Update user's username."""
+        if len(new_username) < 3 or len(new_username) > 32:
+            return False, "Username must be 3-32 characters"
+        if not new_username.replace('_', '').replace('-', '').isalnum():
+            return False, "Username can only contain letters, numbers, underscores, and hyphens"
+        conn = get_db()
+        try:
+            result = conn.execute('UPDATE users SET username=? WHERE id=?', (new_username, user_id))
+            conn.commit()
+        except Exception as e:
+            if 'UNIQUE' in str(e).upper():
+                return False, "Username already exists"
+            raise
+        if result.rowcount == 0:
+            return False, "User not found"
+        return True, "Username updated successfully"
+
     def update_name(self, user_id, name):
-        """Update user's display name"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            # Validate name (optional, can be empty)
-            if len(name) > 100:
-                return False, "Name must be 100 characters or less"
-            
-            self.users['users'][user_id]['name'] = name
-            self._save_users()
-            return True, "Name updated successfully"
-    
+        """Update user's display name."""
+        if len(name) > 100:
+            return False, "Name must be 100 characters or less"
+        conn = get_db()
+        result = conn.execute('UPDATE users SET name=? WHERE id=?', (name, user_id))
+        conn.commit()
+        return (True, "Name updated successfully") if result.rowcount else (False, "User not found")
+
     def update_email(self, user_id, email):
-        """Update user's email address"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            # Validate email (basic validation, optional field)
-            if email and len(email) > 254:
-                return False, "Email must be 254 characters or less"
-            
-            # Basic email format check if provided
-            if email and '@' not in email:
-                return False, "Invalid email format"
-            
-            self.users['users'][user_id]['email'] = email
-            self._save_users()
-            return True, "Email updated successfully"
+        """Update user's email address."""
+        if email and len(email) > 254:
+            return False, "Email must be 254 characters or less"
+        if email and '@' not in email:
+            return False, "Invalid email format"
+        conn = get_db()
+        result = conn.execute('UPDATE users SET email=? WHERE id=?', (email, user_id))
+        conn.commit()
+        return (True, "Email updated successfully") if result.rowcount else (False, "User not found")
 
-    # ---- Notification Preferences ----
-
-    _DEFAULT_NOTIF_PREFS = {
-        'backupComplete': False,
-        'backupFailure': False,
-        'serverStart': False,
-        'serverStop': False,
-        'playerJoin': False,
-        'playerLeave': False,
-        'criticalAlerts': False,
-    }
+    # ── Notification preferences ──────────────────────────────────────────────
 
     def get_notification_prefs(self, user_id):
         """Return the notification preference dict for a user (merged with defaults)."""
-        user = self.users.get('users', {}).get(user_id)
-        if not user:
+        row = get_db().execute(
+            'SELECT notification_prefs FROM users WHERE id=?', (user_id,)
+        ).fetchone()
+        if row is None:
             return None
-        stored = user.get('notificationPrefs', {})
+        try:
+            stored = json.loads(row['notification_prefs'] or '{}')
+        except Exception:
+            stored = {}
         return {**self._DEFAULT_NOTIF_PREFS, **stored}
 
     def update_notification_prefs(self, user_id, prefs):
-        """Update notification preferences for a user. Only known keys are accepted."""
-        with self.lock:
-            if user_id not in self.users.get('users', {}):
-                return False
-            current = self.users['users'][user_id].get('notificationPrefs', {}).copy()
-            for key in self._DEFAULT_NOTIF_PREFS:
-                if key in prefs:
-                    current[key] = bool(prefs[key])
-            self.users['users'][user_id]['notificationPrefs'] = current
-            self._save_users()
-            return True
+        """Update notification preferences (only known keys accepted)."""
+        current = self.get_notification_prefs(user_id)
+        if current is None:
+            return False
+        for key in self._DEFAULT_NOTIF_PREFS:
+            if key in prefs:
+                current[key] = bool(prefs[key])
+        conn = get_db()
+        result = conn.execute(
+            'UPDATE users SET notification_prefs=? WHERE id=?',
+            (json.dumps(current), user_id)
+        )
+        conn.commit()
+        return result.rowcount > 0
 
     def get_notification_recipients(self, pref_key):
-        """Return list of email addresses for users who have pref_key enabled."""
+        """Return email addresses of users who have pref_key enabled."""
+        rows = get_db().execute(
+            'SELECT email, notification_prefs FROM users WHERE email != \'\''
+        ).fetchall()
         recipients = []
-        for user in self.users.get('users', {}).values():
-            email = user.get('email', '').strip()
-            if not email:
-                continue
-            prefs = user.get('notificationPrefs', {})
+        for row in rows:
+            try:
+                prefs = json.loads(row['notification_prefs'] or '{}')
+            except Exception:
+                prefs = {}
             if prefs.get(pref_key, False):
-                recipients.append(email)
+                recipients.append(row['email'])
         return recipients
-    
+
+    # ── MFA ───────────────────────────────────────────────────────────────────
+
     def generate_mfa_secret(self, user_id):
-        """Generate a new TOTP secret for user"""
-        user = self.users.get('users', {}).get(user_id)
-        if not user:
+        """Generate a new TOTP secret for user."""
+        row = get_db().execute('SELECT id FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
             return None, "User not found"
-        
-        # Generate random secret
-        secret = pyotp.random_base32()
-        return secret, "Secret generated successfully"
-    
+        return pyotp.random_base32(), "Secret generated successfully"
+
     def generate_recovery_code(self):
-        """Generate a recovery code in format XXXXXXXX-XXXXXXXX-XXXXXXXX"""
-        parts = []
-        for _ in range(3):
-            # Generate 8 hex characters
-            part = ''.join(secrets.choice('ABCDEF0123456789') for _ in range(8))
-            parts.append(part)
+        """Generate a recovery code in format XXXXXXXX-XXXXXXXX-XXXXXXXX."""
+        parts = [''.join(secrets.choice('ABCDEF0123456789') for _ in range(8)) for _ in range(3)]
         return '-'.join(parts)
-    
+
     def verify_totp(self, secret, code):
-        """Verify a TOTP code"""
-        totp = pyotp.TOTP(secret)
-        return totp.verify(code, valid_window=1)  # Allow 1 step before/after for clock drift
-    
+        """Verify a TOTP code."""
+        return pyotp.TOTP(secret).verify(code, valid_window=1)
+
     def enable_mfa(self, user_id, secret, recovery_code):
-        """Enable MFA for user with hashed recovery code"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            # Hash recovery code before storage for security
-            recovery_code_hash = generate_password_hash(recovery_code)
-            
-            self.users['users'][user_id]['mfaEnabled'] = True
-            self.users['users'][user_id]['mfaSecret'] = secret
-            self.users['users'][user_id]['mfaRecoveryCode'] = recovery_code_hash
-            self._save_users()
-            return True, "MFA enabled successfully"
-    
+        """Enable MFA for user with hashed recovery code."""
+        row = get_db().execute('SELECT id FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
+            return False, "User not found"
+        conn = get_db()
+        conn.execute(
+            'UPDATE users SET mfa_enabled=1, mfa_secret=?, mfa_recovery_code=? WHERE id=?',
+            (secret, generate_password_hash(recovery_code), user_id)
+        )
+        conn.commit()
+        return True, "MFA enabled successfully"
+
     def disable_mfa(self, user_id):
-        """Disable MFA for user"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False, "User not found"
-            
-            self.users['users'][user_id]['mfaEnabled'] = False
-            self.users['users'][user_id]['mfaSecret'] = None
-            self.users['users'][user_id]['mfaRecoveryCode'] = None
-            self._save_users()
-            return True, "MFA disabled successfully"
-    
+        """Disable MFA for user."""
+        row = get_db().execute('SELECT id FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
+            return False, "User not found"
+        conn = get_db()
+        conn.execute(
+            'UPDATE users SET mfa_enabled=0, mfa_secret=NULL, mfa_recovery_code=NULL WHERE id=?',
+            (user_id,)
+        )
+        conn.commit()
+        return True, "MFA disabled successfully"
+
     def verify_recovery_code(self, user_id, recovery_code):
-        """Verify and use recovery code (one-time use) - now supports hashed codes"""
-        with self.lock:
-            user = self.users.get('users', {}).get(user_id)
-            if not user:
-                return False
-            
-            stored_code_hash = user.get('mfaRecoveryCode')
-            if not stored_code_hash:
-                return False
-            
-            # Verify hashed recovery code
-            if check_password_hash(stored_code_hash, recovery_code):
-                # Disable MFA after successful recovery
-                self.disable_mfa(user_id)
-                return True
-            
+        """Verify and consume recovery code (one-time use)."""
+        row = get_db().execute(
+            'SELECT mfa_recovery_code FROM users WHERE id=?', (user_id,)
+        ).fetchone()
+        if row is None or not row['mfa_recovery_code']:
             return False
-    
+        if check_password_hash(row['mfa_recovery_code'], recovery_code):
+            self.disable_mfa(user_id)
+            return True
+        return False
+
     def get_role_level(self, role):
-        """Get numeric role level"""
+        """Get numeric role level."""
         return self.ROLES.get(role, 0)
 
+
+# Initialize database (creates tables if not present — safe on every boot)
+init_db()
 
 # Initialize managers (settings_manager must be first as UserManager uses it)
 settings_manager = SettingsManager()
@@ -3301,145 +3161,224 @@ class ServerStatus(Enum):
 # ==================== Server Manager ====================
 
 class ServerManager:
-    """Manages multiple Minecraft server instances"""
-    
+    """Manages multiple Minecraft server instances — backed by SQLite."""
+
     def __init__(self):
-        self.servers = {}  # server_id -> ServerInstance
-        self.config = self._load_config()
+        self.servers = {}  # server_id -> ServerInstance (in-memory runtime state only)
         self.lock = threading.Lock()
-    
-    def _load_config(self):
-        """Load configuration from file"""
-        if CONFIG_PATH.exists():
-            with open(CONFIG_PATH, 'r') as f:
-                return json.load(f)
-        return {'servers': {}}
-    
-    def _save_config(self):
-        """Save configuration to file"""
-        with open(CONFIG_PATH, 'w') as f:
-            json.dump(self.config, f, indent=2)
-    
+
+    # ── Internal row → dict helper ────────────────────────────────────────────
+
+    @staticmethod
+    def _row_to_config(row):
+        """Convert a sqlite3.Row from the servers table to a config dict."""
+        if row is None:
+            return None
+        return {
+            'name':       row['name'],
+            'serverPath': row['server_path'],
+            'executable': row['executable'],
+            'javaArgs':   row['java_args'],
+            'serverType': row['server_type'],
+            'version':    row['version'],
+            'owner':      row['owner'],
+            'autoStart':  bool(row['auto_start']),
+            'approved':   bool(row['approved']),
+            'category':   row['category'],
+            'created':    row['created'],
+        }
+
+    # ── CRUD ──────────────────────────────────────────────────────────────────
+
+    def get_server_config(self, server_id):
+        """Get configuration dict for a specific server."""
+        row = get_db().execute('SELECT * FROM servers WHERE id=?', (server_id,)).fetchone()
+        return self._row_to_config(row)
+
+    def get_all_server_ids(self):
+        """Return a list of all server IDs (approved and pending)."""
+        rows = get_db().execute('SELECT id FROM servers').fetchall()
+        return [r['id'] for r in rows]
+
     def get_servers_list(self, include_pending=False):
-        """Get list of all configured servers with their status"""
+        """Get list of all configured servers with their runtime status."""
+        if include_pending:
+            rows = get_db().execute('SELECT * FROM servers ORDER BY created').fetchall()
+        else:
+            rows = get_db().execute(
+                'SELECT * FROM servers WHERE approved=1 ORDER BY created'
+            ).fetchall()
+
         servers = []
-        for server_id, server_config in self.config.get('servers', {}).items():
-            is_approved = server_config.get('approved', True)  # Default to approved for legacy servers
-            
-            # Skip pending servers unless explicitly requested
-            if not include_pending and not is_approved:
-                continue
-                
+        for row in rows:
+            server_id = row['id']
+            server_config = self._row_to_config(row)
+
             instance = self.servers.get(server_id)
             is_running = instance is not None and instance.is_running()
             status = instance.get_status().value if instance else ServerStatus.STOPPED.value
-            
-            # Get server port if available
+
             port = self.get_server_port(server_id)
-            
-            # Enrich with managed.conf data (authoritative source for Engine/Version)
+
             server_dir = Path(server_config.get('serverPath', ''))
             managed = self._read_managed_conf(server_dir) if server_dir.exists() else {}
-            
-            # Use managed.conf Engine/Version when present, fall back to config.json
+
             engine_from_conf = managed.get('Engine') or server_config.get('serverType')
             version_from_conf = managed.get('Version') or server_config.get('version')
-            # Don't surface the literal string 'imported' as a type label
             if engine_from_conf and engine_from_conf.lower() == 'imported':
                 engine_from_conf = managed.get('Engine') or None
-            
+
             servers.append({
-                'id': server_id,
-                'name': server_config.get('name', 'Unnamed Server'),
+                'id':         server_id,
+                'name':       server_config.get('name', 'Unnamed Server'),
                 'serverPath': server_config.get('serverPath', ''),
                 'executable': server_config.get('executable', 'server.jar'),
-                'javaArgs': server_config.get('javaArgs', '-Xmx4G -Xms1G'),
-                'autoStart': server_config.get('autoStart', False),
+                'javaArgs':   server_config.get('javaArgs', '-Xmx4G -Xms1G'),
+                'autoStart':  server_config.get('autoStart', False),
                 'serverType': engine_from_conf,
-                'version': version_from_conf,
-                'owner': server_config.get('owner'),
-                'created': server_config.get('created'),
-                'approved': is_approved,
-                'running': is_running,
-                'status': status,
-                'port': port,
-                'category': server_config.get('category', 'unmodded')
+                'version':    version_from_conf,
+                'owner':      server_config.get('owner'),
+                'created':    server_config.get('created'),
+                'approved':   server_config.get('approved', True),
+                'running':    is_running,
+                'status':     status,
+                'port':       port,
+                'category':   server_config.get('category', 'unmodded'),
             })
         return servers
-    
+
     def get_pending_servers(self):
-        """Get list of servers pending approval"""
-        servers = []
-        for server_id, server_config in self.config.get('servers', {}).items():
-            if not server_config.get('approved', True):  # Not approved
-                servers.append({
-                    'id': server_id,
-                    'name': server_config.get('name', 'Unnamed Server'),
-                    'type': server_config.get('serverType', 'Server'),
-                    'owner': server_config.get('owner'),
-                    'created': server_config.get('created')
-                })
-        return servers
-    
+        """Get list of servers pending approval."""
+        rows = get_db().execute(
+            'SELECT * FROM servers WHERE approved=0 ORDER BY created'
+        ).fetchall()
+        return [
+            {
+                'id':      r['id'],
+                'name':    r['name'],
+                'type':    r['server_type'],
+                'owner':   r['owner'],
+                'created': r['created'],
+            }
+            for r in rows
+        ]
+
     def approve_server(self, server_id):
-        """Approve a pending server"""
-        if server_id in self.config.get('servers', {}):
-            self.config['servers'][server_id]['approved'] = True
-            self._save_config()
-            return True
-        return False
-    
+        """Approve a pending server."""
+        conn = get_db()
+        result = conn.execute('UPDATE servers SET approved=1 WHERE id=?', (server_id,))
+        conn.commit()
+        return result.rowcount > 0
+
     def reject_server(self, server_id):
-        """Reject (delete) a pending server"""
+        """Reject (delete) a pending server."""
         return self.delete_server(server_id)
-    
-    def get_server_config(self, server_id):
-        """Get configuration for a specific server"""
-        return self.config.get('servers', {}).get(server_id)
-    
-    def create_server(self, name, server_path='', executable='server.jar', java_args='-Xmx4G -Xms1G', 
-                      server_type=None, version=None, owner=None, approved=True, category='unmodded', port=None):
-        """Create a new server configuration"""
+
+    def create_server(self, name, server_path='', executable='server.jar',
+                      java_args='-Xmx4G -Xms1G', server_type=None, version=None,
+                      owner=None, approved=True, category='unmodded', port=None):
+        """Create a new server configuration."""
         server_id = str(uuid.uuid4())[:8]
-        
-        if 'servers' not in self.config:
-            self.config['servers'] = {}
-        
-        # Create server directory
+
         server_dir = Path(server_path) if server_path else SERVERS_DIR / server_id
         server_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Determine engine name
+
         is_bedrock = category == 'bedrock'
         is_modded = category == 'modded'
         engine_name = 'Vanilla'
         if is_bedrock:
             engine_name = 'Bedrock'
         elif is_modded and server_type:
-            engine_name = server_type.title()  # paper -> Paper, folia -> Folia, etc.
-        
-        # Create managed.conf file
-        self._create_managed_conf(server_dir, server_id, name, engine=engine_name, owner=owner, version=version, port=port)
-        
-        # Create canned_commands.conf so the server dir has it from the start
+            engine_name = server_type.title()
+
+        self._create_managed_conf(server_dir, server_id, name, engine=engine_name,
+                                  owner=owner, version=version, port=port)
         self._ensure_canned_commands_conf(server_dir)
-        
-        self.config['servers'][server_id] = {
-            'name': name,
-            'serverPath': str(server_dir),
-            'executable': executable,
-            'javaArgs': java_args,
-            'serverType': server_type,
-            'version': version,
-            'owner': owner,
-            'autoStart': False,
-            'approved': approved,
-            'category': category,
-            'created': datetime.now().isoformat()
-        }
-        
-        self._save_config()
+
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO servers
+               (id, name, server_path, executable, java_args, server_type, version,
+                owner, auto_start, approved, category, created)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)''',
+            (server_id, name, str(server_dir), executable, java_args,
+             server_type, version, owner, 1 if approved else 0,
+             category, datetime.now().isoformat())
+        )
+        conn.commit()
         return server_id
+
+    def update_server(self, server_id, **kwargs):
+        """Update server configuration fields."""
+        row = get_db().execute('SELECT * FROM servers WHERE id=?', (server_id,)).fetchone()
+        if row is None:
+            return False
+
+        category = kwargs.get('category', row['category'])
+        kwargs['executable'] = 'server.sh' if category == 'bedrock' else 'server.jar'
+
+        # Build dynamic SET clause for provided kwargs
+        col_map = {
+            'name': 'name', 'serverPath': 'server_path', 'executable': 'executable',
+            'javaArgs': 'java_args', 'serverType': 'server_type', 'version': 'version',
+            'owner': 'owner', 'autoStart': 'auto_start', 'approved': 'approved',
+            'category': 'category',
+        }
+        sets, values = [], []
+        for k, v in kwargs.items():
+            col = col_map.get(k)
+            if col:
+                sets.append(f'{col}=?')
+                values.append(1 if v is True else (0 if v is False else v))
+        if not sets:
+            return True
+        values.append(server_id)
+        conn = get_db()
+        conn.execute(f'UPDATE servers SET {", ".join(sets)} WHERE id=?', values)
+        conn.commit()
+
+        server_config = self.get_server_config(server_id)
+        server_dir = Path(server_config.get('serverPath', ''))
+        managed_conf_path = server_dir / 'managed.conf'
+        if managed_conf_path.exists():
+            managed_config = self._read_managed_conf(server_dir)
+            if 'category' in kwargs:
+                managed_config.pop('Modded', None)
+            if 'autoStart' in kwargs:
+                managed_config['AutoStart'] = 'true' if kwargs['autoStart'] else 'false'
+            self._write_managed_conf(server_dir, managed_config)
+        return True
+
+    def delete_server(self, server_id, delete_files=False):
+        """Delete a server configuration (and optionally its files)."""
+        if server_id in self.servers:
+            self.stop_server(server_id)
+
+        row = get_db().execute(
+            'SELECT server_path FROM servers WHERE id=?', (server_id,)
+        ).fetchone()
+        if row is None:
+            return False
+
+        server_path = Path(row['server_path'])
+        if delete_files:
+            if server_path.exists():
+                try:
+                    shutil.rmtree(server_path)
+                except Exception as e:
+                    print(f"Error deleting server files: {e}")
+        else:
+            managed_conf = server_path / 'managed.conf'
+            if managed_conf.exists():
+                try:
+                    managed_conf.unlink()
+                except Exception as e:
+                    print(f"Error removing managed.conf: {e}")
+
+        conn = get_db()
+        conn.execute('DELETE FROM servers WHERE id=?', (server_id,))
+        conn.commit()
+        return True
     
     # Required fields for managed.conf
     MANAGED_CONF_REQUIRED_FIELDS = [
@@ -3648,39 +3587,35 @@ class ServerManager:
         except Exception as e:
             return False, f"Failed to write eula.txt: {e}"
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G', executable_name=None, owner=None, approved=True, category='unmodded', port=None, engine=None):
-        """Import a server from a ZIP file"""
+    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G',
+                               executable_name=None, owner=None, approved=True,
+                               category='unmodded', port=None, engine=None):
+        """Import a server from a ZIP file."""
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
-        
+
         try:
-            # Create server directory
             server_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Extract ZIP file
+
             with zipfile.ZipFile(zip_path, 'r') as zipf:
                 zipf.extractall(server_dir)
-            
-            # Check if files are in a subdirectory (common with some ZIPs)
+
             subdirs = [d for d in server_dir.iterdir() if d.is_dir()]
             if len(subdirs) == 1 and not any(server_dir.glob('*.jar')):
-                # Move files from subdirectory to server_dir
                 subdir = subdirs[0]
                 for item in subdir.iterdir():
                     shutil.move(str(item), str(server_dir / item.name))
                 subdir.rmdir()
-            
-            # Find the server executable JAR
+
             found_jar = None
             if executable_name:
-                # User specified the executable name within the ZIP
                 target = server_dir / executable_name
                 if target.exists() and target.suffix == '.jar':
                     found_jar = target
-            
+
             if not found_jar:
-                # Auto-detect: prefer known server jar names, then fall back to any JAR
-                priority_names = ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar', 'forge.jar', 'neoforge.jar']
+                priority_names = ['server.jar', 'paper.jar', 'purpur.jar', 'folia.jar',
+                                  'forge.jar', 'neoforge.jar']
                 fallback = None
                 for item in server_dir.iterdir():
                     if item.suffix == '.jar' and item.is_file():
@@ -3691,152 +3626,53 @@ class ServerManager:
                             fallback = item
                 if not found_jar:
                     found_jar = fallback
-            
-            # Rename found JAR to server.jar to standardise the executable name
+
             if found_jar and found_jar.name != 'server.jar':
                 standard_jar = server_dir / 'server.jar'
                 if standard_jar.exists():
                     standard_jar.unlink()
                 found_jar.rename(standard_jar)
-            
-            # Always use server.jar as the standard executable
+
             executable = 'server.jar'
-            
-            if 'servers' not in self.config:
-                self.config['servers'] = {}
-            
-            # Check if the imported ZIP had a managed.conf (treat it as master)
+
             managed_conf_path = server_dir / 'managed.conf'
-            has_existing_conf = managed_conf_path.exists()
-            
-            if has_existing_conf:
-                # Preserve the existing managed.conf as master — only update ServerId and Owner
+            if managed_conf_path.exists():
                 existing_conf = self._read_managed_conf(server_dir)
                 existing_conf['ServerId'] = server_id
                 if owner:
                     existing_conf['Owner'] = owner
-                # Remove deprecated Modded field if present
                 existing_conf.pop('Modded', None)
-                # Ensure new required fields exist with defaults
-                if 'Port' not in existing_conf:
-                    existing_conf['Port'] = port or '25565'
-                if 'AutoStart' not in existing_conf:
-                    existing_conf['AutoStart'] = 'false'
-                if 'LastStarted' not in existing_conf:
-                    existing_conf['LastStarted'] = ''
+                existing_conf.setdefault('Port', port or '25565')
+                existing_conf.setdefault('AutoStart', 'false')
+                existing_conf.setdefault('LastStarted', '')
                 self._write_managed_conf(server_dir, existing_conf)
-                
-                # Use values from existing conf for config.json
-                imported_name = existing_conf.get('ServerName', name)
-                imported_engine = existing_conf.get('Engine', engine or 'Unknown')
+                imported_name    = existing_conf.get('ServerName', name)
                 imported_version = existing_conf.get('Version', 'Unknown')
             else:
-                # No existing conf — create one from user-provided data
-                # Determine engine name from category if not provided
                 if not engine:
-                    if category == 'bedrock':
-                        engine = 'Bedrock'
-                    elif category == 'modded':
-                        engine = 'Unknown'
-                    else:
-                        engine = 'Vanilla'
-                
-                self._create_managed_conf(server_dir, server_id, name, engine=engine, owner=owner, port=port)
-                imported_name = name
-                imported_engine = engine
+                    engine = 'Bedrock' if category == 'bedrock' else (
+                             'Unknown' if category == 'modded' else 'Vanilla')
+                self._create_managed_conf(server_dir, server_id, name,
+                                          engine=engine, owner=owner, port=port)
+                imported_name    = name
                 imported_version = 'Unknown'
-            
-            self.config['servers'][server_id] = {
-                'name': imported_name,
-                'serverPath': str(server_dir),
-                'executable': executable,
-                'javaArgs': java_args,
-                'serverType': 'imported',
-                'category': category,
-                'owner': owner,
-                'autoStart': False,
-                'approved': approved,
-                'created': datetime.now().isoformat()
-            }
-            
-            self._save_config()
+
+            conn = get_db()
+            conn.execute(
+                '''INSERT INTO servers
+                   (id, name, server_path, executable, java_args, server_type, version,
+                    owner, auto_start, approved, category, created)
+                   VALUES (?, ?, ?, ?, ?, 'imported', ?, ?, 0, ?, ?, ?)''',
+                (server_id, imported_name, str(server_dir), executable, java_args,
+                 imported_version, owner, 1 if approved else 0,
+                 category, datetime.now().isoformat())
+            )
+            conn.commit()
             return True, server_id
         except Exception as e:
-            # Clean up on failure
             if server_dir.exists():
                 shutil.rmtree(server_dir)
             return False, str(e)
-    
-    def update_server(self, server_id, **kwargs):
-        """Update server configuration"""
-        if server_id not in self.config.get('servers', {}):
-            return False
-        
-        # Enforce executable name based on category
-        category = kwargs.get('category', self.config['servers'][server_id].get('category', 'unmodded'))
-        kwargs['executable'] = 'server.sh' if category == 'bedrock' else 'server.jar'
-        
-        self.config['servers'][server_id].update(kwargs)
-        self._save_config()
-        
-        # If category was updated, also update managed.conf (remove deprecated Modded field)
-        if 'category' in kwargs:
-            server_config = self.config['servers'][server_id]
-            server_dir = Path(server_config.get('serverPath', ''))
-            managed_conf_path = server_dir / 'managed.conf'
-            if managed_conf_path.exists():
-                managed_config = self._read_managed_conf(server_dir)
-                managed_config.pop('Modded', None)
-                self._write_managed_conf(server_dir, managed_config)
-        
-        # If autoStart was updated, sync to managed.conf AutoStart
-        if 'autoStart' in kwargs:
-            server_config = self.config['servers'][server_id]
-            server_dir = Path(server_config.get('serverPath', ''))
-            managed_conf_path = server_dir / 'managed.conf'
-            if managed_conf_path.exists():
-                managed_config = self._read_managed_conf(server_dir)
-                managed_config['AutoStart'] = 'true' if kwargs['autoStart'] else 'false'
-                self._write_managed_conf(server_dir, managed_config)
-        
-        return True
-    
-    def delete_server(self, server_id, delete_files=False):
-        """Delete a server configuration
-        
-        Args:
-            server_id: The server ID to delete
-            delete_files: If True, also delete all server files. If False, only remove managed.conf
-        """
-        if server_id in self.servers:
-            self.stop_server(server_id)
-        
-        server_config = self.config.get('servers', {}).get(server_id)
-        if not server_config:
-            return False
-        
-        server_path = Path(server_config.get('serverPath', ''))
-        
-        if delete_files:
-            # Delete entire server directory
-            if server_path.exists():
-                try:
-                    shutil.rmtree(server_path)
-                except Exception as e:
-                    print(f"Error deleting server files: {e}")
-        else:
-            # Only remove managed.conf to unmanage the server
-            managed_conf = server_path / 'managed.conf'
-            if managed_conf.exists():
-                try:
-                    managed_conf.unlink()
-                except Exception as e:
-                    print(f"Error removing managed.conf: {e}")
-        
-        # Remove from config
-        del self.config['servers'][server_id]
-        self._save_config()
-        return True
     
     def start_server(self, server_id):
         """Start a Minecraft server"""
@@ -4342,22 +4178,21 @@ def _auto_start_servers():
     that occurs during JVM initialisation.
     """
     time.sleep(15)
-    servers_cfg = server_manager.config.get('servers', {})
+    all_servers = server_manager.get_servers_list(include_pending=False)
     auto_start_ids = [
-        sid for sid, cfg in servers_cfg.items()
-        if cfg.get('autoStart', False) and cfg.get('approved', True)
+        s['id'] for s in all_servers
+        if s.get('autoStart', False) and s.get('approved', True)
     ]
     if not auto_start_ids:
         return
     print(f"[AutoStart] {len(auto_start_ids)} server(s) queued for auto-start")
     for idx, server_id in enumerate(auto_start_ids):
-        name = server_manager.config['servers'][server_id].get('name', server_id)
+        name = server_manager.get_server_config(server_id).get('name', server_id)
         success, msg = server_manager.start_server(server_id)
         if success:
             print(f"[AutoStart] Started: {name}")
         else:
             print(f"[AutoStart] Failed to start '{name}': {msg}")
-        # Stagger subsequent starts to prevent overlapping JVM init CPU spikes
         if idx < len(auto_start_ids) - 1:
             time.sleep(30)
 
@@ -5362,9 +5197,7 @@ def setup_bedrock_server(server_id):
             properties_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
             
             # Update server config with the correct executable
-            server_config['executable'] = 'server.sh'
-            server_config['version'] = 'latest'
-            server_manager._save_config()
+            server_manager.update_server(server_id, executable='server.sh', version='latest')
             
             jar_bucket.download_progress[progress_id] = {
                 'status': 'complete',
@@ -5948,11 +5781,9 @@ def change_server_version(server_id):
         except Exception as e:
             return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
     
-    # Update version in config.json
-    if 'servers' in server_manager.config and server_id in server_manager.config['servers']:
-        server_manager.config['servers'][server_id]['version'] = new_version
-        server_manager._save_config()
-    
+    # Update version in DB and managed.conf
+    server_manager.update_server(server_id, version=new_version)
+
     # Update version in managed.conf
     managed_conf['Version'] = new_version
     server_manager._write_managed_conf(server_dir, managed_conf)
@@ -7808,13 +7639,18 @@ def list_backups(server_id):
                 'name': item.name,
                 'size': stat.st_size,
                 'created': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                'is_incremental': item.name.startswith('incremental-backup-'),
                 'is_scheduled': item.name.startswith('scheduled-backup-'),
                 'has_checksum': item.with_suffix('.sha256').exists()
             }
             backups.append(entry)
 
     backups.sort(key=lambda x: x['created'], reverse=True)
+
+    # Mark expired backups beyond the global retention limit
+    max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
+    for i, b in enumerate(backups):
+        b['expired'] = bool(max_backups > 0 and i >= max_backups)
+
     return jsonify({'backups': backups})
 
 @app.route('/api/servers/<server_id>/backups/create', methods=['POST'])
@@ -7834,7 +7670,6 @@ def create_backup(server_id):
 
     data = request.get_json(silent=True) or {}
     compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
-    is_incremental_req = bool(data.get('incremental', False))
     backup_type = str(data.get('backupType', 'manual'))
 
     def run_backup():
@@ -7855,38 +7690,26 @@ def create_backup(server_id):
                 if inst is None or not inst.is_running():
                     break
 
-        is_incremental = is_incremental_req
-        backup_name = f'incremental-backup-{timestamp}.zip' if is_incremental else f'backup-{timestamp}.zip'
+        is_incremental = False
+        backup_name = f'backup-{timestamp}.zip'
         backup_path = backup_dir / backup_name
 
         try:
-            cutoff_time = None
-            if is_incremental:
-                cutoff_time = backup_scheduler._get_last_backup_time(server_id)
-                if cutoff_time is None:
-                    is_incremental = False
-
             with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
                                  compresslevel=compression_level) as zipf:
                 file_count = 0
                 for root, dirs, files in os.walk(server_path):
                     for file in files:
                         file_path = Path(root) / file
-                        if cutoff_time is not None:
-                            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                            if mtime < cutoff_time:
-                                continue
                         arcname = file_path.relative_to(server_path)
                         zipf.write(file_path, arcname)
                         file_count += 1
 
                 manifest = {
-                    'type': 'incremental' if cutoff_time else 'full',
+                    'type': 'full',
                     'created': timestamp,
                     'file_count': file_count
                 }
-                if cutoff_time:
-                    manifest['base_time'] = cutoff_time.isoformat()
                 zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
 
             size = backup_path.stat().st_size
@@ -7900,13 +7723,16 @@ def create_backup(server_id):
                 'type': backup_type,
                 'backup_name': backup_name,
                 'size': size,
-                'is_incremental': cutoff_time is not None,
                 'compression_level': compression_level,
                 'verified': ok,
                 'checksum': checksum,
                 'uploaded_to_external': ext_ok,
                 'success': True
             })
+
+            # Apply global backup retention if auto-delete is enabled
+            if settings_manager.get_app_settings().get('autoDeleteExpiredBackups', False):
+                backup_scheduler._cleanup_old_backups(server_id)
 
             if was_running:
                 server_manager.start_server(server_id)
@@ -7915,7 +7741,6 @@ def create_backup(server_id):
                 'serverId': server_id,
                 'backup': backup_name,
                 'size': size,
-                'is_incremental': cutoff_time is not None,
                 'verified': ok,
                 'checksum': checksum
             })
@@ -8150,9 +7975,7 @@ def set_backup_schedule(server_id):
         'cron': data.get('cron', ''),
         'stopServer': data.get('stopServer', True),
         'restartAfter': data.get('restartAfter', True),
-        'maxBackups': data.get('maxBackups', 7),
         'compressionLevel': data.get('compressionLevel', 6),
-        'incremental': data.get('incremental', False)
     })
     
     return jsonify({'success': True, 'schedule': schedule})
@@ -8184,6 +8007,28 @@ def get_all_backup_schedules():
     
     return jsonify({'schedules': user_schedules})
 
+
+@app.route('/api/servers/<server_id>/backups/delete-expired', methods=['POST'])
+@server_access_required
+def delete_expired_backups_for_server(server_id):
+    """Delete all expired backups for a single server"""
+    max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
+    if max_backups <= 0:
+        return jsonify({'error': 'No backup retention limit is configured. Set "Hold X Backups" in Game Server Settings first.'}), 400
+    deleted = backup_scheduler._cleanup_old_backups(server_id, max_backups)
+    return jsonify({'success': True, 'deleted': deleted})
+
+@app.route('/api/backups/delete-expired', methods=['POST'])
+@admin_required
+def delete_all_expired_backups():
+    """Delete expired backups across all servers (admin only)"""
+    max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
+    if max_backups <= 0:
+        return jsonify({'error': 'No backup retention limit is configured. Set "Hold X Backups" in Game Server Settings first.'}), 400
+    total_deleted = 0
+    for server_id in list(server_manager.get_all_server_ids()):
+        total_deleted += backup_scheduler._cleanup_old_backups(server_id, max_backups)
+    return jsonify({'success': True, 'deleted': total_deleted})
 
 @app.route('/api/servers/<server_id>/backups/history', methods=['GET'])
 @server_access_required
@@ -10662,7 +10507,8 @@ def _graceful_shutdown(signum=None, frame=None):
             try:
                 inst = server_manager.servers.get(server_id)
                 if inst and inst.is_running():
-                    name = server_manager.config.get('servers', {}).get(server_id, {}).get('name', server_id)
+                    cfg = server_manager.get_server_config(server_id)
+                    name = cfg.get('name', server_id) if cfg else server_id
                     print(f"[Shutdown] Sending stop to '{name}' ({server_id})")
                     inst.send_command('stop')
             except Exception as e:
@@ -10681,7 +10527,8 @@ def _graceful_shutdown(signum=None, frame=None):
         # Force-kill anything still alive
         for server_id, inst in list(server_manager.servers.items()):
             if inst.is_running():
-                name = server_manager.config.get('servers', {}).get(server_id, {}).get('name', server_id)
+                cfg = server_manager.get_server_config(server_id)
+                name = cfg.get('name', server_id) if cfg else server_id
                 print(f"[Shutdown] Force-killing '{name}' ({server_id}) after timeout")
                 try:
                     inst.process.kill()

@@ -494,9 +494,9 @@ do_install() {
         cp "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
         cp "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
         cp "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/db.py" "$INSTALL_DIR/" 2>/dev/null || true
         cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
         cp "$SCRIPT_DIR/version" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$SCRIPT_DIR/users.json" "$INSTALL_DIR/" 2>/dev/null || true
         
         # Copy directories
         if [ -d "$SCRIPT_DIR/public" ]; then
@@ -563,10 +563,8 @@ do_update() {
     
     # Display what will be preserved
     print_info "Files and data to be PRESERVED during update:"
-    echo "  • config.json (server configurations)"
-    echo "  • users.json (user accounts)"
+    echo "  • msc.db (SQLite database — users, servers, schedules, tasks, stats, API keys)"
     echo "  • settings.json (app settings)"
-    echo "  • stats.json (performance metrics)"
     echo "  • servers/* (all game server data)"
     echo "  • backups/* (all backups)"
     echo "  • uploads/* (uploaded files)"
@@ -586,12 +584,8 @@ do_update() {
     
     # List of critical files to preserve
     local preserve_files=(
-        "config.json"
-        "users.json"
+        "msc.db"
         "settings.json"
-        "stats.json"
-        "schedules.json"
-        "tasks.json"
         ".env"
     )
     
@@ -621,6 +615,7 @@ do_update() {
         
         cp -f "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: server_core.py" || true
         cp -f "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: api_manager.py" || true
+        cp -f "$SCRIPT_DIR/db.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: db.py" || true
         cp -f "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
         print_success "  Updated: requirements.txt"
         
@@ -951,9 +946,9 @@ do_status() {
     
     echo ""
     
-    # Show config info if exists
-    if [ -f "$INSTALL_DIR/config.json" ]; then
-        SERVER_COUNT=$(grep -c '"name"' "$INSTALL_DIR/config.json" 2>/dev/null || echo "0")
+    # Show config info if database exists
+    if [ -f "$INSTALL_DIR/msc.db" ]; then
+        SERVER_COUNT=$(sqlite3 "$INSTALL_DIR/msc.db" "SELECT COUNT(*) FROM servers;" 2>/dev/null || echo "0")
         echo "Configured servers: $SERVER_COUNT"
     fi
     
