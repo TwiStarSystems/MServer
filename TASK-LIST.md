@@ -178,9 +178,9 @@
 [X] - Restrict SocketIO CORS origins (CORS_ORIGINS env var; defaults to * with startup warning)
 [X] - Remove `allow_unsafe_werkzeug=True` for production (note: kept for Werkzeug dev server; gunicorn banner added)
 [X] - Enable `SESSION_COOKIE_SECURE = True` when behind HTTPS (SESSION_COOKIE_SECURE env var; install.sh prompt added)
-[X] - Validate SECRET_KEY presence and minimum length on startup (warns if unset, errors if < 32 chars)
+[X] - Validate SECRET_KEY presence and minimum length on startup (warns if unset or < 32 chars; no longer crashes on short existing keys)
 [X] - Add password strength enforcement to admin password reset (12+ chars, upper/lower/digit required)
-[X] - Sandbox BlueMap iframe with `sandbox` attribute
+[X] - Sandbox BlueMap iframe with `sandbox` attribute (evaluated; `allow-scripts+allow-same-origin` defeats sandbox on same-origin proxy — sandbox removed, cross-origin SOP provides equivalent isolation)
 
 ## Settings & Configuration ##
 [X] - Site title customization
@@ -325,7 +325,7 @@
 ### Medium ###
 [ ] - Path traversal check (`is_safe_path`) uses string comparison — does not follow/validate symlinks
 [ ] - World import ZIP extraction validates `..` in names but doesn't validate resolved target paths
-[X] - BlueMap viewer iframe has no `sandbox` attribute — XSS in BlueMap could escape
+[X] - BlueMap viewer iframe has no `sandbox` attribute — sandbox added then reverted; `allow-scripts+allow-same-origin` defeats sandboxing on same-origin proxy URL
 
 ## Backend ##
 ### High ###

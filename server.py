@@ -62,10 +62,12 @@ if not _raw_secret:
     )
     _raw_secret = secrets.token_hex(32)
 elif len(_raw_secret) < 32:
-    raise RuntimeError(
-        f"SECRET_KEY is too short ({len(_raw_secret)} characters). "
-        "Minimum 32 characters required for production security. "
-        "Regenerate your SECRET_KEY in .env."
+    import warnings
+    warnings.warn(
+        f"SECRET_KEY is short ({len(_raw_secret)} characters). "
+        "Minimum 32 characters is recommended for production security. "
+        "Consider regenerating your SECRET_KEY in .env.",
+        stacklevel=2
     )
 app.config['SECRET_KEY'] = _raw_secret
 
@@ -3001,7 +3003,7 @@ class ServerManager:
         return self.config.get('servers', {}).get(server_id)
     
     def create_server(self, name, server_path='', executable='server.jar', java_args='-Xmx4G -Xms1G', 
-                      server_type=None, version=None, owner=None, approved=True, category='unmodded'):
+                      server_type=None, version=None, owner=None, approved=True, category='unmodded', port=None):
         """Create a new server configuration"""
         server_id = str(uuid.uuid4())[:8]
         
@@ -3012,11 +3014,9 @@ class ServerManager:
         server_dir = Path(server_path) if server_path else SERVERS_DIR / server_id
         server_dir.mkdir(parents=True, exist_ok=True)
         
-        # Determine if modded based on category
-        is_modded = category == 'modded'
-        is_bedrock = category == 'bedrock'
-        
         # Determine engine name
+        is_bedrock = category == 'bedrock'
+        is_modded = category == 'modded'
         engine_name = 'Vanilla'
         if is_bedrock:
             engine_name = 'Bedrock'
@@ -3024,7 +3024,7 @@ class ServerManager:
             engine_name = server_type.title()  # paper -> Paper, folia -> Folia, etc.
         
         # Create managed.conf file
-        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner, version=version)
+        self._create_managed_conf(server_dir, server_id, name, engine=engine_name, owner=owner, version=version, port=port)
         
         # Create canned_commands.conf so the server dir has it from the start
         self._ensure_canned_commands_conf(server_dir)
@@ -3051,36 +3051,44 @@ class ServerManager:
         'ManagedBy',
         'ServerId',
         'ServerName',
-        'Modded',
         'Engine',
+        'Version',
+        'Port',
         'Owner',
+        'AutoStart',
         'CreatedAt',
         'EULAAccepted',
-        'Version'
+        'LastStarted'
     ]
     
-    def _create_managed_conf(self, server_dir, server_id, name, modded=False, engine=None, owner=None, version=None):
+    def _create_managed_conf(self, server_dir, server_id, name, engine=None, owner=None, version=None, port=None, auto_start=False):
         """Create or update the managed.conf file for a server"""
         managed_conf_path = Path(server_dir) / 'managed.conf'
         
-        # Determine engine based on modded status
+        # Determine engine based on category
         if engine is None:
-            engine = 'Vanilla' if not modded else 'Unknown'
+            engine = 'Vanilla'
         
         # Version is now required - default to 'Unknown' if not provided
         if not version:
             version = 'Unknown'
         
+        # Port defaults to 25565 if not provided
+        if not port:
+            port = '25565'
+        
         config = {
             'ManagedBy': 'MServerController',
             'ServerId': server_id,
             'ServerName': name,
-            'Modded': 'true' if modded else 'false',
             'Engine': engine,
             'Version': version,
+            'Port': str(port),
             'Owner': owner or 'admin',
+            'AutoStart': 'true' if auto_start else 'false',
             'CreatedAt': datetime.now().isoformat(),
-            'EULAAccepted': 'false'
+            'EULAAccepted': 'false',
+            'LastStarted': ''
         }
         
         # If file exists, preserve existing settings
@@ -3089,11 +3097,12 @@ class ServerManager:
             config.update(existing)
             config['ServerId'] = server_id  # Always update these
             config['ServerName'] = name
-            config['Modded'] = 'true' if modded else 'false'
-            config['Engine'] = engine
-            config['Version'] = version  # Always update version
+            if engine:
+                config['Engine'] = engine
             if owner:
                 config['Owner'] = owner
+            # Remove deprecated Modded field if present
+            config.pop('Modded', None)
         
         self._write_managed_conf(server_dir, config)
     
@@ -3202,7 +3211,10 @@ class ServerManager:
         elif is_modded and server_type:
             engine_name = server_type.title()
         
-        self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner, version=version)
+        # Get port from server.properties if available
+        port = self.get_server_port(server_id)
+        
+        self._create_managed_conf(server_dir, server_id, name, engine=engine_name, owner=owner, version=version, port=port)
         
         return True, "Management enabled"
     
@@ -3241,7 +3253,7 @@ class ServerManager:
         except Exception as e:
             return False, f"Failed to write eula.txt: {e}"
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G', executable_name=None, owner=None, approved=True, category='unmodded'):
+    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G', executable_name=None, owner=None, approved=True, category='unmodded', port=None, engine=None):
         """Import a server from a ZIP file"""
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
@@ -3298,15 +3310,49 @@ class ServerManager:
             if 'servers' not in self.config:
                 self.config['servers'] = {}
             
-            # Determine if modded based on category
-            is_modded = category == 'modded'
+            # Check if the imported ZIP had a managed.conf (treat it as master)
+            managed_conf_path = server_dir / 'managed.conf'
+            has_existing_conf = managed_conf_path.exists()
             
-            # Create managed.conf file (imported servers have unknown engine)
-            engine_name = 'Vanilla' if not is_modded else 'Unknown'
-            self._create_managed_conf(server_dir, server_id, name, modded=is_modded, engine=engine_name, owner=owner)
+            if has_existing_conf:
+                # Preserve the existing managed.conf as master — only update ServerId and Owner
+                existing_conf = self._read_managed_conf(server_dir)
+                existing_conf['ServerId'] = server_id
+                if owner:
+                    existing_conf['Owner'] = owner
+                # Remove deprecated Modded field if present
+                existing_conf.pop('Modded', None)
+                # Ensure new required fields exist with defaults
+                if 'Port' not in existing_conf:
+                    existing_conf['Port'] = port or '25565'
+                if 'AutoStart' not in existing_conf:
+                    existing_conf['AutoStart'] = 'false'
+                if 'LastStarted' not in existing_conf:
+                    existing_conf['LastStarted'] = ''
+                self._write_managed_conf(server_dir, existing_conf)
+                
+                # Use values from existing conf for config.json
+                imported_name = existing_conf.get('ServerName', name)
+                imported_engine = existing_conf.get('Engine', engine or 'Unknown')
+                imported_version = existing_conf.get('Version', 'Unknown')
+            else:
+                # No existing conf — create one from user-provided data
+                # Determine engine name from category if not provided
+                if not engine:
+                    if category == 'bedrock':
+                        engine = 'Bedrock'
+                    elif category == 'modded':
+                        engine = 'Unknown'
+                    else:
+                        engine = 'Vanilla'
+                
+                self._create_managed_conf(server_dir, server_id, name, engine=engine, owner=owner, port=port)
+                imported_name = name
+                imported_engine = engine
+                imported_version = 'Unknown'
             
             self.config['servers'][server_id] = {
-                'name': name,
+                'name': imported_name,
                 'serverPath': str(server_dir),
                 'executable': executable,
                 'javaArgs': java_args,
@@ -3338,14 +3384,14 @@ class ServerManager:
         self.config['servers'][server_id].update(kwargs)
         self._save_config()
         
-        # If category was updated, also update managed.conf
+        # If category was updated, also update managed.conf (remove deprecated Modded field)
         if 'category' in kwargs:
             server_config = self.config['servers'][server_id]
             server_dir = Path(server_config.get('serverPath', ''))
             managed_conf_path = server_dir / 'managed.conf'
             if managed_conf_path.exists():
                 managed_config = self._read_managed_conf(server_dir)
-                managed_config['Modded'] = 'true' if kwargs['category'] == 'modded' else 'false'
+                managed_config.pop('Modded', None)
                 self._write_managed_conf(server_dir, managed_config)
         
         return True
@@ -3416,6 +3462,18 @@ class ServerManager:
                 instance = ServerInstance(server_id, server_path, executable, java_args, is_bedrock=is_bedrock)
                 instance.start()
                 self.servers[server_id] = instance
+                
+                # Update LastStarted in managed.conf
+                managed_conf_path = server_path / 'managed.conf'
+                if managed_conf_path.exists():
+                    managed_config = self._read_managed_conf(server_path)
+                    managed_config['LastStarted'] = datetime.now().isoformat()
+                    # Also sync Port from server.properties if available
+                    port = self.get_server_port(server_id)
+                    if port:
+                        managed_config['Port'] = port
+                    self._write_managed_conf(server_path, managed_config)
+                
                 return True, "Server started"
             except Exception as e:
                 return False, str(e)
@@ -4656,9 +4714,10 @@ def create_server():
         java_args=java_args,
         server_type=server_type,
         version=version,
-        owner=user_id,
+        owner=user.get('username', 'admin'),
         approved=approved,
-        category=category
+        category=category,
+        port=server_properties.get('server-port')
     )
     
     # Get server directory for creating files
@@ -4903,6 +4962,11 @@ def import_server():
     executable_name = request.form.get('executableName', '').strip()
     java_args = request.form.get('javaArgs', '-Xmx4G -Xms1G')
     category = request.form.get('category', 'unmodded')
+    port = request.form.get('port', '25565').strip()
+    engine = request.form.get('engine', '').strip() or None
+    
+    # Resolve owner to username instead of user_id
+    owner_username = user.get('username', 'admin')
     
     # Check if server approval is required (admins are always auto-approved)
     is_admin = user.get('role') == 'admin'
@@ -4919,9 +4983,11 @@ def import_server():
         success, result = server_manager.import_server_from_zip(
             name, temp_path, java_args,
             executable_name=executable_name or None,
-            owner=user_id,
+            owner=owner_username,
             approved=approved,
-            category=category
+            category=category,
+            port=port,
+            engine=engine
         )
         
         if success:

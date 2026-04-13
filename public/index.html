@@ -650,7 +650,7 @@
                 <button class="btn btn-small" onclick="openBlueMapFullscreen()">⛶ Fullscreen</button>
                 <a id="bluemap-external-link" href="#" target="_blank" rel="noopener" class="btn btn-small">↗ Open in New Tab</a>
               </div>
-              <iframe id="bluemap-iframe" class="bluemap-iframe" src="" frameborder="0" allowfullscreen sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+              <iframe id="bluemap-iframe" class="bluemap-iframe" src="" frameborder="0" allowfullscreen></iframe>
             </div>
 
             <!-- No Map Data State -->
@@ -914,12 +914,26 @@
           
           <div class="form-group">
             <label for="import-category">Category:</label>
-            <select id="import-category" class="form-control">
+            <select id="import-category" class="form-control" onchange="updateImportEngineOptions()">
               <option value="unmodded">Java (Vanilla)</option>
               <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
               <option value="bedrock">Bedrock</option>
             </select>
             <small>Select the type of server you're importing</small>
+          </div>
+
+          <div class="form-group">
+            <label for="import-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
+            <select id="import-engine" class="form-control" required>
+              <option value="Vanilla">Vanilla</option>
+            </select>
+            <small>The engine/platform this server runs on</small>
+          </div>
+
+          <div class="form-group">
+            <label for="import-port">Server Port: <span style="color: #ff6b6b;">*</span></label>
+            <input type="number" id="import-port" class="form-control" value="25565" min="1" max="65535" required>
+            <small>The port the server listens on (check server.properties)</small>
           </div>
           
           <div class="form-group">

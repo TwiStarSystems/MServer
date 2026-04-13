@@ -527,13 +527,13 @@ async function disableMFA() {
 
 function connectWebSocket() {
   socket = io({
-    transports: ['websocket'],       // Skip polling, go straight to WebSocket
+    transports: ['websocket', 'polling'], // Try WebSocket first, fall back to polling
     reconnection: true,
     reconnectionDelay: 1000,          // Wait 1s before first reconnect attempt
     reconnectionDelayMax: 5000,       // Cap reconnect delay at 5s
     reconnectionAttempts: Infinity,
     timeout: 15000,                   // 15s connection timeout
-    upgrade: false                    // Don't try to upgrade from polling
+    upgrade: true                     // Allow upgrading from polling to WebSocket
   });
   
   socket.on('connect', () => {
@@ -2967,6 +2967,8 @@ async function importServer(e) {
   const fileInput = document.getElementById('import-file');
   const executableName = document.getElementById('import-executable-name').value.trim();
   const category = document.getElementById('import-category').value;
+  const engine = document.getElementById('import-engine').value;
+  const port = document.getElementById('import-port').value;
   const minRam = document.getElementById('import-min-ram').value;
   const maxRam = document.getElementById('import-max-ram').value;
   const extraJvmArgs = document.getElementById('import-jvm-args').value.trim();
@@ -2979,6 +2981,16 @@ async function importServer(e) {
   
   if (!category) {
     showNotification('Please select a category', 'error');
+    return;
+  }
+  
+  if (!engine) {
+    showNotification('Please select a server engine', 'error');
+    return;
+  }
+  
+  if (!port || port < 1 || port > 65535) {
+    showNotification('Please enter a valid port (1-65535)', 'error');
     return;
   }
   
@@ -2995,6 +3007,8 @@ async function importServer(e) {
     if (executableName) formData.append('executableName', executableName);
     formData.append('javaArgs', javaArgs);
     formData.append('category', category);
+    formData.append('engine', engine);
+    formData.append('port', port);
     
     const response = await fetch('/api/servers/import', {
       method: 'POST',
@@ -3002,11 +3016,19 @@ async function importServer(e) {
       body: formData
     });
     
-    const result = await response.json();
-    
     if (!response.ok) {
-      throw new Error(result.error || 'Import failed');
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const errResult = await response.json();
+        throw new Error(errResult.error || `Import failed (${response.status})`);
+      } else if (response.status === 413) {
+        throw new Error('File too large — please reduce the ZIP size and try again');
+      } else {
+        throw new Error(`Import failed (HTTP ${response.status})`);
+      }
     }
+    
+    const result = await response.json();
     
     if (result.pendingApproval) {
       showNotification('Server imported and pending admin approval', 'info');
@@ -3025,6 +3047,27 @@ async function importServer(e) {
     const submitBtn = e.target.querySelector('button[type="submit"]');
     submitBtn.textContent = 'Import Server';
     submitBtn.disabled = false;
+  }
+}
+
+// Update engine options when import category changes
+function updateImportEngineOptions() {
+  const category = document.getElementById('import-category').value;
+  const engineSelect = document.getElementById('import-engine');
+  engineSelect.innerHTML = '';
+  
+  if (category === 'bedrock') {
+    engineSelect.innerHTML = '<option value="Bedrock">Bedrock</option>';
+  } else if (category === 'modded') {
+    const engines = ['Paper', 'Folia', 'Purpur', 'Spigot', 'Forge', 'NeoForge', 'Fabric', 'Other'];
+    engines.forEach(e => {
+      const opt = document.createElement('option');
+      opt.value = e;
+      opt.textContent = e;
+      engineSelect.appendChild(opt);
+    });
+  } else {
+    engineSelect.innerHTML = '<option value="Vanilla">Vanilla</option>';
   }
 }
 
