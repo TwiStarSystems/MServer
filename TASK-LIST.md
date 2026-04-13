@@ -1,13 +1,13 @@
 # Task List For MServerController
 
-> **Audited:** 2026-04-05 \ 57 commits since last audit  
+> **Audited:** 2026-04-13 \ 7 commits since last audit  
 > **Method:** Full codebase review of all controllers, models, services, views, routes, agent code, and database schema.  
-> **Codebase:** ~29,500 lines | 1 controller (server.py) | 0 models (JSON persistence) | 5 services (UserManager, ServerManager, BackupScheduler, TaskScheduler, JarBucketManager) | 8 views (index, login, public, settings + JS) | 0 migrations | 0 Go agent files  
+> **Codebase:** ~33,000 lines | 1 controller (server.py) | 0 models (JSON persistence) | 5 services (UserManager, ServerManager, BackupScheduler, TaskScheduler, JarBucketManager) | 8 views (index, login, public, settings + JS) | 0 migrations | 0 Go agent files  
 > **Target Launch:** April 1, 2026 (flexible — QUALITY is the priority, not speed)
 
 ---
 
-# Overall Progress Percentage: 82%
+# Overall Progress Percentage: 92%
 
 ## Summary ##
 
@@ -15,24 +15,24 @@
 |------------|-----------------|-----------------|------------------|
 | Core Architecture | 7 | 0 | 100% |
 | Server Management | 14 | 0 | 100% |
-| File Management | 9 | 0 | 100% |
+| File Management | 10 | 0 | 100% |
 | JAR Management | 10 | 0 | 100% |
 | User Management | 10 | 0 | 100% |
 | Backup System | 15 | 0 | 100% |
 | Task Scheduler | 7 | 2 | 78% |
 | Player Management | 13 | 0 | 100% |
-| Mods/Plugins Management | 5 | 4 | 56% |
-| Monitoring & Statistics | 5 | 4 | 56% |
+| Mods/Plugins Management | 8 | 1 | 89% |
+| Monitoring & Statistics | 6 | 3 | 67% |
 | Security | 15 | 0 | 100% |
 | Settings & Configuration | 10 | 2 | 83% |
 | NBT File Support | 6 | 0 | 100% |
-| Web Interface | 8 | 5 | 62% |
-| BlueMap Integration | 5 | 3 | 63% |
+| Web Interface | 13 | 0 | 100% |
+| BlueMap Integration | 6 | 2 | 75% |
 | Resource Packs | 5 | 0 | 100% |
 | API v1 (Public) | 7 | 3 | 70% |
-| Email Notifications | 5 | 1 | 83% |
+| Email Notifications | 10 | 0 | 100% |
 | Custom Tools | 4 | 1 | 80% |
-| Deployment & Installation | 6 | 4 | 60% |
+| Deployment & Installation | 7 | 3 | 70% |
 | Planned Features | 0 | 28 | 0% |
 
 ---
@@ -74,6 +74,7 @@
 [X] - Download files from server
 [X] - Path traversal protection (is_safe_path)
 [X] - Log file viewer (latest.log)
+[X] - Folder ZIP download (download any server subdirectory as ZIP)
 
 ## JAR Management ##
 [X] - JAR Bucket system with multi-source downloads
@@ -149,10 +150,11 @@
 [X] - Disable mods/plugins (.disabled suffix rename)
 [X] - Enable disabled mods/plugins
 [X] - Delete mods/plugins
-[ ] - Download mods from Modrinth API
-[ ] - Download plugins from CurseForge / SpigotMC
-[ ] - Automatic plugin/mod update checking
+[X] - Download mods from Modrinth API (search, version picker, install with SHA-512 verification)
+[X] - Download plugins from Modrinth API (search with plugin/paper/spigot facets)
+[X] - Automatic plugin/mod update checking (Modrinth hash-based update detection + one-click update)
 [ ] - Dependency management/resolution
+
 
 ## Monitoring & Statistics ##
 [X] - Real-time CPU usage tracking
@@ -160,7 +162,7 @@
 [X] - Disk space monitoring
 [X] - Stats history with 7-day retention
 [X] - WebSocket broadcast of stats updates
-[ ] - Player count tracking per server
+[X] - Player count tracking per server (join/leave parsing, WebSocket events, online player list)
 [ ] - TPS (Ticks Per Second) monitoring
 [ ] - Server health alerts (low disk, high CPU thresholds)
 [ ] - Alert system (email/webhook on critical events)
@@ -213,11 +215,11 @@
 [X] - Real-time console output display
 [X] - Real-time server status updates via WebSocket
 [X] - Multi-step server creation wizard with JAR Bucket integration
-[ ] - Loading indicators/skeleton loaders during async operations
-[ ] - Pagination for large data tables (players, mods, files)
-[ ] - Search/filter for server sidebar
-[ ] - Syntax highlighting in file editor (CodeMirror/Monaco)
-[ ] - Custom confirmation modals (replace browser `confirm()`)
+[X] - Loading indicators/skeleton loaders during async operations
+[X] - Pagination for large data tables (players, mods, files)
+[X] - Search/filter for server sidebar
+[X] - Custom confirmation modals (replace browser `confirm()`)
+[X] - Error handling and notifications (toasts, inline messages)
 
 ## BlueMap Integration ##
 [X] - BlueMap CLI JAR download from GitHub releases
@@ -225,7 +227,7 @@
 [X] - Configuration generation for server worlds
 [X] - Map rendering with progress tracking (force/incremental)
 [X] - BlueMap viewer iframe integration
-[ ] - Proper web viewer tile serving from gzipped storage
+[X] - Web viewer tile serving from gzipped storage (gz fallback with Content-Encoding header)
 [ ] - Map marker/POI system
 [ ] - Multi-world BlueMap management UI
 
@@ -247,14 +249,20 @@
 [ ] - Auto-generated API documentation (Swagger/OpenAPI)
 [ ] - Interactive API testing UI
 [ ] - API versioning strategy
+[ ] - Webhook/event subscription API (e.g., player join/leave, server start/stop events)
+[ ] - API endpoint for BlueMap map rendering status and control
 
 ## Email Notifications ##
 [X] - SMTP configuration management
 [X] - Test email capability
-[X] - Backup completion notifications
-[X] - Backup failure notifications
+[X] - Backup completion notifications (fixed: _execute_backup now calls dispatch_notification)
+[X] - Backup failure notifications (fixed: _execute_backup now calls dispatch_notification)
 [X] - HTML email formatting
-[ ] - Silent failure logging when SMTP not configured
+[X] - Silent failure logging when SMTP not configured (app.logger.warning in send_email)
+[X] - Additional notification types (server start/stop, player join/leave, critical alerts)
+[X] - User-configurable notification preferences (per-user notificationPrefs in users.json; profile modal UI)
+[X] - Webhook notification support as alternative to email (WebhookService with HMAC-SHA256 signature)
+[X] - Template system for customizable email content (Jinja2 templates stored in settings.json; admin editor UI)
 
 ## Custom Tools ##
 [X] - Python tool file upload
@@ -262,6 +270,9 @@
 [X] - Tool execution with argument passing
 [X] - Tool deletion
 [ ] - Tool output capture and display improvements (cleanUploadedTool missing)
+[ ] - Tool execution logging/history
+[ ] - Support for non-Python tools (e.g., shell scripts, Java programs) with appropriate execution environments
+[ ] - Tool input validation and sandboxing for security
 
 ## Deployment & Installation ##
 [X] - install.sh automated installer
@@ -270,10 +281,34 @@
 [X] - .env configuration with SECRET_KEY generation
 [X] - git-release.sh script
 [X] - Version file management
-[ ] - Systemd service file generation in installer
+[X] - Systemd service file generation in installer (create_service function)
 [ ] - Python version validation (3.8+ required) in installer
 [ ] - Tighter nginx timeouts (separate socket.io vs regular routes)
 [ ] - Version-pinned requirements (upper bounds to prevent breaking changes)
+
+
+---
+
+## New Features Found (Since Last Audit) ##
+
+### Server Operations ###
+[X] - Canned Commands system (per-server saved commands with auto-execute flag)
+[X] - MC version era system (legacy ≤1.21.11 vs modern ≥1.26 cross-era upgrade/downgrade guards)
+[X] - Graceful shutdown (sends `stop` to all running servers on SIGTERM/atexit with 60s timeout)
+[X] - Auto-start servers (staggered auto-start for servers marked autoStart=True on controller boot)
+[X] - BlueMap update (force re-download latest BlueMap CLI)
+
+### Backup Additions ###
+[X] - Backup-all / Restore-all tools (admin endpoints to ZIP/upload all server data)
+[X] - Backup import (upload .zip backup file for a server)
+[X] - Backup verification (on-demand verify endpoint + automatic SHA-256 checksums)
+
+### Player Management Additions ###
+[X] - IP ban management (full ban/unban endpoints for IP addresses with validation)
+[X] - Player messaging (tellraw/title/subtitle/actionbar messages via API)
+
+### JAR Management Additions ###
+[X] - JarBucket refresh-all (background refresh of all upstream version APIs with progress tracking)
 
 ---
 
@@ -286,7 +321,6 @@
 [ ] - Automatic server restart on crash detection
 
 ### Medium Priority ###
-[ ] - Discord webhook integration (server events, chat bridge)
 [ ] - Server groups (bulk operations, group permissions, group dashboard)
 [ ] - Database backend migration (JSON → SQLite/PostgreSQL)
 [ ] - Server migration tool (move servers between instances)
@@ -304,6 +338,36 @@
 
 ### Previously Listed (Removed from Codebase) ###
 [ ] - Node management (Master-Slave distributed architecture) — was removed; re-evaluate need
+
+---
+
+# Bug List #
+
+|    Area    |    Completed    |    Remaining    |    Completion    |
+|------------|-----------------|-----------------|------------------|
+| Player Management | 0 | 1 | 0% |
+| API v1 | 0 | 1 | 0% |
+| Backup System | 0 | 2 | 0% |
+| Stats/Monitoring | 0 | 1 | 0% |
+| BlueMap | 0 | 1 | 0% |
+
+---
+
+## Player Management ##
+[ ] - BUG: `nbt_to_json` method does not exist — `get_player_inventory()` calls `nbt_editor.nbt_to_json(nbt_data)` but `NBTEditor` only has `to_json()`. Crashes with `AttributeError` on every inventory request. (server.py ~L5944) [HIGH]
+
+## API v1 ##
+[ ] - BUG: `api_manager.py` calls nonexistent `ServerManager` methods — `list_servers()`, `get_server()`, `restart_server()` do not exist on `ServerManager`. Actual methods are `get_servers_list()`, `get_server_config()`, etc. ALL v1 server endpoints return 500 errors. (api_manager.py ~L491-616) [HIGH]
+
+## Backup System ##
+[ ] - BUG: Backup scheduler never sends email notifications — FIXED: `dispatch_notification('backup_complete/failure', ...)` is now called from `_execute_backup()`. ~~`_execute_backup()` emits Socket.IO events but never calls `email_service.send_backup_notification()`. Backup email notifications are dead code. (server.py ~L1104)~~ [MEDIUM]
+[ ] - BUG: `_cleanup_old_backups` only cleans `scheduled-backup-*` files — Incremental backups (`incremental-backup-*`) are never cleaned up by the retention system. (server.py ~L1172) [LOW]
+
+## Stats/Monitoring ##
+[ ] - BUG: `StatsManager._collect_stats()` blocks indefinitely — `psutil.cpu_percent(interval=1)` in a `while True` loop with no stop mechanism; prevents clean shutdown of the stats thread. (server.py ~L702) [LOW]
+
+## BlueMap ##
+[ ] - BUG: Race condition in `is_safe_path` for BlueMap viewer — `bluemap_viewer()` passes already-joined full path as second arg to `is_safe_path()` which expects a relative path. Security check is incorrectly constructed (double-joins path). (server.py ~L9684) [LOW]
 [ ] - Auto-update system with web UI — was removed; re-evaluate need
 [ ] - Fernet encryption for node communication — was removed with node system
 

@@ -80,25 +80,138 @@ let currentUser = null;
 // ==================== Notifications ====================
 
 function showNotification(message, type = 'info') {
-  // Remove existing notification
-  const existing = document.querySelector('.notification');
-  if (existing) existing.remove();
-  
-  const notification = document.createElement('div');
-  notification.className = `notification notification-${type}`;
-  notification.innerHTML = `
-    <span class="notification-message">${escapeHtml(message)}</span>
-    <button class="notification-close" onclick="this.parentElement.remove()">&times;</button>
+  // Use the toast system
+  showToast(message, type);
+}
+
+// ==================== Toast Notification System ====================
+
+let _toastCounter = 0;
+
+function showToast(message, type = 'info', duration = 5000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const icons = { info: 'ℹ️', success: '✅', warning: '⚠️', error: '❌' };
+  const id = `toast-${++_toastCounter}`;
+
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.id = id;
+  toast.style.position = 'relative';
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type] || icons.info}</span>
+    <span class="toast-message">${escapeHtml(message)}</span>
+    <button class="toast-close" onclick="removeToast('${id}')">&times;</button>
+    <div class="toast-progress" style="animation-duration: ${duration}ms;"></div>
   `;
-  
-  document.body.appendChild(notification);
-  
-  // Auto-remove after 5 seconds
-  setTimeout(() => {
-    if (notification.parentElement) {
-      notification.remove();
-    }
-  }, 5000);
+
+  container.appendChild(toast);
+
+  // Limit to 5 visible toasts
+  while (container.children.length > 5) {
+    container.removeChild(container.firstChild);
+  }
+
+  setTimeout(() => removeToast(id), duration);
+  return id;
+}
+
+function removeToast(id) {
+  const toast = document.getElementById(id);
+  if (!toast) return;
+  toast.classList.add('removing');
+  setTimeout(() => toast.remove(), 300);
+}
+
+// ==================== Confirm Modal System ====================
+
+let _confirmResolve = null;
+
+function confirmAction(message, { title = 'Confirm', icon = '⚠️', okText = 'Confirm', okClass = 'btn-danger', cancelText = 'Cancel' } = {}) {
+  return new Promise((resolve) => {
+    _confirmResolve = resolve;
+
+    document.getElementById('confirm-modal-icon').textContent = icon;
+    document.getElementById('confirm-modal-title').textContent = title;
+    document.getElementById('confirm-modal-body').textContent = message;
+
+    const okBtn = document.getElementById('confirm-modal-ok');
+    okBtn.textContent = okText;
+    okBtn.className = `btn ${okClass}`;
+
+    document.getElementById('confirm-modal-cancel').textContent = cancelText;
+    document.getElementById('confirm-modal-overlay').classList.add('active');
+
+    // Set up handlers (one-shot)
+    okBtn.onclick = () => closeConfirmModal(true);
+    document.getElementById('confirm-modal-cancel').onclick = () => closeConfirmModal(false);
+    document.getElementById('confirm-modal-overlay').onclick = (e) => {
+      if (e.target.id === 'confirm-modal-overlay') closeConfirmModal(false);
+    };
+  });
+}
+
+function closeConfirmModal(result) {
+  document.getElementById('confirm-modal-overlay').classList.remove('active');
+  if (_confirmResolve) {
+    _confirmResolve(result);
+    _confirmResolve = null;
+  }
+}
+
+// ==================== Skeleton Loaders ====================
+
+function showTableSkeleton(tbodyId, cols, rows = 5) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const widths = ['w-60', 'w-20', 'w-40', 'w-20'];
+  tbody.innerHTML = Array.from({ length: rows }, () =>
+    `<tr class="skeleton-row">${Array.from({ length: cols }, (_, i) =>
+      `<td><div class="skeleton-cell ${widths[i % widths.length]}"></div></td>`
+    ).join('')}</tr>`
+  ).join('');
+}
+
+// ==================== Pagination Utility ====================
+
+const PAGE_SIZE = 50;
+
+function renderPagination(containerId, totalItems, currentPage, onPageChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const totalPages = Math.ceil(totalItems / PAGE_SIZE);
+  if (totalPages <= 1) {
+    container.innerHTML = '';
+    return;
+  }
+
+  let html = '';
+  html += `<button ${currentPage <= 1 ? 'disabled' : ''} onclick="(${onPageChange.name || 'void'})(${currentPage - 1})">‹ Prev</button>`;
+
+  // Show page numbers with ellipsis
+  const pages = [];
+  pages.push(1);
+  for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p++) {
+    pages.push(p);
+  }
+  if (totalPages > 1) pages.push(totalPages);
+
+  // Deduplicate and sort
+  const uniquePages = [...new Set(pages)].sort((a, b) => a - b);
+
+  let prev = 0;
+  uniquePages.forEach(p => {
+    if (p - prev > 1) html += `<span class="pagination-info">…</span>`;
+    html += `<button class="${p === currentPage ? 'active' : ''}" onclick="(${onPageChange.name || 'void'})(${p})">${p}</button>`;
+    prev = p;
+  });
+
+  html += `<button ${currentPage >= totalPages ? 'disabled' : ''} onclick="(${onPageChange.name || 'void'})(${currentPage + 1})">Next ›</button>`;
+  html += `<span class="pagination-info">${totalItems} items</span>`;
+
+  container.innerHTML = html;
 }
 
 // ==================== Authentication ====================
@@ -190,7 +303,7 @@ async function loadBranding() {
 }
 
 async function logout() {
-  if (!confirm('Are you sure you want to logout?')) return;
+  if (!await confirmAction('Are you sure you want to logout?', { title: 'Logout', icon: '🚪', okText: 'Logout', okClass: 'btn-primary' })) return;
   
   try {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -640,7 +753,15 @@ async function loadServers() {
 function renderServerList() {
   const container = document.getElementById('server-list');
   const actionsBar = document.getElementById('server-list-actions');
+  const searchInput = document.getElementById('server-search');
+  const filter = (searchInput ? searchInput.value : '').toLowerCase().trim();
   
+  const filtered = filter
+    ? servers.filter(s => s.name.toLowerCase().includes(filter) ||
+        (s.status || '').toLowerCase().includes(filter) ||
+        (s.port && String(s.port).includes(filter)))
+    : servers;
+
   if (servers.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -654,7 +775,17 @@ function renderServerList() {
   
   if (actionsBar) actionsBar.style.display = 'flex';
   
-  container.innerHTML = servers.map(server => {
+  if (filtered.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <p>No matching servers</p>
+        <small>Try a different search term</small>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = filtered.map(server => {
     const status = server.status || 'stopped';
     const statusClasses = {
       'stopped': 'status-stopped',
@@ -1268,7 +1399,7 @@ async function stopAllServers() {
 async function killServer() {
   if (!currentServerId) return;
   
-  if (!confirm('Are you sure you want to forcefully kill the server?\n\nThis will immediately terminate the process without saving. Use only if the server is unresponsive.')) {
+  if (!await confirmAction('Are you sure you want to forcefully kill the server?\n\nThis will immediately terminate the process without saving. Use only if the server is unresponsive.', { title: 'Force Kill Server', icon: '💀', okText: 'Kill Server' })) {
     return;
   }
   
@@ -3177,7 +3308,7 @@ async function confirmDeleteServer(deleteFiles) {
   
   // Extra confirmation for full delete
   if (deleteFiles) {
-    if (!confirm(`⚠️ FINAL WARNING ⚠️\n\nYou are about to PERMANENTLY DELETE "${server?.name}" and ALL its files!\n\nThis includes:\n• World data\n• Plugins\n• Configurations\n• Backups in server folder\n\nThis action CANNOT be undone!\n\nAre you absolutely sure?`)) {
+    if (!await confirmAction(`You are about to PERMANENTLY DELETE "${server?.name}" and ALL its files!\n\nThis includes:\n• World data\n• Plugins\n• Configurations\n• Backups in server folder\n\nThis action CANNOT be undone!`, { title: 'FINAL WARNING', icon: '🗑️', okText: 'Delete Everything' })) {
       return;
     }
   }
@@ -3274,10 +3405,18 @@ function sendCommand(command) {
 
 // ==================== File Explorer ====================
 
+// ==================== File pagination state ====================
+let _allFiles = [];
+let _filePage = 1;
+
 async function loadFiles(path = '') {
   if (!currentServerId) return;
   
   currentPath = path;
+  _filePage = 1;
+  
+  const fileList = document.getElementById('file-list');
+  showTableSkeleton('file-list', 4, 6);
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/files?path=${encodeURIComponent(path)}`);
@@ -3288,16 +3427,14 @@ async function loadFiles(path = '') {
     }
     
     document.getElementById('current-path').textContent = '/' + path;
-    const fileList = document.getElementById('file-list');
-    fileList.innerHTML = '';
     
-    // Add parent directory link if not at root
+    // Build entries: parent dir + sorted files
+    _allFiles = [];
     if (path) {
       const parentPath = path.split('/').slice(0, -1).join('/');
-      fileList.appendChild(createFileRow({ name: '..', isDirectory: true }, parentPath));
+      _allFiles.push({ _raw: { name: '..', isDirectory: true }, _path: parentPath });
     }
     
-    // Sort: directories first, then files
     const sortedFiles = data.files.sort((a, b) => {
       if (a.isDirectory && !b.isDirectory) return -1;
       if (!a.isDirectory && b.isDirectory) return 1;
@@ -3306,11 +3443,34 @@ async function loadFiles(path = '') {
     
     sortedFiles.forEach(file => {
       const filePath = path ? `${path}/${file.name}` : file.name;
-      fileList.appendChild(createFileRow(file, filePath));
+      _allFiles.push({ _raw: file, _path: filePath });
     });
+    
+    renderFilePage();
   } catch (error) {
+    fileList.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load files</td></tr>';
+    document.getElementById('file-pagination').innerHTML = '';
     console.error('Failed to load files:', error);
   }
+}
+
+function renderFilePage() {
+  const fileList = document.getElementById('file-list');
+  fileList.innerHTML = '';
+  
+  const start = (_filePage - 1) * PAGE_SIZE;
+  const pageItems = _allFiles.slice(start, start + PAGE_SIZE);
+  
+  pageItems.forEach(item => {
+    fileList.appendChild(createFileRow(item._raw, item._path));
+  });
+  
+  renderPagination('file-pagination', _allFiles.length, _filePage, setFilePage);
+}
+
+function setFilePage(page) {
+  _filePage = page;
+  renderFilePage();
 }
 
 function createFileRow(file, filePath) {
@@ -3416,7 +3576,7 @@ async function saveFile() {
     });
     
     closeFileEditor();
-    alert('File saved successfully');
+    showNotification('File saved successfully', 'success');
   } catch (error) {
     console.error('Failed to save file:', error);
   }
@@ -3701,7 +3861,7 @@ function confirmAddNbtTag() {
   let value = document.getElementById('nbt-add-value').value;
   
   if (!name) {
-    alert('Please enter a tag name');
+    showNotification('Please enter a tag name', 'warning');
     return;
   }
   
@@ -3741,8 +3901,8 @@ function addNbtTagToData(data, parentPath, newTag) {
   }
 }
 
-function deleteNbtTag(path) {
-  if (!confirm('Are you sure you want to delete this tag?')) return;
+async function deleteNbtTag(path) {
+  if (!await confirmAction('Are you sure you want to delete this tag?', { title: 'Delete NBT Tag', icon: '🗑️', okText: 'Delete' })) return;
   
   deleteNbtTagFromData(currentNbtData, path);
   renderNbtTree();
@@ -3860,7 +4020,7 @@ async function createNewFolder() {
 
 async function deleteFile(filePath) {
   if (!currentServerId) return;
-  if (!confirm(`Are you sure you want to delete ${filePath}?`)) return;
+  if (!await confirmAction(`Are you sure you want to delete ${filePath}?`, { title: 'Delete File', icon: '🗑️', okText: 'Delete' })) return;
   
   try {
     await apiRequest(`/api/servers/${currentServerId}/files/delete`, {
@@ -3900,14 +4060,14 @@ async function uploadFile(file) {
     
     const result = await response.json();
     if (result.success) {
-      alert('File uploaded successfully');
+      showNotification('File uploaded successfully', 'success');
       loadFiles(currentPath);
     } else {
       throw new Error(result.error || 'Upload failed');
     }
   } catch (error) {
     console.error('Failed to upload file:', error);
-    alert('Upload failed: ' + error.message);
+    showNotification('Upload failed: ' + error.message, 'error');
   }
 }
 
@@ -3918,6 +4078,8 @@ async function loadBackups() {
   
   // Load schedule status
   loadBackupSchedule();
+  
+  showTableSkeleton('backup-list', 4, 4);
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/backups`);
@@ -4061,7 +4223,7 @@ async function importBackup(input) {
 
 async function deleteBackup(name) {
   if (!currentServerId) return;
-  if (!confirm(`Delete backup ${name}?`)) return;
+  if (!await confirmAction(`Delete backup "${name}"?`, { title: 'Delete Backup', icon: '🗑️', okText: 'Delete' })) return;
   
   try {
     await apiRequest(`/api/servers/${currentServerId}/backups/delete`, {
@@ -4310,7 +4472,7 @@ async function saveSchedule() {
 
 async function deleteSchedule() {
   if (!currentServerId) return;
-  if (!confirm('Are you sure you want to disable the backup schedule?')) return;
+  if (!await confirmAction('Are you sure you want to disable the backup schedule?', { title: 'Disable Schedule', icon: '📅', okText: 'Disable', okClass: 'btn-primary' })) return;
   
   try {
     await apiRequest(`/api/servers/${currentServerId}/backups/schedule`, {
@@ -4331,6 +4493,8 @@ let editingTaskId = null;
 
 async function loadTasks() {
   if (!currentServerId) return;
+  
+  showTableSkeleton('task-list', 8, 3);
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/tasks`);
@@ -4547,7 +4711,7 @@ async function saveTask() {
 async function deleteTask(taskId) {
   if (!currentServerId || !taskId) return;
   
-  if (!confirm('Are you sure you want to delete this task?')) {
+  if (!await confirmAction('Are you sure you want to delete this task?', { title: 'Delete Task', icon: '🗑️', okText: 'Delete' })) {
     return;
   }
   
@@ -4768,7 +4932,7 @@ async function uploadBlueMapJar(input) {
 
 async function updateBlueMap() {
   if (!currentServerId) return;
-  if (!confirm('Download the latest BlueMap version from GitHub? This will replace the current JAR.')) return;
+  if (!await confirmAction('Download the latest BlueMap version from GitHub? This will replace the current JAR.', { title: 'Update BlueMap', icon: '🗺️', okText: 'Update', okClass: 'btn-primary' })) return;
 
   try {
     showNotification('Downloading latest BlueMap...', 'info');
@@ -4782,43 +4946,70 @@ async function updateBlueMap() {
 
 // ==================== Mods Management ====================
 
+// ==================== Mods pagination state ====================
+let _allPlugins = [];
+let _allMods = [];
+let _pluginsPage = 1;
+let _modsPage = 1;
+
 async function loadMods() {
   if (!currentServerId) return;
   
-  const pluginsList = document.getElementById('plugins-list');
-  const modsList = document.getElementById('mods-list');
-  
-  pluginsList.innerHTML = '<tr><td colspan="4" class="empty-message">Loading plugins...</td></tr>';
-  modsList.innerHTML = '<tr><td colspan="4" class="empty-message">Loading mods...</td></tr>';
+  showTableSkeleton('plugins-list', 4, 3);
+  showTableSkeleton('mods-list', 4, 3);
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/mods`);
     
-    // Render plugins
-    if (data.plugins && data.plugins.length > 0) {
-      pluginsList.innerHTML = '';
-      data.plugins.forEach(plugin => {
-        pluginsList.appendChild(createModRow(plugin, 'plugins'));
-      });
-    } else {
-      pluginsList.innerHTML = '<tr><td colspan="4" class="empty-message">No plugins installed</td></tr>';
-    }
+    _allPlugins = data.plugins || [];
+    _allMods = data.mods || [];
+    _pluginsPage = 1;
+    _modsPage = 1;
     
-    // Render mods
-    if (data.mods && data.mods.length > 0) {
-      modsList.innerHTML = '';
-      data.mods.forEach(mod => {
-        modsList.appendChild(createModRow(mod, 'mods'));
-      });
-    } else {
-      modsList.innerHTML = '<tr><td colspan="4" class="empty-message">No mods installed</td></tr>';
-    }
+    renderPluginsPage();
+    renderModsPage();
   } catch (error) {
     console.error('Failed to load mods:', error);
-    pluginsList.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load plugins</td></tr>';
-    modsList.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load mods</td></tr>';
+    document.getElementById('plugins-list').innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load plugins</td></tr>';
+    document.getElementById('mods-list').innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load mods</td></tr>';
+    document.getElementById('plugins-pagination').innerHTML = '';
+    document.getElementById('mods-pagination').innerHTML = '';
   }
 }
+
+function renderPluginsPage() {
+  const tbody = document.getElementById('plugins-list');
+  if (_allPlugins.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-message">No plugins installed</td></tr>';
+    document.getElementById('plugins-pagination').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = '';
+  const start = (_pluginsPage - 1) * PAGE_SIZE;
+  _allPlugins.slice(start, start + PAGE_SIZE).forEach(plugin => {
+    tbody.appendChild(createModRow(plugin, 'plugins'));
+  });
+  renderPagination('plugins-pagination', _allPlugins.length, _pluginsPage, setPluginsPage);
+}
+
+function setPluginsPage(page) { _pluginsPage = page; renderPluginsPage(); }
+
+function renderModsPage() {
+  const tbody = document.getElementById('mods-list');
+  if (_allMods.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-message">No mods installed</td></tr>';
+    document.getElementById('mods-pagination').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = '';
+  const start = (_modsPage - 1) * PAGE_SIZE;
+  _allMods.slice(start, start + PAGE_SIZE).forEach(mod => {
+    tbody.appendChild(createModRow(mod, 'mods'));
+  });
+  renderPagination('mods-pagination', _allMods.length, _modsPage, setModsPage);
+}
+
+function setModsPage(page) { _modsPage = page; renderModsPage(); }
 
 function createModRow(mod, type) {
   const row = document.createElement('tr');
@@ -4878,7 +5069,7 @@ async function toggleMod(filename, type, isEnabled) {
 async function deleteMod(filename, type) {
   if (!currentServerId) return;
   
-  if (!confirm(`Are you sure you want to delete "${filename}"? This cannot be undone.`)) {
+  if (!await confirmAction(`Are you sure you want to delete "${filename}"? This cannot be undone.`, { title: 'Delete Mod', icon: '🗑️', okText: 'Delete' })) {
     return;
   }
   
@@ -4976,6 +5167,319 @@ function showModUploadDialog() {
   });
 }
 
+// ==================== Modrinth Browser ====================
+
+let _modrinthSearchPage = 0;
+let _modrinthLastQuery  = {};
+const MODRINTH_PAGE_SIZE = 20;
+
+function openModrinthSearch() {
+  if (!currentServerId) return;
+
+  // Pre-populate loader/version from server config if available
+  const server = servers.find(s => s.id === currentServerId);
+  if (server) {
+    const loaderMap = {
+      paper: 'paper', purpur: 'purpur', folia: 'folia', spigot: 'spigot',
+      fabric: 'fabric', forge: 'forge', neoforge: 'neoforge',
+    };
+    const typeEl = document.getElementById('modrinth-type');
+    const loaderEl = document.getElementById('modrinth-loader');
+    const mcVerEl = document.getElementById('modrinth-mcversion');
+
+    if (server.serverType && loaderMap[server.serverType.toLowerCase()]) {
+      loaderEl.value = loaderMap[server.serverType.toLowerCase()];
+      // Plugins loaders imply plugin type
+      if (['paper','purpur','folia','spigot'].includes(server.serverType.toLowerCase())) {
+        typeEl.value = 'plugin';
+      } else {
+        typeEl.value = 'mod';
+      }
+    }
+    if (server.version && server.version !== 'unknown') {
+      mcVerEl.value = server.version;
+    }
+  }
+
+  document.getElementById('modrinth-modal').classList.add('active');
+  document.getElementById('modrinth-query').focus();
+}
+
+function closeModrinthSearch() {
+  document.getElementById('modrinth-modal').classList.remove('active');
+}
+
+async function doModrinthSearch(pageOffset = 0) {
+  if (!currentServerId) return;
+
+  const query     = document.getElementById('modrinth-query').value.trim();
+  const type      = document.getElementById('modrinth-type').value;
+  const loader    = document.getElementById('modrinth-loader').value;
+  const mcVersion = document.getElementById('modrinth-mcversion').value.trim();
+
+  _modrinthSearchPage = pageOffset;
+  _modrinthLastQuery  = { query, type, loader, mcVersion };
+
+  const resultsEl = document.getElementById('modrinth-results');
+  resultsEl.innerHTML = '<div class="table-loading-overlay"><div class="loading-spinner"></div><span>Searching…</span></div>';
+  document.getElementById('modrinth-pagination').innerHTML = '';
+
+  try {
+    const params = new URLSearchParams({
+      query,
+      project_type: type,
+      loader,
+      mc_version:   mcVersion,
+      limit:        MODRINTH_PAGE_SIZE,
+      offset:       pageOffset,
+    });
+
+    const data = await apiRequest(`/api/servers/${currentServerId}/mods/search?${params}`);
+
+    if (!data.hits || data.hits.length === 0) {
+      resultsEl.innerHTML = '<p class="modrinth-hint">No results found. Try a different search.</p>';
+      return;
+    }
+
+    resultsEl.innerHTML = '';
+    data.hits.forEach(hit => {
+      const card = document.createElement('div');
+      card.className = 'modrinth-card';
+
+      const iconHtml = hit.icon_url
+        ? `<img class="modrinth-icon" src="${escapeHtml(hit.icon_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+        : `<div class="modrinth-icon-placeholder">📦</div>`;
+
+      const dlFormatted = hit.downloads >= 1_000_000
+        ? (hit.downloads / 1_000_000).toFixed(1) + 'M'
+        : hit.downloads >= 1000 ? (hit.downloads / 1000).toFixed(1) + 'K'
+        : String(hit.downloads);
+
+      card.innerHTML = `
+        ${iconHtml}
+        <div class="modrinth-info">
+          <div class="modrinth-title">${escapeHtml(hit.title)}</div>
+          <div class="modrinth-author">by ${escapeHtml(hit.author || '')}</div>
+          <div class="modrinth-desc">${escapeHtml(hit.description || '')}</div>
+          <div class="modrinth-meta">
+            <span class="modrinth-downloads">⬇️ ${dlFormatted}</span>
+            ${hit.categories.slice(0, 3).map(c => `<span class="badge badge-secondary">${escapeHtml(c)}</span>`).join('')}
+          </div>
+          <button class="btn btn-success btn-small modrinth-install-btn"
+                  onclick="openModrinthVersionModal('${escapeHtml(hit.project_id)}', '${escapeHtml(hit.title)}')">
+            Install
+          </button>
+        </div>
+      `;
+      resultsEl.appendChild(card);
+    });
+
+    // Pagination
+    const total = data.total_hits;
+    if (total > MODRINTH_PAGE_SIZE) {
+      const paginEl = document.getElementById('modrinth-pagination');
+      const currentPage = Math.floor(pageOffset / MODRINTH_PAGE_SIZE) + 1;
+      const totalPages  = Math.ceil(total / MODRINTH_PAGE_SIZE);
+
+      let html = `<button ${pageOffset === 0 ? 'disabled' : ''} onclick="doModrinthSearch(${Math.max(0, pageOffset - MODRINTH_PAGE_SIZE)})">‹ Prev</button>`;
+      html += `<span class="pagination-info">Page ${currentPage} of ${totalPages} (${total} results)</span>`;
+      html += `<button ${pageOffset + MODRINTH_PAGE_SIZE >= total ? 'disabled' : ''} onclick="doModrinthSearch(${pageOffset + MODRINTH_PAGE_SIZE})">Next ›</button>`;
+      paginEl.innerHTML = html;
+    }
+
+  } catch (error) {
+    resultsEl.innerHTML = `<p class="modrinth-hint" style="color:#f45c43;">Failed to search Modrinth: ${escapeHtml(error.message)}</p>`;
+    console.error('Modrinth search failed:', error);
+  }
+}
+
+// ==================== Modrinth Version Picker ====================
+
+let _modrinthInstallProjectId = '';
+
+async function openModrinthVersionModal(projectId, projectTitle) {
+  _modrinthInstallProjectId = projectId;
+
+  document.getElementById('modrinth-version-title').textContent = `Install: ${projectTitle}`;
+  document.getElementById('modrinth-version-list').innerHTML = '<p class="empty-message">Loading versions…</p>';
+  document.getElementById('modrinth-version-modal').classList.add('active');
+
+  // Pre-select install folder based on search type
+  const type = document.getElementById('modrinth-type').value;
+  document.getElementById('modrinth-install-folder').value = (type === 'plugin') ? 'plugins' : 'mods';
+
+  const loader    = document.getElementById('modrinth-loader').value;
+  const mcVersion = document.getElementById('modrinth-mcversion').value.trim();
+
+  try {
+    const params = new URLSearchParams({ loader, mc_version: mcVersion });
+    const data = await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/versions/${encodeURIComponent(projectId)}?${params}`);
+
+    const versions = data.versions || [];
+    if (versions.length === 0) {
+      document.getElementById('modrinth-version-list').innerHTML =
+        '<p class="empty-message">No compatible versions found for the selected loader/MC version.</p>';
+      return;
+    }
+
+    const listEl = document.getElementById('modrinth-version-list');
+    listEl.innerHTML = '';
+    versions.slice(0, 30).forEach(v => { // cap at 30 to avoid giant lists
+      const row = document.createElement('div');
+      row.className = 'modrinth-version-row';
+      row.innerHTML = `
+        <span class="modrinth-ver-name">${escapeHtml(v.name || v.version_number)}</span>
+        <span class="modrinth-ver-loaders">${v.loaders.join(', ')}</span>
+        <span class="modrinth-ver-mc">${v.game_versions.slice(-3).join(', ')}</span>
+        <span class="modrinth-ver-size">${formatBytes(v.size)}</span>
+        <button class="btn btn-success btn-small"
+                onclick="installModrinthVersion(
+                  '${escapeHtml(v.url)}',
+                  '${escapeHtml(v.filename)}',
+                  '${escapeHtml(v.sha512 || '')}')">
+          Install
+        </button>
+      `;
+      listEl.appendChild(row);
+    });
+  } catch (error) {
+    document.getElementById('modrinth-version-list').innerHTML =
+      `<p class="empty-message" style="color:#f45c43;">Failed to load versions: ${escapeHtml(error.message)}</p>`;
+    console.error('Failed to load Modrinth versions:', error);
+  }
+}
+
+function closeModrinthVersionModal() {
+  document.getElementById('modrinth-version-modal').classList.remove('active');
+}
+
+async function installModrinthVersion(url, filename, sha512) {
+  if (!currentServerId) return;
+
+  const modType = document.getElementById('modrinth-install-folder').value;
+
+  // Show in-progress state
+  const btn = event.target;
+  const origText = btn.textContent;
+  btn.textContent = 'Installing…';
+  btn.disabled = true;
+
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
+      method: 'POST',
+      body: JSON.stringify({ url, filename, mod_type: modType, sha512 }),
+    });
+
+    showNotification(`${filename} installed to ${modType}/`, 'success');
+    btn.textContent = '✅ Installed';
+    closeModrinthVersionModal();
+    loadMods();
+  } catch (error) {
+    showNotification(`Install failed: ${error.message}`, 'error');
+    btn.textContent = origText;
+    btn.disabled = false;
+    console.error('Modrinth install failed:', error);
+  }
+}
+
+// ==================== Mod Update Checker ====================
+
+async function checkModUpdates() {
+  if (!currentServerId) return;
+
+  const btn = document.getElementById('check-updates-btn');
+  if (btn) { btn.textContent = '⏳ Checking…'; btn.disabled = true; }
+
+  const server     = servers.find(s => s.id === currentServerId);
+  const loader     = (server?.serverType || '').toLowerCase();
+  const mcVersion  = (server?.version && server.version !== 'unknown') ? server.version : '';
+
+  const resultsEl = document.getElementById('mods-update-results');
+  resultsEl.style.display = 'none';
+
+  try {
+    const params = new URLSearchParams({ loader, mc_version: mcVersion });
+    const data = await apiRequest(`/api/servers/${currentServerId}/mods/updates?${params}`);
+
+    const updates = data.updates || [];
+
+    if (updates.length === 0) {
+      showNotification('All mods are up-to-date (or not found on Modrinth)', 'success');
+      resultsEl.style.display = 'none';
+    } else {
+      let html = `<h4>🔄 ${updates.length} update${updates.length !== 1 ? 's' : ''} available</h4>`;
+      updates.forEach(u => {
+        html += `
+          <div class="update-item">
+            <span class="update-filename">📦 ${escapeHtml(u.current_filename)}</span>
+            <span class="update-arrow">→</span>
+            <span class="update-new-ver">${escapeHtml(u.version_number)}</span>
+            <span class="update-arrow">(${escapeHtml(u.filename)})</span>
+            <button class="btn btn-success btn-small"
+                    onclick="applyModUpdate(
+                      '${escapeHtml(u.url)}',
+                      '${escapeHtml(u.filename)}',
+                      '${escapeHtml(u.sha512 || '')}',
+                      '${escapeHtml(u.folder)}',
+                      '${escapeHtml(u.current_filename)}',
+                      this)">
+              Update
+            </button>
+          </div>
+        `;
+      });
+      resultsEl.innerHTML = html;
+      resultsEl.style.display = 'block';
+    }
+  } catch (error) {
+    showNotification(`Update check failed: ${error.message}`, 'error');
+    console.error('Update check failed:', error);
+  } finally {
+    if (btn) { btn.textContent = '🔄 Check Updates'; btn.disabled = false; }
+  }
+}
+
+async function applyModUpdate(url, filename, sha512, folder, currentFilename, btn) {
+  if (!currentServerId) return;
+
+  const confirmed = await confirmAction(
+    `Update "${currentFilename}" to "${filename}"?\n\nThe old file will be replaced.`,
+    { title: 'Update Mod', icon: '🔄', okText: 'Update', okClass: 'btn-success' }
+  );
+  if (!confirmed) return;
+
+  const origText = btn.textContent;
+  btn.textContent = '⏳';
+  btn.disabled = true;
+
+  try {
+    // Install new version
+    await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
+      method: 'POST',
+      body: JSON.stringify({ url, filename, mod_type: folder, sha512 }),
+    });
+
+    // Delete old file if the filename is different
+    if (filename !== currentFilename) {
+      try {
+        await apiRequest(`/api/servers/${currentServerId}/mods/${folder}/${encodeURIComponent(currentFilename)}`, {
+          method: 'DELETE'
+        });
+      } catch (_) { /* best effort — new file already installed */ }
+    }
+
+    showNotification(`Updated to ${filename}`, 'success');
+    btn.closest('.update-item').remove();
+    const remaining = document.querySelectorAll('.update-item').length;
+    if (remaining === 0) document.getElementById('mods-update-results').style.display = 'none';
+    loadMods();
+  } catch (error) {
+    showNotification(`Update failed: ${error.message}`, 'error');
+    btn.textContent = origText;
+    btn.disabled = false;
+  }
+}
+
 // ==================== Player Management ====================
 
 let currentEditingOpUuid = null;
@@ -4997,7 +5501,7 @@ async function loadOperators() {
   if (!currentServerId) return;
   
   const tbody = document.getElementById('ops-list');
-  tbody.innerHTML = '<tr><td colspan="5" class="empty-message">Loading...</td></tr>';
+  showTableSkeleton('ops-list', 5, 3);
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/players/ops`);
@@ -5027,14 +5531,18 @@ async function loadOperators() {
   }
 }
 
+// ==================== Player Data pagination state ====================
+let _allPlayerRows = [];
+let _playerDataPage = 1;
+
 async function loadPlayerData() {
   if (!currentServerId) return;
   
   const tbody = document.getElementById('playerdata-list');
-  tbody.innerHTML = '<tr><td colspan="4" class="empty-message">Loading...</td></tr>';
+  showTableSkeleton('playerdata-list', 4, 5);
+  _playerDataPage = 1;
   
   try {
-    // Load player data, ops, whitelist and banned in parallel
     const [playerDataResponse, opsResponse, whitelistResponse, bannedResponse] = await Promise.all([
       apiRequest(`/api/servers/${currentServerId}/players/playerdata`),
       apiRequest(`/api/servers/${currentServerId}/players/ops`),
@@ -5049,30 +5557,29 @@ async function loadPlayerData() {
     
     if (playerDataResponse.message) {
       tbody.innerHTML = `<tr><td colspan="4" class="empty-message">${escapeHtml(playerDataResponse.message)}</td></tr>`;
+      document.getElementById('playerdata-pagination').innerHTML = '';
       return;
     }
     
     if (players.length === 0) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty-message">No player data found</td></tr>';
+      document.getElementById('playerdata-pagination').innerHTML = '';
       return;
     }
     
     const whitelistUuids = new Set(whitelist.map(p => p.uuid));
     const bannedUuids = new Set(banned.map(p => p.uuid));
 
-    tbody.innerHTML = players.map(player => {
-      // OP button
+    _allPlayerRows = players.map(player => {
       const op = ops.find(o => o.uuid === player.uuid);
       const opButton = op 
         ? `<button class="btn btn-small btn-danger" onclick="removeOperator('${player.uuid}', '${escapeHtml(op.name)}')">Remove OP</button>`
         : `<button class="btn btn-small btn-success" onclick="makePlayerOp('${player.uuid}')">Make OP</button>`;
 
-      // Whitelist button
       const wlButton = whitelistUuids.has(player.uuid)
         ? `<button class="btn btn-small btn-secondary" disabled title="Already whitelisted">✓ WL</button>`
         : `<button class="btn btn-small" onclick="whitelistPlayerByUuid('${player.uuid}')">Whitelist</button>`;
 
-      // Ban button
       const banButton = bannedUuids.has(player.uuid)
         ? `<button class="btn btn-small btn-secondary" disabled title="Already banned">Banned</button>`
         : `<button class="btn btn-small btn-danger" onclick="banPlayerByUuid('${player.uuid}')">Ban</button>`;
@@ -5092,17 +5599,29 @@ async function loadPlayerData() {
           </td>
         </tr>
       `;
-    }).join('');
+    });
+    
+    renderPlayerDataPage();
   } catch (error) {
     tbody.innerHTML = '<tr><td colspan="4" class="empty-message error">Failed to load player data</td></tr>';
+    document.getElementById('playerdata-pagination').innerHTML = '';
   }
 }
+
+function renderPlayerDataPage() {
+  const tbody = document.getElementById('playerdata-list');
+  const start = (_playerDataPage - 1) * PAGE_SIZE;
+  tbody.innerHTML = _allPlayerRows.slice(start, start + PAGE_SIZE).join('');
+  renderPagination('playerdata-pagination', _allPlayerRows.length, _playerDataPage, setPlayerDataPage);
+}
+
+function setPlayerDataPage(page) { _playerDataPage = page; renderPlayerDataPage(); }
 
 async function loadWhitelist() {
   if (!currentServerId) return;
   
   const tbody = document.getElementById('whitelist-list');
-  tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Loading...</td></tr>';
+  showTableSkeleton('whitelist-list', 3, 3);
   
   try {
     const [data, statusData] = await Promise.all([
@@ -5199,7 +5718,7 @@ async function loadBannedPlayers() {
   if (!currentServerId) return;
   
   const tbody = document.getElementById('banned-list');
-  tbody.innerHTML = '<tr><td colspan="6" class="empty-message">Loading...</td></tr>';
+  showTableSkeleton('banned-list', 6, 3);
   
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/players/banned`);
@@ -5250,7 +5769,7 @@ async function addOperator() {
   const bypassLimit = document.getElementById('op-bypass-limit').checked;
   
   if (!name) {
-    alert('Please enter a player name');
+    showNotification('Please enter a player name', 'warning');
     return;
   }
   
@@ -5302,7 +5821,7 @@ async function saveOperator() {
 }
 
 async function removeOperator(uuid, name) {
-  if (!confirm(`Remove ${name} from operators?`)) return;
+  if (!await confirmAction(`Remove ${name} from operators?`, { title: 'Remove Operator', icon: '👑', okText: 'Remove' })) return;
   
   try {
     await apiRequest(`/api/servers/${currentServerId}/players/ops/${uuid}`, {
@@ -5344,7 +5863,7 @@ async function addToWhitelist() {
   const name = document.getElementById('whitelist-player-name').value.trim();
   
   if (!name) {
-    alert('Please enter a player name');
+    showNotification('Please enter a player name', 'warning');
     return;
   }
   
@@ -5363,7 +5882,7 @@ async function addToWhitelist() {
 }
 
 async function removeFromWhitelist(uuid, name) {
-  if (!confirm(`Remove ${name} from whitelist?`)) return;
+  if (!await confirmAction(`Remove ${name} from whitelist?`, { title: 'Remove from Whitelist', icon: '📝', okText: 'Remove' })) return;
   
   try {
     await apiRequest(`/api/servers/${currentServerId}/players/whitelist/${uuid}`, {
@@ -5398,14 +5917,14 @@ async function banPlayer() {
   if (expiresType === 'date') {
     const dateVal = document.getElementById('ban-expires-date').value;
     if (!dateVal) {
-      alert('Please select an expiry date');
+      showNotification('Please select an expiry date', 'warning');
       return;
     }
     expires = new Date(dateVal).toISOString();
   }
   
   if (!name) {
-    alert('Please enter a player name');
+    showNotification('Please enter a player name', 'warning');
     return;
   }
   
@@ -5424,7 +5943,7 @@ async function banPlayer() {
 }
 
 async function unbanPlayer(uuid, name) {
-  if (!confirm(`Unban ${name}?`)) return;
+  if (!await confirmAction(`Unban ${name}?`, { title: 'Unban Player', icon: '🚫', okText: 'Unban', okClass: 'btn-success' })) return;
   
   try {
     await apiRequest(`/api/servers/${currentServerId}/players/banned/${uuid}`, {
@@ -5582,7 +6101,7 @@ async function loadBannedIPs() {
   if (!currentServerId) return;
   const tbody = document.getElementById('banned-ips-list');
   if (!tbody) return;
-  tbody.innerHTML = '<tr><td colspan="5" class="empty-message">Loading...</td></tr>';
+  showTableSkeleton('banned-ips-list', 5, 3);
 
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/players/banned-ips`);
@@ -5641,10 +6160,10 @@ async function banIp() {
   let expires = 'forever';
   if (expiresType === 'date') {
     const dateVal = document.getElementById('ban-ip-expires-date').value;
-    if (!dateVal) { alert('Please select an expiry date'); return; }
+    if (!dateVal) { showNotification('Please select an expiry date', 'warning'); return; }
     expires = new Date(dateVal).toISOString();
   }
-  if (!ip) { alert('Please enter an IP address'); return; }
+  if (!ip) { showNotification('Please enter an IP address', 'warning'); return; }
 
   try {
     const result = await apiRequest(`/api/servers/${currentServerId}/players/banned-ips`, {
@@ -5660,7 +6179,7 @@ async function banIp() {
 }
 
 async function unbanIp(ip) {
-  if (!confirm(`Unban IP ${ip}?`)) return;
+  if (!await confirmAction(`Unban IP ${ip}?`, { title: 'Unban IP', icon: '🌐', okText: 'Unban', okClass: 'btn-success' })) return;
   try {
     await apiRequest(`/api/servers/${currentServerId}/players/banned-ips/${encodeURIComponent(ip)}`, {
       method: 'DELETE'
@@ -5689,8 +6208,8 @@ async function sendPlayerMessage() {
   const type = document.getElementById('msg-type').value;
   const message = document.getElementById('msg-text').value.trim();
 
-  if (!message) { alert('Please enter a message'); return; }
-  if (!target) { alert('Please enter a target'); return; }
+  if (!message) { showNotification('Please enter a message', 'warning'); return; }
+  if (!target) { showNotification('Please enter a target', 'warning'); return; }
 
   try {
     const result = await apiRequest(`/api/servers/${currentServerId}/players/message`, {
@@ -5766,6 +6285,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const welcomeAddBtn = document.getElementById('welcome-add-btn');
   if (addServerBtn) addServerBtn.onclick = openAddServerModal;
   if (welcomeAddBtn) welcomeAddBtn.onclick = openAddServerModal;
+  
+  // Server sidebar search
+  const serverSearch = document.getElementById('server-search');
+  if (serverSearch) {
+    let _searchDebounce;
+    serverSearch.addEventListener('input', () => {
+      clearTimeout(_searchDebounce);
+      _searchDebounce = setTimeout(renderServerList, 150);
+    });
+  }
   
   // Server forms
   const freshForm = document.getElementById('fresh-server-form');
@@ -5909,6 +6438,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     taskModal.onclick = (e) => {
       if (e.target.id === 'task-modal') closeTaskModal();
     };
+  }
+
+  // Modrinth modal close on backdrop + Enter-to-search
+  const modrinthModal = document.getElementById('modrinth-modal');
+  if (modrinthModal) {
+    modrinthModal.onclick = (e) => {
+      if (e.target.id === 'modrinth-modal') closeModrinthSearch();
+    };
+  }
+  const modrinthVersionModal = document.getElementById('modrinth-version-modal');
+  if (modrinthVersionModal) {
+    modrinthVersionModal.onclick = (e) => {
+      if (e.target.id === 'modrinth-version-modal') closeModrinthVersionModal();
+    };
+  }
+  const modrinthQuery = document.getElementById('modrinth-query');
+  if (modrinthQuery) {
+    modrinthQuery.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doModrinthSearch();
+    });
   }
 });
 
@@ -6646,7 +7195,7 @@ async function uploadResourcePack(file) {
 async function deleteResourcePack() {
   if (!currentServerId) return;
   
-  if (!confirm('Are you sure you want to delete this resource pack? This will also remove the resource pack configuration from server.properties.')) {
+  if (!await confirmAction('Are you sure you want to delete this resource pack? This will also remove the resource pack configuration from server.properties.', { title: 'Delete Resource Pack', icon: '📦', okText: 'Delete' })) {
     return;
   }
   
@@ -6846,7 +7395,7 @@ async function saveAddCmdModal() {
 }
 
 async function deleteCannedCommand(idx) {
-  if (!confirm('Delete this command?')) return;
+  if (!await confirmAction('Delete this command?', { title: 'Delete Command', icon: '⚡', okText: 'Delete' })) return;
   _cannedCommands.splice(idx, 1);
   renderCannedCommandsGrid();
   renderCannedCommandsTable();

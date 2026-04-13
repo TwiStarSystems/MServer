@@ -20,6 +20,7 @@ import time
 import struct
 import requests
 import hashlib
+import hmac
 import secrets
 import socket
 import select
@@ -347,7 +348,13 @@ class SettingsManager:
                 'remotePath': '/backups/',
                 'passive': True
             }
-        }
+        },
+        'webhook': {
+            'enabled': False,
+            'url': '',
+            'secret': ''
+        },
+        'emailTemplates': {}
     }
     
     def __init__(self):
@@ -512,18 +519,206 @@ class SettingsManager:
         self._save_settings()
         return self.get_external_backup_settings()
 
+    def get_webhook_settings(self):
+        """Get webhook settings (secret masked)"""
+        s = self.settings.get('webhook', self.DEFAULT_SETTINGS['webhook']).copy()
+        s['secret'] = '********' if s.get('secret') else ''
+        return s
+
+    def get_webhook_settings_full(self):
+        """Get webhook settings including secret (internal use)"""
+        return self.settings.get('webhook', self.DEFAULT_SETTINGS['webhook'])
+
+    def update_webhook_settings(self, data):
+        """Update webhook settings"""
+        if 'webhook' not in self.settings:
+            self.settings['webhook'] = self.DEFAULT_SETTINGS['webhook'].copy()
+        for key in ['enabled', 'url']:
+            if key in data:
+                self.settings['webhook'][key] = data[key]
+        if 'secret' in data and data['secret'] != '********':
+            self.settings['webhook']['secret'] = data['secret']
+        self._save_settings()
+        return self.get_webhook_settings()
+
+    def get_email_templates(self):
+        """Return effective email templates (stored overrides merged with defaults)"""
+        result = {}
+        stored = self.settings.get('emailTemplates', {})
+        for name, default in EmailService.DEFAULT_TEMPLATES.items():
+            result[name] = stored.get(name, default).copy()
+        return result
+
+    def update_email_template(self, name, template_data):
+        """Override a single email template"""
+        if name not in EmailService.DEFAULT_TEMPLATES:
+            return False, "Unknown template name"
+        if 'emailTemplates' not in self.settings:
+            self.settings['emailTemplates'] = {}
+        self.settings['emailTemplates'][name] = {
+            'subject': template_data.get('subject', EmailService.DEFAULT_TEMPLATES[name]['subject']),
+            'html': template_data.get('html', EmailService.DEFAULT_TEMPLATES[name]['html']),
+            'text': template_data.get('text', EmailService.DEFAULT_TEMPLATES[name].get('text', ''))
+        }
+        self._save_settings()
+        return True, "Template updated"
+
+    def reset_email_template(self, name):
+        """Reset a template to its built-in default"""
+        stored = self.settings.get('emailTemplates', {})
+        if name in stored:
+            del stored[name]
+            self._save_settings()
+        return True
+
 
 # ==================== Email Service ====================
 
 class EmailService:
     """Handles email sending via SMTP"""
-    
+
+    _HTML_STYLE = (
+        'font-family: Arial, sans-serif; background-color: #1a1a2e; '
+        'color: #e0e0e0; padding: 20px;'
+    )
+    _CARD_STYLE = (
+        'max-width: 600px; margin: 0 auto; background-color: #16213e; '
+        'border-radius: 8px; padding: 30px;'
+    )
+    _FOOTER = (
+        '<hr style="border: 1px solid #333; margin: 20px 0;">'
+        '<p style="color: #888; font-size: 12px;">'
+        'This is an automated notification from {{ site_title }}.</p>'
+    )
+
+    DEFAULT_TEMPLATES = {
+        'backup_complete': {
+            'subject': '[{{ site_title }}] Backup Complete: {{ server_name }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#10b981;margin-top:0;">✅ Backup Completed Successfully</h2>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Backup Name:</strong> {{ backup_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Backup Completed Successfully\nServer: {{ server_name }}\nBackup: {{ backup_name }}\nTime: {{ timestamp }}'
+        },
+        'backup_failure': {
+            'subject': '[{{ site_title }}] Backup Failed: {{ server_name }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#ef4444;margin-top:0;">❌ Backup Failed</h2>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Error:</strong> {{ error }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Backup Failed\nServer: {{ server_name }}\nError: {{ error }}\nTime: {{ timestamp }}'
+        },
+        'server_start': {
+            'subject': '[{{ site_title }}] Server Started: {{ server_name }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#10b981;margin-top:0;">🟢 Server Started</h2>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Server Started\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+        },
+        'server_stop': {
+            'subject': '[{{ site_title }}] Server Stopped: {{ server_name }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#e0a800;margin-top:0;">🔴 Server Stopped</h2>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Server Stopped\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+        },
+        'player_join': {
+            'subject': '[{{ site_title }}] Player Joined: {{ player }} on {{ server_name }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#667eea;margin-top:0;">👤 Player Joined</h2>'
+                '<p style="margin:10px 0;"><strong>Player:</strong> {{ player }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Player Joined\nPlayer: {{ player }}\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+        },
+        'player_leave': {
+            'subject': '[{{ site_title }}] Player Left: {{ player }} on {{ server_name }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#9ca3af;margin-top:0;">👋 Player Left</h2>'
+                '<p style="margin:10px 0;"><strong>Player:</strong> {{ player }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Player Left\nPlayer: {{ player }}\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+        },
+        'critical_alert': {
+            'subject': '[{{ site_title }}] ⚠️ Critical Alert: {{ alert_type }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#ef4444;margin-top:0;">⚠️ Critical Alert</h2>'
+                '<p style="margin:10px 0;"><strong>Alert Type:</strong> {{ alert_type }}</p>'
+                '<p style="margin:10px 0;"><strong>Details:</strong> {{ details }}</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': 'Critical Alert\nType: {{ alert_type }}\nDetails: {{ details }}\nTime: {{ timestamp }}'
+        },
+    }
+
     def __init__(self, settings_manager):
         self.settings_manager = settings_manager
-    
+
+    # ---- Jinja2 helpers ----
+
+    def _render(self, template_str, context, html=True):
+        """Render a Jinja2 template string with the given context."""
+        from jinja2 import Environment
+        env = Environment(autoescape=html)
+        return env.from_string(template_str).render(**context)
+
+    def _get_template(self, event_type):
+        """Return the active template for an event type (stored override or default)."""
+        stored = self.settings_manager.settings.get('emailTemplates', {}).get(event_type)
+        return stored if stored else self.DEFAULT_TEMPLATES.get(event_type)
+
+    # ---- Core send method ----
+
     def send_email(self, to_email, subject, html_content, text_content=None):
         """Send an email using configured SMTP settings"""
         if not self.settings_manager.is_smtp_configured():
+            app.logger.warning('[Email] Attempted to send email but SMTP is not configured')
             return False, "SMTP is not configured"
         
         smtp_settings = self.settings_manager.get_smtp_settings_full()
@@ -559,12 +754,39 @@ class EmailService:
             
             return True, "Email sent successfully"
         except smtplib.SMTPAuthenticationError:
+            app.logger.error(f'[Email] SMTP authentication failed sending to {to_email}')
             return False, "SMTP authentication failed"
         except smtplib.SMTPException as e:
+            app.logger.error(f'[Email] SMTP error sending to {to_email}: {e}')
             return False, f"SMTP error: {str(e)}"
         except Exception as e:
+            app.logger.error(f'[Email] Failed to send email to {to_email}: {e}')
             return False, f"Failed to send email: {str(e)}"
-    
+
+    # ---- Template-based event notifications ----
+
+    def send_event_notification(self, event_type, context, recipients):
+        """Render a template for event_type and send to the list of recipient emails."""
+        template = self._get_template(event_type)
+        if not template:
+            app.logger.warning(f'[Email] No template found for event type: {event_type}')
+            return []
+        site_title = self.settings_manager.get_branding().get('siteTitle', 'MServerController')
+        ctx = {'site_title': site_title, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), **context}
+        subject = self._render(template.get('subject', '[{{ site_title }}] Notification'), ctx, html=False)
+        html_content = self._render(template.get('html', '<p>Notification</p>'), ctx, html=True)
+        text_tpl = template.get('text', '')
+        text_content = self._render(text_tpl, ctx, html=False) if text_tpl else None
+        results = []
+        for email in recipients:
+            ok, msg = self.send_email(email, subject, html_content, text_content)
+            if not ok:
+                app.logger.warning(f'[Email] Failed to send {event_type} notification to {email}: {msg}')
+            results.append((email, ok, msg))
+        return results
+
+    # ---- Legacy direct-send methods (kept for backwards compatibility) ----
+
     def send_backup_notification(self, to_email, server_name, backup_name, success=True, error_message=None):
         """Send backup completion notification"""
         site_title = self.settings_manager.get_branding().get('siteTitle', 'MServerController')
@@ -626,6 +848,51 @@ class EmailService:
         text_content = f"{site_title} - Test Email\n\nThis is a test email to verify your SMTP configuration is working correctly.\n\nSent at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\nIf you're reading this, your email settings are configured correctly!"
         
         return self.send_email(to_email, subject, html_content, text_content)
+
+
+# ==================== Webhook Service ====================
+
+class WebhookService:
+    """Delivers event notifications to a configured HTTP webhook endpoint."""
+
+    def __init__(self, settings_manager):
+        self.settings_manager = settings_manager
+
+    def dispatch(self, event_type, payload):
+        """POST JSON payload to the configured webhook URL.
+
+        Returns (success: bool, message: str).
+        If webhook is not enabled/configured, returns silently as (False, reason).
+        """
+        settings = self.settings_manager.get_webhook_settings_full()
+        if not settings.get('enabled'):
+            return False, "Webhook not enabled"
+        url = settings.get('url', '').strip()
+        if not url:
+            return False, "Webhook URL not configured"
+        # Basic URL validation — must be http(s)
+        if not url.startswith(('http://', 'https://')):
+            return False, "Invalid webhook URL scheme"
+
+        body = json.dumps(payload).encode('utf-8')
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'MServerController/1.0',
+            'X-MSC-Event': event_type,
+        }
+        secret = settings.get('secret', '').strip()
+        if secret:
+            sig = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
+            headers['X-MSC-Signature'] = f'sha256={sig}'
+
+        try:
+            resp = requests.post(url, data=body, headers=headers, timeout=10)
+            if resp.status_code < 400:
+                return True, f"Delivered (HTTP {resp.status_code})"
+            return False, f"Webhook endpoint returned HTTP {resp.status_code}"
+        except requests.RequestException as e:
+            app.logger.error(f'[Webhook] Delivery failed for event {event_type}: {e}')
+            return False, str(e)
 
 
 # ==================== System Stats Manager ====================
@@ -1122,6 +1389,16 @@ class BackupScheduler:
                 'checksum': checksum
             })
 
+            # Send email/webhook notifications (fixed: was previously dead code)
+            _backup_ctx = {
+                'server_name': server_config.get('name', server_id),
+                'backup_name': backup_name,
+                'size': size,
+            }
+            threading.Thread(
+                target=dispatch_notification, args=('backup_complete', _backup_ctx), daemon=True
+            ).start()
+
             print(f"[Scheduler] Scheduled backup completed for server: {server_id}")
 
         except Exception as e:
@@ -1137,6 +1414,17 @@ class BackupScheduler:
                 'error': str(e),
                 'scheduled': True
             })
+            # Send failure notification
+            try:
+                _fail_cfg = server_manager.get_server_config(server_id)
+                _fail_name = _fail_cfg.get('name', server_id) if _fail_cfg else server_id
+            except Exception:
+                _fail_name = server_id
+            threading.Thread(
+                target=dispatch_notification,
+                args=('backup_failure', {'server_name': _fail_name, 'error': str(e)}),
+                daemon=True
+            ).start()
     
     def _get_history_path(self, server_id):
         """Return path to the backup history log for a server"""
@@ -1761,7 +2049,13 @@ class UserManager:
                 'failedLoginAttempts': 0,
                 'accountDisabled': False,
                 'disabledAt': None,
-                'isAntiLockout': False
+                'isAntiLockout': False,
+                'notificationPrefs': {
+                    'backupComplete': False, 'backupFailure': False,
+                    'serverStart': False, 'serverStop': False,
+                    'playerJoin': False, 'playerLeave': False,
+                    'criticalAlerts': False
+                }
             }
             self._save_users()
             
@@ -1803,7 +2097,13 @@ class UserManager:
                 'mfaRecoveryCode': None,
                 'approved': True,  # Admin-created users are auto-approved
                 'created': datetime.now().isoformat(),
-                'lastLogin': None
+                'lastLogin': None,
+                'notificationPrefs': {
+                    'backupComplete': False, 'backupFailure': False,
+                    'serverStart': False, 'serverStop': False,
+                    'playerJoin': False, 'playerLeave': False,
+                    'criticalAlerts': False
+                }
             }
             self._save_users()
             return user_id, "User created successfully"
@@ -2091,6 +2391,51 @@ An emergency admin account has been created:
             self.users['users'][user_id]['email'] = email
             self._save_users()
             return True, "Email updated successfully"
+
+    # ---- Notification Preferences ----
+
+    _DEFAULT_NOTIF_PREFS = {
+        'backupComplete': False,
+        'backupFailure': False,
+        'serverStart': False,
+        'serverStop': False,
+        'playerJoin': False,
+        'playerLeave': False,
+        'criticalAlerts': False,
+    }
+
+    def get_notification_prefs(self, user_id):
+        """Return the notification preference dict for a user (merged with defaults)."""
+        user = self.users.get('users', {}).get(user_id)
+        if not user:
+            return None
+        stored = user.get('notificationPrefs', {})
+        return {**self._DEFAULT_NOTIF_PREFS, **stored}
+
+    def update_notification_prefs(self, user_id, prefs):
+        """Update notification preferences for a user. Only known keys are accepted."""
+        with self.lock:
+            if user_id not in self.users.get('users', {}):
+                return False
+            current = self.users['users'][user_id].get('notificationPrefs', {}).copy()
+            for key in self._DEFAULT_NOTIF_PREFS:
+                if key in prefs:
+                    current[key] = bool(prefs[key])
+            self.users['users'][user_id]['notificationPrefs'] = current
+            self._save_users()
+            return True
+
+    def get_notification_recipients(self, pref_key):
+        """Return list of email addresses for users who have pref_key enabled."""
+        recipients = []
+        for user in self.users.get('users', {}).values():
+            email = user.get('email', '').strip()
+            if not email:
+                continue
+            prefs = user.get('notificationPrefs', {})
+            if prefs.get(pref_key, False):
+                recipients.append(email)
+        return recipients
     
     def generate_mfa_secret(self, user_id):
         """Generate a new TOTP secret for user"""
@@ -2174,6 +2519,42 @@ settings_manager = SettingsManager()
 user_manager = UserManager()
 stats_manager = StatsManager()
 email_service = EmailService(settings_manager)
+webhook_service = WebhookService(settings_manager)
+
+
+def dispatch_notification(event_type, context):
+    """Fan out a notification event: send email to subscribed users and fire webhook.
+
+    This function is safe to call from background threads.  All network I/O is
+    caught internally so a delivery failure never propagates to the caller.
+    """
+    # Map camelCase pref key → event_type string
+    _PREF_MAP = {
+        'backup_complete': 'backupComplete',
+        'backup_failure': 'backupFailure',
+        'server_start':   'serverStart',
+        'server_stop':    'serverStop',
+        'player_join':    'playerJoin',
+        'player_leave':   'playerLeave',
+        'critical_alert': 'criticalAlerts',
+    }
+    pref_key = _PREF_MAP.get(event_type)
+    if pref_key:
+        recipients = user_manager.get_notification_recipients(pref_key)
+        if recipients:
+            try:
+                email_service.send_event_notification(event_type, context, recipients)
+            except Exception as e:
+                app.logger.error(f'[Notify] Email dispatch error for {event_type}: {e}')
+    # Always attempt webhook (service checks its own enabled flag)
+    try:
+        webhook_service.dispatch(event_type, {
+            'event': event_type,
+            'timestamp': datetime.now().isoformat(),
+            **context
+        })
+    except Exception as e:
+        app.logger.error(f'[Notify] Webhook dispatch error for {event_type}: {e}')
 
 
 # ==================== Authentication Decorators ====================
@@ -3605,12 +3986,14 @@ class ServerInstance:
         self._status_monitor_thread = None
         self._stop_status_monitor = False
         self.online_players = {}  # name -> join_time (epoch float)
+        self._start_notified = False  # ensure server-start notification fires once per start
     
     def start(self):
         """Start the server process"""
         # Clear the output buffer on start for fresh logs
         self.output_buffer = []
         self.online_players = {}
+        self._start_notified = False
         self.status = ServerStatus.STARTING
         self.start_time = time.time()
         self.server_port = None  # Will be read from properties
@@ -3716,8 +4099,20 @@ class ServerInstance:
             self._stop_status_monitor = True
             self.status = ServerStatus.STOPPED
             self.online_players = {}
+            self._start_notified = False
             self._broadcast({'type': 'info', 'data': f'Server stopped with code {code}\n', 'serverId': self.server_id})
             self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': False})
+            # Notify subscribers that the server stopped
+            try:
+                cfg = server_manager.get_server_config(self.server_id)
+                sname = cfg.get('name', self.server_id) if cfg else self.server_id
+                threading.Thread(
+                    target=dispatch_notification,
+                    args=('server_stop', {'server_name': sname, 'server_id': self.server_id}),
+                    daemon=True
+                ).start()
+            except Exception:
+                pass
 
     def _parse_player_events(self, line):
         """Parse console output for player join/leave events and update online_players"""
@@ -3728,6 +4123,7 @@ class ServerInstance:
             name = join_match.group(1)
             self.online_players[name] = time.time()
             self._broadcast({'type': 'player_join', 'serverId': self.server_id, 'player': name})
+            self._dispatch_player_event('player_join', name)
             return
 
         leave_match = re.search(r':\s+(\S+) left the game', line)
@@ -3735,6 +4131,7 @@ class ServerInstance:
             name = leave_match.group(1)
             self.online_players.pop(name, None)
             self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
+            self._dispatch_player_event('player_leave', name)
             return
 
         # Bedrock: "Player connected: PlayerName, xuid: ..."
@@ -3743,6 +4140,7 @@ class ServerInstance:
             name = bedrock_join.group(1).strip()
             self.online_players[name] = time.time()
             self._broadcast({'type': 'player_join', 'serverId': self.server_id, 'player': name})
+            self._dispatch_player_event('player_join', name)
             return
 
         bedrock_leave = re.search(r'Player disconnected:\s+([^,]+)', line)
@@ -3750,8 +4148,21 @@ class ServerInstance:
             name = bedrock_leave.group(1).strip()
             self.online_players.pop(name, None)
             self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
+            self._dispatch_player_event('player_leave', name)
 
-    
+    def _dispatch_player_event(self, event_type, player_name):
+        """Fire player join/leave notification in a background thread."""
+        try:
+            cfg = server_manager.get_server_config(self.server_id)
+            sname = cfg.get('name', self.server_id) if cfg else self.server_id
+            threading.Thread(
+                target=dispatch_notification,
+                args=(event_type, {'server_name': sname, 'server_id': self.server_id, 'player': player_name}),
+                daemon=True
+            ).start()
+        except Exception:
+            pass
+
     def _broadcast(self, data):
         """Broadcast message to all clients"""
         socketio.emit('message', data, namespace='/')
@@ -3858,6 +4269,19 @@ class ServerInstance:
                         'status': self.status.value,
                         'running': self.status in [ServerStatus.STARTING, ServerStatus.RUNNING, ServerStatus.UNRESPONSIVE]
                     })
+                    # Dispatch server-start notification once per lifecycle
+                    if new_status == ServerStatus.RUNNING and not self._start_notified:
+                        self._start_notified = True
+                        try:
+                            cfg = server_manager.get_server_config(self.server_id)
+                            sname = cfg.get('name', self.server_id) if cfg else self.server_id
+                            threading.Thread(
+                                target=dispatch_notification,
+                                args=('server_start', {'server_name': sname, 'server_id': self.server_id}),
+                                daemon=True
+                            ).start()
+                        except Exception:
+                            pass
             
             time.sleep(2)  # Check every 2 seconds
     
@@ -6812,6 +7236,287 @@ def delete_mod(server_id, mod_type, filename):
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== Modrinth Integration ====================
+
+MODRINTH_API = 'https://api.modrinth.com/v2'
+MODRINTH_UA  = 'TwiStarSystems/MServerController/1.0 (github.com/TwiStarSystems)'
+
+def _modrinth_get(path, params=None, timeout=15):
+    """Make a GET request to the Modrinth API with proper headers."""
+    headers = {'User-Agent': MODRINTH_UA}
+    resp = requests.get(f'{MODRINTH_API}{path}', headers=headers, params=params, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+@app.route('/api/servers/<server_id>/mods/search', methods=['GET'])
+@server_access_required
+def modrinth_search(server_id):
+    """Proxy a Modrinth project search to keep credentials/UA server-side."""
+    query        = request.args.get('query', '').strip()
+    project_type = request.args.get('project_type', 'mod')   # mod | plugin | modpack
+    loader       = request.args.get('loader', '')             # fabric, forge, spigot, paper …
+    mc_version   = request.args.get('mc_version', '')
+    limit        = min(int(request.args.get('limit', 20)), 50)
+    offset       = max(int(request.args.get('offset', 0)), 0)
+
+    # Build facets: always filter to server-side-relevant and requested project_type
+    facets = []
+    if project_type == 'plugin':
+        # Plugins live under project_type:mod on Modrinth but with loader 'spigot'/'paper' etc.
+        facets.append(['project_type:mod'])
+        if loader:
+            facets.append([f'categories:{loader}'])
+        else:
+            facets.append(['categories:paper', 'categories:spigot', 'categories:bukkit', 'categories:folia', 'categories:purpur'])
+    else:
+        facets.append([f'project_type:{project_type}'])
+        if loader:
+            facets.append([f'categories:{loader}'])
+
+    if mc_version:
+        facets.append([f'versions:{mc_version}'])
+
+    # Always prefer server-side content
+    facets.append(['server_side:required', 'server_side:optional'])
+
+    params = {
+        'query': query,
+        'limit': limit,
+        'offset': offset,
+        'facets': json.dumps(facets),
+        'index': 'relevance',
+    }
+
+    try:
+        data = _modrinth_get('/search', params=params)
+        # Slim down the response to only what the frontend needs
+        hits = []
+        for h in data.get('hits', []):
+            hits.append({
+                'project_id':    h.get('project_id'),
+                'slug':          h.get('slug'),
+                'title':         h.get('title'),
+                'description':   h.get('description'),
+                'icon_url':      h.get('icon_url'),
+                'downloads':     h.get('downloads', 0),
+                'categories':    h.get('categories', []),
+                'versions':      h.get('versions', []),
+                'game_versions': h.get('display_categories', h.get('versions', [])),
+                'latest_version': h.get('latest_version'),
+                'project_type':  h.get('project_type'),
+                'author':        h.get('author'),
+            })
+        return jsonify({
+            'hits':       hits,
+            'total_hits': data.get('total_hits', 0),
+            'offset':     data.get('offset', 0),
+            'limit':      data.get('limit', limit),
+        })
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Modrinth API timed out'}), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Modrinth API error: {str(e)}'}), 502
+
+
+@app.route('/api/servers/<server_id>/mods/modrinth/versions/<project_id>', methods=['GET'])
+@server_access_required
+def modrinth_project_versions(server_id, project_id):
+    """Return available versions for a Modrinth project, filtered by loader/mc_version."""
+    # Validate project_id is safe (base62 or slug)
+    if not re.match(r'^[a-zA-Z0-9_\-]{1,64}$', project_id):
+        return jsonify({'error': 'Invalid project ID'}), 400
+
+    loader     = request.args.get('loader', '')
+    mc_version = request.args.get('mc_version', '')
+
+    params = {'include_changelog': 'false'}
+    if loader:
+        params['loaders'] = json.dumps([loader])
+    if mc_version:
+        params['game_versions'] = json.dumps([mc_version])
+
+    try:
+        versions = _modrinth_get(f'/project/{project_id}/version', params=params)
+        slim = []
+        for v in versions:
+            # Pick the primary file (.jar only)
+            jar_file = next((f for f in v.get('files', []) if f.get('primary') and f['filename'].endswith('.jar')), None)
+            if jar_file is None:
+                jar_file = next((f for f in v.get('files', []) if f['filename'].endswith('.jar')), None)
+            if jar_file is None:
+                continue
+            slim.append({
+                'version_id':    v.get('id'),
+                'version_number': v.get('version_number'),
+                'name':          v.get('name'),
+                'loaders':       v.get('loaders', []),
+                'game_versions': v.get('game_versions', []),
+                'date_published': v.get('date_published'),
+                'filename':      jar_file['filename'],
+                'url':           jar_file['url'],
+                'size':          jar_file.get('size', 0),
+                'sha512':        jar_file.get('hashes', {}).get('sha512'),
+                'sha1':          jar_file.get('hashes', {}).get('sha1'),
+            })
+        return jsonify({'versions': slim})
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Modrinth API timed out'}), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Modrinth API error: {str(e)}'}), 502
+
+
+@app.route('/api/servers/<server_id>/mods/modrinth/install', methods=['POST'])
+@limiter.limit("30 per 10 minutes")
+@server_access_required
+def modrinth_install(server_id):
+    """Download a mod/plugin version from Modrinth and save it to the server."""
+    data       = request.get_json()
+    url        = data.get('url', '').strip()
+    filename   = data.get('filename', '').strip()
+    mod_type   = data.get('mod_type', 'mods')   # 'mods' or 'plugins'
+    sha512_expected = data.get('sha512', '')
+
+    # Validate inputs
+    if not url or not filename:
+        return jsonify({'error': 'url and filename are required'}), 400
+    if mod_type not in ('mods', 'plugins'):
+        return jsonify({'error': 'mod_type must be mods or plugins'}), 400
+    if not filename.endswith('.jar'):
+        return jsonify({'error': 'filename must be a .jar file'}), 400
+
+    # Only allow downloads from Modrinth CDN
+    if not url.startswith('https://cdn.modrinth.com/'):
+        return jsonify({'error': 'Only Modrinth CDN URLs are permitted'}), 400
+
+    safe_filename = secure_filename(filename)
+    if not safe_filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+
+    server_path = server_manager.get_server_path(server_id)
+    target_dir  = server_path / mod_type
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest_path   = target_dir / safe_filename
+
+    try:
+        resp = requests.get(url, headers={'User-Agent': MODRINTH_UA}, timeout=120, stream=True)
+        resp.raise_for_status()
+
+        sha512_actual = hashlib.sha512()
+        with open(str(dest_path), 'wb') as f:
+            for chunk in resp.iter_content(65536):
+                f.write(chunk)
+                sha512_actual.update(chunk)
+
+        # Verify integrity if hash provided
+        if sha512_expected and sha512_actual.hexdigest() != sha512_expected:
+            dest_path.unlink(missing_ok=True)
+            return jsonify({'error': 'SHA-512 integrity check failed — file deleted'}), 409
+
+        return jsonify({'success': True, 'filename': safe_filename})
+    except requests.exceptions.Timeout:
+        dest_path.unlink(missing_ok=True)
+        return jsonify({'error': 'Download timed out'}), 504
+    except requests.exceptions.RequestException as e:
+        dest_path.unlink(missing_ok=True)
+        return jsonify({'error': f'Download failed: {str(e)}'}), 502
+    except Exception as e:
+        dest_path.unlink(missing_ok=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/servers/<server_id>/mods/updates', methods=['GET'])
+@server_access_required
+def check_mod_updates(server_id):
+    """Check installed mods/plugins for available updates via Modrinth's hash lookup."""
+    server_path  = server_manager.get_server_path(server_id)
+    loader       = request.args.get('loader', '')
+    mc_version   = request.args.get('mc_version', '')
+
+    jar_files = []
+    for folder in ('mods', 'plugins'):
+        folder_path = server_path / folder
+        if folder_path.exists():
+            for item in folder_path.iterdir():
+                if item.is_file() and item.suffix == '.jar':
+                    jar_files.append({'path': item, 'folder': folder})
+
+    if not jar_files:
+        return jsonify({'updates': [], 'not_on_modrinth': []})
+
+    # Compute SHA-512 hashes for all jars
+    hashes = {}
+    for entry in jar_files:
+        sha = hashlib.sha512()
+        try:
+            with open(str(entry['path']), 'rb') as f:
+                for chunk in iter(lambda: f.read(65536), b''):
+                    sha.update(chunk)
+            hashes[sha.hexdigest()] = entry
+        except OSError:
+            pass
+
+    if not hashes:
+        return jsonify({'updates': [], 'not_on_modrinth': []})
+
+    # Ask Modrinth for the latest version matching these hashes
+    try:
+        body = {
+            'hashes': list(hashes.keys()),
+            'algorithm': 'sha512',
+        }
+        if loader:
+            body['loaders'] = [loader]
+        if mc_version:
+            body['game_versions'] = [mc_version]
+
+        headers = {'User-Agent': MODRINTH_UA, 'Content-Type': 'application/json'}
+        resp = requests.post(
+            f'{MODRINTH_API}/version_files/update',
+            json=body,
+            headers=headers,
+            timeout=20
+        )
+        resp.raise_for_status()
+        latest_map = resp.json()   # {current_hash: {version object with latest available}}
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Modrinth API timed out'}), 504
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Modrinth API error: {str(e)}'}), 502
+
+    updates = []
+    not_on_modrinth = []
+
+    for current_hash, entry in hashes.items():
+        if current_hash in latest_map:
+            latest = latest_map[current_hash]
+            jar_file = next((f for f in latest.get('files', []) if f.get('primary') and f['filename'].endswith('.jar')), None)
+            if jar_file is None:
+                jar_file = next((f for f in latest.get('files', []) if f['filename'].endswith('.jar')), None)
+
+            latest_hash = (jar_file.get('hashes', {}).get('sha512') if jar_file else None)
+
+            if latest_hash and latest_hash != current_hash:
+                updates.append({
+                    'current_filename': entry['path'].name,
+                    'folder':           entry['folder'],
+                    'project_id':       latest.get('project_id'),
+                    'version_id':       latest.get('id'),
+                    'version_number':   latest.get('version_number'),
+                    'filename':         jar_file['filename'] if jar_file else '',
+                    'url':              jar_file['url'] if jar_file else '',
+                    'sha512':           latest_hash,
+                    'size':             jar_file.get('size', 0) if jar_file else 0,
+                })
+        else:
+            not_on_modrinth.append(entry['path'].name)
+
+    return jsonify({
+        'updates':         updates,
+        'not_on_modrinth': not_on_modrinth,
+    })
+
+
 # ==================== Properties API ====================
 
 @app.route('/api/servers/<server_id>/properties/exists', methods=['GET'])
@@ -7726,6 +8431,87 @@ def test_smtp_settings():
     if success:
         return jsonify({'success': True, 'message': message})
     return jsonify({'error': message}), 400
+
+
+# ==================== Webhook Settings API ====================
+
+@app.route('/api/settings/webhook', methods=['GET'])
+@admin_required
+def get_webhook_settings_api():
+    """Get webhook settings (admin only; secret is masked)"""
+    return jsonify(settings_manager.get_webhook_settings())
+
+@app.route('/api/settings/webhook', methods=['PUT'])
+@admin_required
+def update_webhook_settings_api():
+    """Update webhook settings (admin only)"""
+    data = request.get_json()
+    url = data.get('url', '').strip()
+    if url and not url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'Webhook URL must start with http:// or https://'}), 400
+    updated = settings_manager.update_webhook_settings(data)
+    return jsonify({'success': True, 'settings': updated})
+
+@app.route('/api/settings/webhook/test', methods=['POST'])
+@admin_required
+def test_webhook_api():
+    """Send a test webhook event"""
+    success, message = webhook_service.dispatch('test', {
+        'message': 'This is a test webhook from MServerController'
+    })
+    if success:
+        return jsonify({'success': True, 'message': message})
+    return jsonify({'error': message}), 400
+
+
+# ==================== Email Templates API ====================
+
+@app.route('/api/settings/email-templates', methods=['GET'])
+@admin_required
+def get_email_templates_api():
+    """Get all email templates (admin only)"""
+    return jsonify(settings_manager.get_email_templates())
+
+@app.route('/api/settings/email-template/<name>', methods=['PUT'])
+@admin_required
+def update_email_template_api(name):
+    """Override an email template (admin only)"""
+    data = request.get_json()
+    success, message = settings_manager.update_email_template(name, data)
+    if success:
+        return jsonify({'success': True})
+    return jsonify({'error': message}), 400
+
+@app.route('/api/settings/email-template/<name>/reset', methods=['POST'])
+@admin_required
+def reset_email_template_api(name):
+    """Reset an email template to its built-in default (admin only)"""
+    settings_manager.reset_email_template(name)
+    return jsonify({'success': True})
+
+
+# ==================== User Notification Preferences API ====================
+
+@app.route('/api/auth/profile/notifications', methods=['GET'])
+@login_required
+def get_notification_prefs_api():
+    """Get current user's notification preferences"""
+    user_id = session['user_id']
+    prefs = user_manager.get_notification_prefs(user_id)
+    if prefs is None:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify(prefs)
+
+@app.route('/api/auth/profile/notifications', methods=['PUT'])
+@login_required
+def update_notification_prefs_api():
+    """Update current user's notification preferences"""
+    data = request.get_json()
+    user_id = session['user_id']
+    success = user_manager.update_notification_prefs(user_id, data)
+    if success:
+        return jsonify({'success': True})
+    return jsonify({'error': 'User not found'}), 404
 
 
 @app.route('/api/settings/external-backup', methods=['GET'])

@@ -235,6 +235,9 @@ function openProfileSettings() {
     // Update MFA status
     updateMFAStatus();
     
+    // Load notification preferences
+    loadNotificationPrefs();
+    
     // Show modal
     document.getElementById('profile-modal').style.display = 'flex';
   } catch (err) {
@@ -312,6 +315,9 @@ async function saveProfileSettings() {
       
       currentUser.email = email;
     }
+    
+    // Save notification preferences
+    await saveNotificationPrefs(true);  // silent — profile save message covers it
     
     showNotification('Profile updated successfully', 'success');
     updateUserUI();
@@ -2444,6 +2450,10 @@ async function loadAppSettings() {
     
     // Load SMTP settings
     await loadSmtpSettings();
+    // Load Webhook settings
+    await loadWebhookSettings();
+    // Load Email Templates
+    await loadEmailTemplates();
   } catch (err) {
     console.error('Failed to load app settings:', err);
   }
@@ -2968,5 +2978,232 @@ async function testExternalBackupSettings() {
     }
   } catch (err) {
     showNotification(`❌ Connection failed: ${err.message}`, 'error');
+  }
+}
+
+// ==================== Notification Preferences (Profile Modal) ====================
+
+async function loadNotificationPrefs() {
+  try {
+    const resp = await fetch('/api/auth/profile/notifications');
+    if (!resp.ok) return;
+    const prefs = await resp.json();
+    const keys = ['backupComplete', 'backupFailure', 'serverStart', 'serverStop',
+                   'playerJoin', 'playerLeave', 'criticalAlerts'];
+    for (const key of keys) {
+      const el = document.getElementById(`notif-${key}`);
+      if (el) el.checked = prefs[key] ?? false;
+    }
+  } catch (err) {
+    console.error('Failed to load notification prefs:', err);
+  }
+}
+
+async function saveNotificationPrefs(silent = false) {
+  const keys = ['backupComplete', 'backupFailure', 'serverStart', 'serverStop',
+                 'playerJoin', 'playerLeave', 'criticalAlerts'];
+  const prefs = {};
+  for (const key of keys) {
+    const el = document.getElementById(`notif-${key}`);
+    if (el) prefs[key] = el.checked;
+  }
+  try {
+    const resp = await fetch('/api/auth/profile/notifications', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prefs)
+    });
+    if (resp.ok) {
+      if (!silent) showNotification('Notification preferences saved', 'success');
+      return true;
+    } else {
+      const d = await resp.json();
+      showNotification(d.error || 'Failed to save notification preferences', 'error');
+      return false;
+    }
+  } catch (err) {
+    showNotification('Failed to save notification preferences', 'error');
+    return false;
+  }
+}
+
+// ==================== Webhook Settings ====================
+
+let _webhookSaveTimer = null;
+function debounceWebhookSave() {
+  clearTimeout(_webhookSaveTimer);
+  _webhookSaveTimer = setTimeout(saveWebhookSettings, 800);
+}
+
+function toggleWebhookFields() {
+  const enabled = document.getElementById('webhook-enabled').checked;
+  const section = document.getElementById('webhook-config-section');
+  if (section) section.style.display = enabled ? 'block' : 'none';
+}
+
+async function loadWebhookSettings() {
+  try {
+    const resp = await fetch('/api/settings/webhook');
+    if (!resp.ok) return;
+    const s = await resp.json();
+    document.getElementById('webhook-enabled').checked = s.enabled ?? false;
+    document.getElementById('webhook-url').value = s.url ?? '';
+    document.getElementById('webhook-secret').value = '';
+    document.getElementById('webhook-secret').placeholder = s.url ? '••••••••' : 'Optional HMAC secret';
+    toggleWebhookFields();
+  } catch (err) {
+    console.error('Failed to load webhook settings:', err);
+  }
+}
+
+async function saveWebhookSettings() {
+  const settings = {
+    enabled: document.getElementById('webhook-enabled').checked,
+    url: document.getElementById('webhook-url').value.trim(),
+  };
+  const secret = document.getElementById('webhook-secret').value;
+  if (secret) settings.secret = secret;
+
+  try {
+    const resp = await fetch('/api/settings/webhook', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings)
+    });
+    const d = await resp.json();
+    if (d.success) {
+      showNotification('Webhook settings saved', 'success');
+      document.getElementById('webhook-secret').value = '';
+      document.getElementById('webhook-secret').placeholder = settings.url ? '••••••••' : 'Optional HMAC secret';
+    } else {
+      showNotification(d.error || 'Failed to save webhook settings', 'error');
+    }
+  } catch (err) {
+    showNotification('Failed to save webhook settings', 'error');
+  }
+}
+
+async function testWebhookSettings() {
+  try {
+    showNotification('Sending test webhook…', 'info');
+    const resp = await fetch('/api/settings/webhook/test', { method: 'POST' });
+    const d = await resp.json();
+    if (d.success) {
+      showNotification(`✅ Webhook delivered: ${d.message}`, 'success');
+    } else {
+      showNotification(`❌ Webhook failed: ${d.error}`, 'error');
+    }
+  } catch (err) {
+    showNotification(`❌ Webhook test failed: ${err.message}`, 'error');
+  }
+}
+
+// ==================== Email Templates ====================
+
+const _TEMPLATE_LABELS = {
+  backup_complete: { label: 'Backup Completed', vars: 'server_name, backup_name, size, timestamp, site_title' },
+  backup_failure:  { label: 'Backup Failed',    vars: 'server_name, error, timestamp, site_title' },
+  server_start:    { label: 'Server Started',   vars: 'server_name, server_id, timestamp, site_title' },
+  server_stop:     { label: 'Server Stopped',   vars: 'server_name, server_id, timestamp, site_title' },
+  player_join:     { label: 'Player Joined',    vars: 'player, server_name, server_id, timestamp, site_title' },
+  player_leave:    { label: 'Player Left',      vars: 'player, server_name, server_id, timestamp, site_title' },
+  critical_alert:  { label: 'Critical Alert',   vars: 'alert_type, details, timestamp, site_title' },
+};
+
+let _emailTemplates = {};
+
+async function loadEmailTemplates() {
+  try {
+    const resp = await fetch('/api/settings/email-templates');
+    if (!resp.ok) return;
+    _emailTemplates = await resp.json();
+    renderEmailTemplates();
+  } catch (err) {
+    console.error('Failed to load email templates:', err);
+  }
+}
+
+function renderEmailTemplates() {
+  const container = document.getElementById('email-templates-container');
+  if (!container) return;
+
+  const entries = Object.entries(_TEMPLATE_LABELS);
+  container.innerHTML = entries.map(([key, meta]) => {
+    const tmpl = _emailTemplates[key] || {};
+    return `
+      <div class="email-tmpl-accordion" id="tmpl-block-${key}">
+        <div class="email-tmpl-header" onclick="toggleTemplateEditor('${key}')">
+          <span class="email-tmpl-name">${meta.label}</span>
+          <small class="email-tmpl-vars">Variables: <code>${meta.vars}</code></small>
+          <span class="email-tmpl-chevron" id="tmpl-chevron-${key}">▼</span>
+        </div>
+        <div class="email-tmpl-body" id="tmpl-body-${key}" style="display:none;">
+          <div class="form-group">
+            <label for="tmpl-subject-${key}">Subject</label>
+            <input type="text" id="tmpl-subject-${key}" class="form-control"
+                   value="${escapeHtml(tmpl.subject || '')}" placeholder="Subject template…">
+          </div>
+          <div class="form-group">
+            <label for="tmpl-html-${key}">HTML Body</label>
+            <textarea id="tmpl-html-${key}" class="form-control tmpl-textarea"
+                      rows="8" placeholder="HTML body template…">${escapeHtml(tmpl.html || '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="tmpl-text-${key}">Plain-text Body <span class="optional-label">(Optional)</span></label>
+            <textarea id="tmpl-text-${key}" class="form-control tmpl-textarea"
+                      rows="3" placeholder="Plain text fallback…">${escapeHtml(tmpl.text || '')}</textarea>
+          </div>
+          <div class="smtp-actions">
+            <button type="button" class="btn btn-primary btn-small" onclick="saveEmailTemplate('${key}')">💾 Save</button>
+            <button type="button" class="btn btn-secondary btn-small" onclick="resetEmailTemplate('${key}')">↩ Reset to Default</button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function toggleTemplateEditor(key) {
+  const body = document.getElementById(`tmpl-body-${key}`);
+  const chevron = document.getElementById(`tmpl-chevron-${key}`);
+  if (!body) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  if (chevron) chevron.textContent = isOpen ? '▼' : '▲';
+}
+
+async function saveEmailTemplate(key) {
+  const subject = document.getElementById(`tmpl-subject-${key}`)?.value || '';
+  const html    = document.getElementById(`tmpl-html-${key}`)?.value || '';
+  const text    = document.getElementById(`tmpl-text-${key}`)?.value || '';
+
+  try {
+    const resp = await fetch(`/api/settings/email-template/${key}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, html, text })
+    });
+    const d = await resp.json();
+    if (d.success) {
+      showNotification(`Template "${_TEMPLATE_LABELS[key]?.label}" saved`, 'success');
+      _emailTemplates[key] = { subject, html, text };
+    } else {
+      showNotification(d.error || 'Failed to save template', 'error');
+    }
+  } catch (err) {
+    showNotification('Failed to save template', 'error');
+  }
+}
+
+async function resetEmailTemplate(key) {
+  const confirmed = await confirmAction(
+    `Reset the "${_TEMPLATE_LABELS[key]?.label}" template to its built-in default?`
+  );
+  if (!confirmed) return;
+  try {
+    await fetch(`/api/settings/email-template/${key}/reset`, { method: 'POST' });
+    showNotification('Template reset to default', 'success');
+    await loadEmailTemplates();
+  } catch (err) {
+    showNotification('Failed to reset template', 'error');
   }
 }

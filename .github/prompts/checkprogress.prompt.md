@@ -1,8 +1,6 @@
-Please do a full review of the entire app and create/update the tasklist.md with any new tasks/features that were found that need to be completed and mark any completed tasklist items as done.
+# Code Review and Task List Update Prompt
 
-If there are any bugs found during the review, add them to the bug list section of the tasklist.md file.
-
-Do a "git pull" to get the latest code changes before doing the review.
+Please do a "git pull" to get the latest code changes before doing a full review of the entire app and create/update the tasklist.md with any new tasks/features that were found that need to be completed and mark any completed tasklist items as done. If there are any bugs found during the review, add them to the bug list section of the tasklist.md file. Make sure to check the servers.md file for any updates on server information and the OS support priority matrix for any changes in supported operating systems. Also, review the preferred backend stack and application types sections for any updates on the technologies being used in the project.
 
 TASK-LIST.md format:
 
@@ -30,7 +28,15 @@ TASK-LIST.md format:
 [ ] - <Uncomplete task>
 [X] - <Completed task>
 
+---
+
 # Bug List # 
+
+|    Area    |    Completed    |    Remaining    |    Completion    |
+|------------|-----------------|-----------------|------------------|
+| <Section name> | <Completed-Bug-Count> | <Bugs-Remaining> | <Completion%> |
+
+---
 ## <Section name> ##
 ### <SubSection name> ### [add subsections as required]
 [ ] - <Unfixed bug>

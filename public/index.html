@@ -34,6 +34,13 @@
         <button id="add-server-btn" class="btn btn-success btn-small" title="Add Server">+ Add</button>
       </div>
       
+      <div class="sidebar-search">
+        <div class="sidebar-search-wrapper">
+          <span class="sidebar-search-icon">🔍</span>
+          <input type="text" id="server-search" class="sidebar-search-input" placeholder="Filter servers..." autocomplete="off">
+        </div>
+      </div>
+
       <div class="server-list" id="server-list">
         <!-- Server items will be populated by JavaScript -->
         <div class="empty-state">
@@ -205,6 +212,7 @@
               <tbody id="file-list">
               </tbody>
             </table>
+            <div id="file-pagination" class="pagination-controls"></div>
           </div>
         </div>
 
@@ -214,12 +222,17 @@
             <div class="mods-header">
               <h3>🧩 Server Mods & Plugins</h3>
               <div class="mods-actions">
-                <label for="mod-upload" class="btn btn-success">Upload Mod/Plugin</label>
+                <button class="btn btn-primary" onclick="openModrinthSearch()">🔍 Browse Modrinth</button>
+                <button class="btn btn-small" onclick="checkModUpdates()" id="check-updates-btn">🔄 Check Updates</button>
+                <label for="mod-upload" class="btn btn-success">⬆️ Upload</label>
                 <input type="file" id="mod-upload" style="display: none;" accept=".jar" multiple>
                 <button id="refresh-mods-btn" class="btn">Refresh</button>
               </div>
             </div>
-            <p class="mods-info">Manage JAR files in your server's mods and plugins folders. Upload new mods or remove existing ones.</p>
+            <p class="mods-info">Manage JAR files in your server's mods and plugins folders. Browse and install from Modrinth, upload your own, or manage existing ones.</p>
+
+            <!-- Update results banner (hidden by default) -->
+            <div id="mods-update-results" class="mods-update-results" style="display:none;"></div>
             
             <div class="mods-section">
               <h4>📦 Plugins</h4>
@@ -237,6 +250,7 @@
                   <tr><td colspan="4" class="empty-message">No plugins installed</td></tr>
                 </tbody>
               </table>
+              <div id="plugins-pagination" class="pagination-controls"></div>
             </div>
             
             <div class="mods-section">
@@ -255,6 +269,7 @@
                   <tr><td colspan="4" class="empty-message">No mods installed</td></tr>
                 </tbody>
               </table>
+              <div id="mods-pagination" class="pagination-controls"></div>
             </div>
           </div>
         </div>
@@ -423,6 +438,7 @@
                   <tr><td colspan="4" class="empty-message">Loading player data...</td></tr>
                 </tbody>
               </table>
+              <div id="playerdata-pagination" class="pagination-controls"></div>
             </div>
 
             <!-- Whitelist Section -->
@@ -1829,6 +1845,62 @@
             <input type="email" id="profile-email" class="form-control" placeholder="you@example.com">
             <small class="form-hint">Used for notifications if SMTP is configured.</small>
           </div>
+
+          <hr class="divider">
+
+          <h3>🔔 Email Notification Preferences</h3>
+          <p class="form-hint" style="margin-bottom: 0.75rem;">Choose which events you want to receive email notifications for. Requires an email address and SMTP configured by the admin.</p>
+          <div class="notif-prefs-grid">
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-backupComplete">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Backup Completed</span>
+                <span class="notif-pref-desc">When a scheduled backup finishes successfully</span>
+              </div>
+            </label>
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-backupFailure">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Backup Failed</span>
+                <span class="notif-pref-desc">When a scheduled backup fails</span>
+              </div>
+            </label>
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-serverStart">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Server Started</span>
+                <span class="notif-pref-desc">When any server transitions to running</span>
+              </div>
+            </label>
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-serverStop">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Server Stopped</span>
+                <span class="notif-pref-desc">When any server process exits</span>
+              </div>
+            </label>
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-playerJoin">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Player Joined</span>
+                <span class="notif-pref-desc">When a player joins any server (may be frequent)</span>
+              </div>
+            </label>
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-playerLeave">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Player Left</span>
+                <span class="notif-pref-desc">When a player leaves any server (may be frequent)</span>
+              </div>
+            </label>
+            <label class="notif-pref-row">
+              <input type="checkbox" id="notif-criticalAlerts">
+              <div class="notif-pref-info">
+                <span class="notif-pref-label">Critical Alerts</span>
+                <span class="notif-pref-desc">High resource usage and system health warnings</span>
+              </div>
+            </label>
+          </div>
           
           <hr class="divider">
           
@@ -1969,5 +2041,83 @@
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="utils.js"></script>
   <script src="app.js"></script>
+
+  <!-- Toast notification container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Modrinth Search Modal -->
+  <div id="modrinth-modal" class="modal">
+    <div class="modal-content modal-large">
+      <div class="modal-header">
+        <h2>🔍 Browse Modrinth</h2>
+        <button class="close-btn" onclick="closeModrinthSearch()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modrinth-search-bar">
+          <input type="text" id="modrinth-query" class="form-control" placeholder="Search mods, plugins…" autocomplete="off">
+          <select id="modrinth-type" class="form-control modrinth-filter">
+            <option value="mod">Mods</option>
+            <option value="plugin">Plugins</option>
+          </select>
+          <select id="modrinth-loader" class="form-control modrinth-filter">
+            <option value="">Any loader</option>
+            <option value="fabric">Fabric</option>
+            <option value="forge">Forge</option>
+            <option value="neoforge">NeoForge</option>
+            <option value="paper">Paper</option>
+            <option value="spigot">Spigot</option>
+            <option value="purpur">Purpur</option>
+            <option value="folia">Folia</option>
+          </select>
+          <input type="text" id="modrinth-mcversion" class="form-control modrinth-filter" placeholder="MC version e.g. 1.21.4" autocomplete="off">
+          <button class="btn btn-primary" onclick="doModrinthSearch()">Search</button>
+        </div>
+        <div id="modrinth-results" class="modrinth-results">
+          <p class="modrinth-hint">Search for mods or plugins to install directly to your server.</p>
+        </div>
+        <div id="modrinth-pagination" class="pagination-controls"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modrinth Version Picker Modal -->
+  <div id="modrinth-version-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="modrinth-version-title">Select Version</h2>
+        <button class="close-btn" onclick="closeModrinthVersionModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="modrinth-version-install-type" class="form-group" style="margin-bottom:14px;">
+          <label>Install to:</label>
+          <select id="modrinth-install-folder" class="form-control">
+            <option value="plugins">plugins/</option>
+            <option value="mods">mods/</option>
+          </select>
+        </div>
+        <div id="modrinth-version-list" class="modrinth-version-list">
+          <p class="empty-message">Loading versions…</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModrinthVersionModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reusable confirmation modal -->
+  <div id="confirm-modal-overlay" class="confirm-modal-overlay">
+    <div class="confirm-modal">
+      <div class="confirm-modal-header">
+        <span id="confirm-modal-icon" class="confirm-modal-icon">⚠️</span>
+        <span id="confirm-modal-title" class="confirm-modal-title">Confirm</span>
+      </div>
+      <div id="confirm-modal-body" class="confirm-modal-body"></div>
+      <div class="confirm-modal-footer">
+        <button id="confirm-modal-ok" class="btn btn-danger">Confirm</button>
+        <button id="confirm-modal-cancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

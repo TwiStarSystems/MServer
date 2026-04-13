@@ -388,6 +388,46 @@
               </div>
             </div>
           </div>
+
+          <!-- Webhook Settings -->
+          <div class="settings-card">
+            <h3>🔗 Outgoing Webhooks</h3>
+            <p class="settings-description">Post JSON event payloads to an external URL (e.g. Discord, Slack, custom endpoint) whenever a notification event fires.</p>
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Enable Webhooks</label>
+                <small>Send HTTP POST to the configured URL on each event</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="webhook-enabled" onchange="toggleWebhookFields(); saveWebhookSettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div id="webhook-config-section" style="display: none;">
+              <div class="form-group">
+                <label for="webhook-url">Webhook URL</label>
+                <input type="url" id="webhook-url" class="form-control" placeholder="https://hooks.example.com/..." oninput="debounceWebhookSave()">
+                <small class="form-help">Receives a POST with JSON payload and <code>X-MSC-Event</code> header.</small>
+              </div>
+              <div class="form-group">
+                <label for="webhook-secret">Secret (optional)</label>
+                <input type="password" id="webhook-secret" class="form-control" placeholder="Used to generate HMAC-SHA256 X-MSC-Signature header">
+              </div>
+              <div class="smtp-actions">
+                <button type="button" class="btn btn-primary" onclick="saveWebhookSettings()">💾 Save Webhook Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="testWebhookSettings()">🔌 Send Test Event</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Email Templates -->
+          <div class="settings-card">
+            <h3>📝 Email Templates</h3>
+            <p class="settings-description">Customise the subject and body of notification emails using <a href="https://jinja.palletsprojects.com/en/stable/templates/" target="_blank" rel="noopener noreferrer">Jinja2</a> template syntax. Available variables depend on event type.</p>
+            <div id="email-templates-container">
+              <div class="loading-text">Loading templates…</div>
+            </div>
+          </div>
         </section>
 
         <!-- External Backup Storage Section -->
