@@ -1538,7 +1538,7 @@ async function openAddServerModal() {
   // Update path hint with actual default path
   const pathHint = document.getElementById('path-hint');
   if (pathHint && defaultServerPath) {
-    pathHint.innerHTML = `Leave empty to auto-create in <code>${defaultServerPath}/</code>`;
+    pathHint.innerHTML = `Leave empty to auto-create in <code>${escapeHtml(defaultServerPath)}/</code>`;
   }
   
   // Load server engines for fresh server option (non-blocking)

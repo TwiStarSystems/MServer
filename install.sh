@@ -154,10 +154,29 @@ prompt_env_config() {
     # CORS origins
     read -p "Allowed WebSocket/CORS origins (comma-separated, e.g. https://panel.example.com) [default: *]: " cors_input
     CORS_ORIGINS="${cors_input:-*}"
-    if [ "$CORS_ORIGINS" = "*" ]; then
-        print_info "CORS set to wildcard (*). Restrict this in .env for production."
-    else
+    if [ "$CORS_ORIGINS" != "*" ]; then
+        # Auto-prepend https:// to each entry if no scheme is provided
+        _fixed_origins=""
+        IFS=',' read -ra _parts <<< "$CORS_ORIGINS"
+        for _part in "${_parts[@]}"; do
+            _part="$(echo "$_part" | xargs)"  # trim whitespace
+            if [ -n "$_part" ] && [[ ! "$_part" =~ ^https?:// ]]; then
+                if [[ "$https_choice" =~ ^[Yy]$ ]]; then
+                    _part="https://$_part"
+                else
+                    _part="http://$_part"
+                fi
+            fi
+            if [ -n "$_fixed_origins" ]; then
+                _fixed_origins="$_fixed_origins,$_part"
+            else
+                _fixed_origins="$_part"
+            fi
+        done
+        CORS_ORIGINS="$_fixed_origins"
         print_info "CORS origins: $CORS_ORIGINS"
+    else
+        print_info "CORS set to wildcard (*). Restrict this in .env for production."
     fi
     echo ""
 

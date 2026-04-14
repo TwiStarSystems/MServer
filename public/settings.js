@@ -701,7 +701,6 @@ async function loadBranding() {
       
       document.getElementById('branding-site-title').value = branding.siteTitle || '';
       document.getElementById('footer-addition').value = branding.footerAddition || '';
-      document.getElementById('base-url').value = branding.baseUrl || '';
       
       // Handle favicon
       if (branding.siteIcon) {
@@ -790,13 +789,11 @@ async function saveBranding(e) {
   const faviconFile = document.getElementById('site-icon').files[0];
   const siteTitle = document.getElementById('branding-site-title').value;
   const footerAddition = document.getElementById('footer-addition').value;
-  const baseUrl = document.getElementById('base-url').value;
   
   try {
     const formData = new FormData();
     formData.append('siteTitle', siteTitle);
     formData.append('footerAddition', footerAddition);
-    formData.append('baseUrl', baseUrl);
     if (faviconFile) {
       formData.append('favicon', faviconFile);
     }
@@ -2456,8 +2453,65 @@ async function loadAppSettings() {
     await loadWebhookSettings();
     // Load Email Templates
     await loadEmailTemplates();
+    // Load Network & Connectivity settings
+    await loadNetworkSettings();
   } catch (err) {
     console.error('Failed to load app settings:', err);
+  }
+}
+
+async function loadNetworkSettings() {
+  try {
+    const response = await fetch('/api/settings/network');
+    if (response.ok) {
+      const net = await response.json();
+      document.getElementById('base-url').value = (await fetch('/api/settings/branding').then(r => r.json())).baseUrl || '';
+      document.getElementById('cors-origins').value = net.corsOrigins || '';
+      document.getElementById('session-cookie-secure').checked = net.sessionCookieSecure ?? false;
+      document.getElementById('session-cookie-domain').value = net.sessionCookieDomain || '';
+      document.getElementById('session-lifetime').value = net.permanentSessionLifetime ?? 604800;
+      document.getElementById('network-port').value = net.port ?? 3000;
+    }
+  } catch (err) {
+    console.error('Failed to load network settings:', err);
+  }
+}
+
+async function saveNetworkSettings() {
+  try {
+    // Save baseUrl via branding endpoint
+    const baseUrl = document.getElementById('base-url').value;
+    const brandingFd = new FormData();
+    brandingFd.append('baseUrl', baseUrl);
+    // Preserve current branding values
+    const currentBranding = await fetch('/api/settings/branding').then(r => r.json());
+    brandingFd.append('siteTitle', currentBranding.siteTitle || '');
+    brandingFd.append('footerAddition', currentBranding.footerAddition || '');
+    await fetch('/api/settings/branding', { method: 'PUT', body: brandingFd });
+
+    // Save network/.env settings
+    const payload = {
+      corsOrigins: document.getElementById('cors-origins').value,
+      sessionCookieSecure: document.getElementById('session-cookie-secure').checked,
+      sessionCookieDomain: document.getElementById('session-cookie-domain').value,
+      permanentSessionLifetime: parseInt(document.getElementById('session-lifetime').value, 10) || 604800,
+    };
+
+    const response = await fetch('/api/settings/network', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      showNotification(result.message || 'Network settings saved.', 'success');
+    } else {
+      const err = await response.json();
+      showNotification('Failed to save network settings: ' + (err.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    showNotification('Failed to save network settings: ' + err.message, 'error');
   }
 }
 

@@ -119,12 +119,6 @@
               <small>Additional text to display in the footer (HTML allowed)</small>
             </div>
             
-            <div class="form-group">
-              <label for="base-url">Base URL</label>
-              <input type="text" id="base-url" name="baseUrl" placeholder="https://mc.example.com" value="">
-              <small>Your server's base domain/IP (e.g., mc.example.com or 123.45.67.89). Used for resource packs and public server information.</small>
-            </div>
-            
             <button type="submit" class="btn btn-primary">Save Branding</button>
           </form>
           
@@ -250,6 +244,55 @@
         </section>
                 <!-- Server Settings Section -->
         <section id="appsettings-section" class="settings-section">
+          <div class="settings-card">
+            <h3>🌐 Network & Connectivity</h3>
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="base-url">Base URL</label>
+              <input type="text" id="base-url" class="form-control" placeholder="https://mc.example.com" value="">
+              <small>Your server's base domain/IP (e.g., mc.example.com or 123.45.67.89). Used for resource packs and public server information.</small>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="cors-origins">CORS / WebSocket Origins</label>
+              <textarea id="cors-origins" class="form-control" rows="3" placeholder="https://panel.mc.example.com"></textarea>
+              <small>Comma-separated list of allowed origins for WebSocket and CORS requests. Use <code>*</code> to allow all (not recommended for production). Bare domains will have <code>https://</code> auto-prepended.</small>
+            </div>
+
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Secure Session Cookies</label>
+                <small>Enable for HTTPS deployments. Cookies will only be sent over secure connections.</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="session-cookie-secure">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="session-cookie-domain">Session Cookie Domain</label>
+              <input type="text" id="session-cookie-domain" class="form-control" placeholder=".example.com">
+              <small>Optional. Set to share sessions across subdomains (e.g., <code>.twistar.org</code>). Leave blank for default.</small>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="session-lifetime">Session Lifetime (seconds)</label>
+              <input type="number" id="session-lifetime" class="form-control" min="3600" value="604800" style="width: 140px;">
+              <small>How long a login session stays valid. Default: 604800 (7 days).</small>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label>Application Port</label>
+              <input type="number" id="network-port" class="form-control" disabled style="width: 100px;">
+              <small>The port the application listens on (read-only, change in <code>.env</code>).</small>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <button type="button" class="btn btn-primary" onclick="saveNetworkSettings()">Save Network Settings</button>
+              <small style="color: var(--text-secondary);">⚠️ Changes require a service restart to take effect.</small>
+            </div>
+          </div>
+
           <div class="settings-card">
             <h3>👤 User Creation & Modification</h3>
             <div class="settings-option">

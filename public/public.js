@@ -54,8 +54,8 @@ function createServerCard(server) {
         'neoforge': 'NeoForge'
     };
     
-    const typeDisplay = serverTypes[server.serverType] || server.serverType || 'Unknown';
-    const versionDisplay = server.version || 'N/A';
+    const typeDisplay = escapeHtml(serverTypes[server.serverType] || server.serverType || 'Unknown');
+    const versionDisplay = escapeHtml(server.version || 'N/A');
     
     return `
         <div class="server-card">

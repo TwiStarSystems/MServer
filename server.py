@@ -76,13 +76,20 @@ elif len(_raw_secret) < 32:
     )
 app.config['SECRET_KEY'] = _raw_secret
 
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
+    seconds=int(os.environ.get('PERMANENT_SESSION_LIFETIME', 604800))
+)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 # Set to True when serving over HTTPS (SESSION_COOKIE_SECURE=true in .env)
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+# Optional: scope session cookie to a domain (e.g. .twistar.org for subdomain sharing)
+_cookie_domain = os.environ.get('SESSION_COOKIE_DOMAIN', '').strip()
+if _cookie_domain:
+    app.config['SESSION_COOKIE_DOMAIN'] = _cookie_domain
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 app.config['WTF_CSRF_TIME_LIMIT'] = None     # Token valid for full session lifetime
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB upload limit
 
 # Configure ProxyFix for reverse proxy (e.g., Nginx) headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -1921,12 +1928,28 @@ class UserManager:
         ).fetchone()
 
         if row is None:
-            return None, "User not found"
+            return None, "Invalid username or password"
 
         user_id = row['id']
 
         if row['account_disabled']:
-            return None, "Account has been disabled due to multiple failed login attempts. Please contact an administrator."
+            # Auto-expire lockout after 30 minutes
+            disabled_at = row['disabled_at']
+            if disabled_at:
+                locked_dt = datetime.fromisoformat(disabled_at)
+                elapsed = (datetime.now() - locked_dt).total_seconds()
+                if elapsed >= 1800:
+                    conn.execute(
+                        'UPDATE users SET account_disabled=0, failed_login_attempts=0, disabled_at=NULL WHERE id=?',
+                        (user_id,)
+                    )
+                    conn.commit()
+                    # Fall through to password check below
+                else:
+                    mins = max(1, int((1800 - elapsed) / 60))
+                    return None, f"Account temporarily locked. Try again in {mins} minute{'s' if mins != 1 else ''}."
+            else:
+                return None, "Account has been disabled. Please contact an administrator."
 
         if check_password_hash(row['password'], password):
             if not row['approved'] and row['role'] != 'admin':
@@ -3598,6 +3621,12 @@ class ServerManager:
             server_dir.mkdir(parents=True, exist_ok=True)
 
             with zipfile.ZipFile(zip_path, 'r') as zipf:
+                # Security: reject path traversal and symlinks before extracting
+                for _info in zipf.infolist():
+                    if '..' in _info.filename or _info.filename.startswith('/'):
+                        raise ValueError(f'Unsafe path in ZIP: {_info.filename!r}')
+                    if (_info.external_attr >> 16) & 0o170000 == 0o120000:
+                        raise ValueError('ZIP contains symbolic links')
                 zipf.extractall(server_dir)
 
             subdirs = [d for d in server_dir.iterdir() if d.is_dir()]
@@ -4309,7 +4338,8 @@ def api_login():
     
     # Check if MFA is enabled for this user
     if result.get('mfaEnabled', False):
-        # Set temporary session for MFA verification with timestamp
+        # Regenerate session before storing any auth state (prevents session fixation)
+        session.clear()
         session['temp_user_id'] = user_id
         session['mfa_required'] = True
         session['mfa_timestamp'] = time.time()
@@ -4332,7 +4362,8 @@ def api_login():
                 'code': 'MFA_REQUIRED'
             }), 403
     
-    # Set session
+    # Regenerate session before setting auth data (prevents session fixation)
+    session.clear()
     session.permanent = True
     session['user_id'] = user_id
     session['username'] = result['username']
@@ -4616,13 +4647,12 @@ def api_mfa_verify_login():
         message = 'Login successful'
     
     if verified:
-        # Complete login
+        # Complete login - clear temp session and regenerate to prevent session fixation
+        session.clear()
         session.permanent = True
         session['user_id'] = temp_user_id
         session['username'] = user['username']
         session['role'] = user['role']
-        session.pop('temp_user_id', None)
-        session.pop('mfa_required', None)
         
         return jsonify({
             'success': True,
@@ -4997,7 +5027,7 @@ def create_server():
         java_args=java_args,
         server_type=server_type,
         version=version,
-        owner=user.get('username', 'admin'),
+        owner=user_id,
         approved=approved,
         category=category,
         port=server_properties.get('server-port')
@@ -5138,8 +5168,14 @@ def setup_bedrock_server(server_id):
             preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds'}
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                for member in zip_ref.namelist():
-                    if any(member.startswith(pf) for pf in preserve_files) and (server_dir / member).exists():
+                for member in zip_ref.infolist():
+                    name = member.filename
+                    # Security: skip path traversal and symlink entries
+                    if '..' in name or name.startswith('/'):
+                        continue
+                    if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                        continue
+                    if any(name.startswith(pf) for pf in preserve_files) and (server_dir / name).exists():
                         continue
                     zip_ref.extract(member, server_dir)
             
@@ -5246,9 +5282,6 @@ def import_server():
     port = request.form.get('port', '25565').strip()
     engine = request.form.get('engine', '').strip() or None
     
-    # Resolve owner to username instead of user_id
-    owner_username = user.get('username', 'admin')
-    
     # Check if server approval is required (admins are always auto-approved)
     is_admin = user.get('role') == 'admin'
     require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
@@ -5264,7 +5297,7 @@ def import_server():
         success, result = server_manager.import_server_from_zip(
             name, temp_path, java_args,
             executable_name=executable_name or None,
-            owner=owner_username,
+            owner=user_id,
             approved=approved,
             category=category,
             port=port,
@@ -5310,12 +5343,15 @@ def import_world(server_id):
         file.save(str(temp_path))
 
         with zipfile.ZipFile(temp_path, 'r') as zipf:
-            names = zipf.namelist()
+            _infos = zipf.infolist()
+            names = [i.filename for i in _infos]
 
-            # Security: reject entries that contain path traversal sequences
-            for member in names:
-                if '..' in member or member.startswith('/'):
+            # Security: reject path traversal and symlinks
+            for _info in _infos:
+                if '..' in _info.filename or _info.filename.startswith('/'):
                     return jsonify({'error': 'Invalid ZIP: contains unsafe paths'}), 400
+                if (_info.external_attr >> 16) & 0o170000 == 0o120000:
+                    return jsonify({'error': 'Invalid ZIP: contains symbolic links'}), 400
 
             # Determine the structure of the world ZIP
             top_level_items = set()
@@ -5343,7 +5379,9 @@ def import_world(server_id):
                 if tmp_dir.exists():
                     shutil.rmtree(tmp_dir)
                 tmp_dir.mkdir()
-                zipf.extractall(tmp_dir)
+                for _info in _infos:
+                    if not _info.filename.endswith('/'):
+                        zipf.extract(_info, tmp_dir)
 
                 # Find a directory that contains level.dat
                 world_found = None
@@ -8333,6 +8371,100 @@ def reset_email_template_api(name):
     """Reset an email template to its built-in default (admin only)"""
     settings_manager.reset_email_template(name)
     return jsonify({'success': True})
+
+
+# ==================== Network & Environment Settings API ====================
+
+def _read_env_file():
+    """Read the .env file and return a dict of key=value pairs."""
+    env_path = BASE_DIR / '.env'
+    data = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' in line:
+                k, v = line.split('=', 1)
+                data[k.strip()] = v.strip()
+    return data
+
+def _write_env_value(key, value):
+    """Update a single key in the .env file, preserving comments and order.
+    If the key doesn't exist, append it."""
+    env_path = BASE_DIR / '.env'
+    if not env_path.exists():
+        env_path.write_text(f'{key}={value}\n')
+        return
+    lines = env_path.read_text().splitlines()
+    found = False
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#') and '=' in stripped:
+            k = stripped.split('=', 1)[0].strip()
+            if k == key:
+                new_lines.append(f'{key}={value}')
+                found = True
+                continue
+        new_lines.append(line)
+    if not found:
+        new_lines.append(f'{key}={value}')
+    env_path.write_text('\n'.join(new_lines) + '\n')
+
+@app.route('/api/settings/network', methods=['GET'])
+@admin_required
+def get_network_settings():
+    """Get network/environment settings (admin only)."""
+    env = _read_env_file()
+    return jsonify({
+        'corsOrigins':             env.get('CORS_ORIGINS', '*'),
+        'sessionCookieSecure':     env.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true',
+        'sessionCookieDomain':     env.get('SESSION_COOKIE_DOMAIN', ''),
+        'permanentSessionLifetime': int(env.get('PERMANENT_SESSION_LIFETIME', 604800)),
+        'port':                    int(env.get('PORT', 3000)),
+    })
+
+@app.route('/api/settings/network', methods=['PUT'])
+@admin_required
+def update_network_settings():
+    """Update network/environment settings (admin only).
+    Changes are written to .env. A service restart is required for most to take effect."""
+    data = request.get_json() or {}
+    updated_keys = []
+
+    if 'corsOrigins' in data:
+        raw = data['corsOrigins'].strip()
+        if raw and raw != '*':
+            # Auto-prepend https:// to bare domains
+            parts = [p.strip() for p in raw.split(',') if p.strip()]
+            fixed = []
+            for p in parts:
+                if not p.startswith(('http://', 'https://')):
+                    p = f'https://{p}'
+                fixed.append(p)
+            raw = ','.join(fixed)
+        _write_env_value('CORS_ORIGINS', raw)
+        updated_keys.append('CORS_ORIGINS')
+
+    if 'sessionCookieSecure' in data:
+        val = 'true' if data['sessionCookieSecure'] else 'false'
+        _write_env_value('SESSION_COOKIE_SECURE', val)
+        updated_keys.append('SESSION_COOKIE_SECURE')
+
+    if 'sessionCookieDomain' in data:
+        _write_env_value('SESSION_COOKIE_DOMAIN', data['sessionCookieDomain'].strip())
+        updated_keys.append('SESSION_COOKIE_DOMAIN')
+
+    if 'permanentSessionLifetime' in data:
+        _write_env_value('PERMANENT_SESSION_LIFETIME', str(int(data['permanentSessionLifetime'])))
+        updated_keys.append('PERMANENT_SESSION_LIFETIME')
+
+    return jsonify({
+        'success': True,
+        'updated': updated_keys,
+        'message': 'Settings saved. Restart the service for changes to take effect.'
+    })
 
 
 # ==================== User Notification Preferences API ====================
