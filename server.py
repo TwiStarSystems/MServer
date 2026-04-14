@@ -89,7 +89,7 @@ if _cookie_domain:
     app.config['SESSION_COOKIE_DOMAIN'] = _cookie_domain
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 app.config['WTF_CSRF_TIME_LIMIT'] = None     # Token valid for full session lifetime
-app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB upload limit
+app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024 * 1024  # 25 GB upload limit (large world ZIPs)
 
 # Configure ProxyFix for reverse proxy (e.g., Nginx) headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)

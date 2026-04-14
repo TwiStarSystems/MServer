@@ -454,7 +454,7 @@ show_completion() {
     
     # Show configuration
     echo "Configuration:"
-    echo "  Transport: HTTP on port 3000"
+    echo "  Transport: HTTP on port ${SERVER_PORT:-3000}"
     echo ""
 
     echo "Access the web interface at:"
@@ -526,16 +526,6 @@ do_install() {
         if [ -d "$SCRIPT_DIR/configs" ]; then
             cp -r "$SCRIPT_DIR/configs" "$INSTALL_DIR/"
             print_success "Copied: configs/"
-        fi
-        
-        if [ -d "$SCRIPT_DIR/docs" ]; then
-            cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
-            print_success "Copied: docs/"
-        fi
-        
-        if [ -d "$SCRIPT_DIR/tools" ]; then
-            cp -r "$SCRIPT_DIR/tools" "$INSTALL_DIR/"
-            print_success "Copied: tools/"
         fi
         
         if [ -d "$SCRIPT_DIR/serverexecutables" ]; then
@@ -671,20 +661,6 @@ do_update() {
             print_success "  Updated: configs/ (templates)"
         fi
         
-        # Update documentation
-        if [ -d "$SCRIPT_DIR/docs" ]; then
-            rm -rf "$INSTALL_DIR/docs"
-            cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
-            print_success "  Updated: docs/ (documentation)"
-        fi
-        
-        # Update tools
-        if [ -d "$SCRIPT_DIR/tools" ]; then
-            mkdir -p "$INSTALL_DIR/tools"
-            cp "$SCRIPT_DIR/tools"/*.py "$INSTALL_DIR/tools/" 2>/dev/null || true
-            print_success "  Updated: tools/ (scripts)"
-        fi
-        
         # Update serverexecutables (new jar files etc)
         if [ -d "$SCRIPT_DIR/serverexecutables" ]; then
             # Merge, don't replace - preserve any custom executables
@@ -743,17 +719,6 @@ do_update() {
     
     # Fix permissions
     set_permissions
-    
-    # Verify frontend files are readable
-    print_info "Verifying frontend file permissions..."
-    if [ -f "$INSTALL_DIR/public/app.js" ]; then
-        local perms=$(stat -c "%a" "$INSTALL_DIR/public/app.js")
-        print_success "  app.js permissions: $perms"
-    fi
-    if [ -f "$INSTALL_DIR/public/settings.js" ]; then
-        local perms=$(stat -c "%a" "$INSTALL_DIR/public/settings.js")
-        print_success "  settings.js permissions: $perms"
-    fi
     
     # Update systemd service (in case of changes)
     print_info "Updating systemd service..."
@@ -967,7 +932,7 @@ do_status() {
     
     # Show config info if database exists
     if [ -f "$INSTALL_DIR/msc.db" ]; then
-        SERVER_COUNT=$(sqlite3 "$INSTALL_DIR/msc.db" "SELECT COUNT(*) FROM servers;" 2>/dev/null || echo "0")
+        SERVER_COUNT=$(python3 -c "import sqlite3; c=sqlite3.connect('$INSTALL_DIR/msc.db'); print(c.execute('SELECT COUNT(*) FROM servers').fetchone()[0])" 2>/dev/null || echo "0")
         echo "Configured servers: $SERVER_COUNT"
     fi
     
