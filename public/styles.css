@@ -1249,7 +1249,7 @@ body {
 }
 
 .modal-content.modal-editor {
-  width: min(1280px, 95vw);
+  width: min(1270px, 95vw);
   height: min(720px, 90vh);
   display: flex;
   flex-direction: column;

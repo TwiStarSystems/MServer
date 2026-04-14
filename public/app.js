@@ -3643,9 +3643,37 @@ function renderNbtTree() {
   }
 }
 
+function getExpandedPaths() {
+  const expanded = new Set();
+  document.querySelectorAll('#nbt-tree .nbt-node').forEach(node => {
+    const children = node.querySelector(':scope > .nbt-children');
+    if (children && !children.classList.contains('collapsed')) {
+      expanded.add(node.dataset.nbtPath);
+    }
+  });
+  return expanded;
+}
+
+function restoreExpandedPaths(expanded) {
+  document.querySelectorAll('#nbt-tree .nbt-node').forEach(node => {
+    if (expanded.has(node.dataset.nbtPath)) {
+      const children = node.querySelector(':scope > .nbt-children');
+      const toggle = node.querySelector(':scope > .nbt-node-header > .nbt-toggle');
+      if (children) {
+        children.classList.remove('collapsed');
+        if (toggle) {
+          toggle.textContent = '▼';
+          toggle.classList.add('expanded');
+        }
+      }
+    }
+  });
+}
+
 function createNbtNode(tag, path) {
   const node = document.createElement('div');
   node.className = 'nbt-node';
+  node.dataset.nbtPath = path.join('.');
   
   const header = document.createElement('div');
   header.className = 'nbt-node-header';
@@ -3803,8 +3831,10 @@ function saveNbtValue() {
   // Update the value in the data structure
   updateNbtDataValue(currentNbtData, currentNbtEditPath, value);
   
-  // Re-render and close modal
+  // Re-render preserving expanded state, and close modal
+  const expandedPaths = getExpandedPaths();
   renderNbtTree();
+  restoreExpandedPaths(expandedPaths);
   closeNbtValueModal();
   showNotification('Value updated (save to apply)', 'info');
 }
@@ -3878,7 +3908,9 @@ function confirmAddNbtTag() {
   // Find parent and add tag
   addNbtTagToData(currentNbtData, currentNbtAddParentPath, newTag);
   
+  const expandedAfterAdd = getExpandedPaths();
   renderNbtTree();
+  restoreExpandedPaths(expandedAfterAdd);
   closeNbtAddModal();
   showNotification('Tag added (save to apply)', 'info');
 }
@@ -3905,7 +3937,9 @@ async function deleteNbtTag(path) {
   if (!await confirmAction('Are you sure you want to delete this tag?', { title: 'Delete NBT Tag', icon: '🗑️', okText: 'Delete' })) return;
   
   deleteNbtTagFromData(currentNbtData, path);
+  const expandedAfterDelete = getExpandedPaths();
   renderNbtTree();
+  restoreExpandedPaths(expandedAfterDelete);
   showNotification('Tag deleted (save to apply)', 'info');
 }
 

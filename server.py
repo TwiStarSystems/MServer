@@ -3091,6 +3091,22 @@ class NBTEditor:
         """Convert NBT data to JSON-serializable format"""
         return json.dumps(nbt_data, indent=2)
     
+    def to_dict(self, nbt_data):
+        """Convert NBT tree structure to a simple Python dict"""
+        def convert(tag):
+            tag_type = tag['type']
+            value = tag['value']
+            if tag_type == self.TAG_COMPOUND:
+                result = {}
+                for child in value:
+                    result[child['name']] = convert(child)
+                return result
+            elif tag_type == self.TAG_LIST:
+                return [convert(item) for item in value['items']]
+            else:
+                return value
+        return convert(nbt_data)
+    
     def update_value(self, nbt_data, path, new_value):
         """
         Update a value at a specific path in the NBT tree.
@@ -6234,7 +6250,7 @@ def get_player_inventory(server_id, uuid):
 
     try:
         nbt_data = nbt_editor.read_file(player_dat)
-        nbt_json = nbt_editor.nbt_to_json(nbt_data)
+        nbt_json = nbt_editor.to_dict(nbt_data)
 
         return jsonify({
             'inventory': nbt_json.get('Inventory', []),
