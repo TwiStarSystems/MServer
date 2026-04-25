@@ -1419,6 +1419,9 @@ async function killServer() {
 let currentCreationType = null;
 let defaultServerPath = '';
 
+// Track JAR availability for versions (unified)
+let uVersionAvailability = {};
+
 async function openAddServerModal() {
   try {
     editingServerId = null;
@@ -1429,66 +1432,102 @@ async function openAddServerModal() {
     
     // Show creation type selection, hide all forms
     const creationTypeSection = document.getElementById('creation-type-section');
-    const freshForm = document.getElementById('fresh-server-form');
-    const importForm = document.getElementById('import-server-form');
+    const unifiedForm = document.getElementById('unified-server-form');
     const manualForm = document.getElementById('manual-server-form');
     
     if (creationTypeSection) creationTypeSection.style.display = 'block';
-    if (freshForm) freshForm.style.display = 'none';
-    if (importForm) importForm.style.display = 'none';
+    if (unifiedForm) unifiedForm.style.display = 'none';
     if (manualForm) manualForm.style.display = 'none';
-    const importWorldForm = document.getElementById('import-world-form');
-    if (importWorldForm) importWorldForm.style.display = 'none';
     
     // Hide version management section (only for editing)
     const versionSection = document.getElementById('version-management-section');
     if (versionSection) versionSection.style.display = 'none';
     
-    // Fetch the default server path (non-blocking - don't prevent modal from opening)
+    // Fetch the default server path (non-blocking)
     try {
       const result = await apiRequest('/api/default-server-path');
       defaultServerPath = result.path || '';
     } catch (err) {
       console.error('Failed to get default server path:', err);
       defaultServerPath = '';
-      // Continue anyway - this shouldn't prevent the modal from opening
     }
   
-  // Reset fresh server form
-  document.getElementById('fresh-name').value = '';
-  document.getElementById('fresh-category').value = '';
-  document.getElementById('fresh-version').value = '';
-  document.getElementById('fresh-version').disabled = true;
-  document.getElementById('fresh-min-ram').value = '1G';
-  document.getElementById('fresh-max-ram').value = '2G';
-  document.getElementById('fresh-jvm-args').value = '';
-  document.getElementById('fresh-upload-jar').checked = false;
-  document.getElementById('custom-jar-upload').style.display = 'none';
+    // Reset unified form
+    resetUnifiedForm();
+    
+    // Reset manual form with default path placeholder
+    document.getElementById('input-name').value = '';
+    document.getElementById('input-category').value = 'unmodded';
+    document.getElementById('input-path').value = '';
+    document.getElementById('input-path').placeholder = defaultServerPath ? `${defaultServerPath}/<server-id>` : '/path/to/minecraft/server';
+    document.getElementById('input-min-ram').value = '1G';
+    document.getElementById('input-max-ram').value = '2G';
+    document.getElementById('input-jvm-args').value = '';
+    document.getElementById('input-auto-start').checked = false;
+    
+    // Update path hint with actual default path
+    const pathHint = document.getElementById('path-hint');
+    if (pathHint && defaultServerPath) {
+      pathHint.innerHTML = `Leave empty to auto-create in <code>${escapeHtml(defaultServerPath)}/</code>`;
+    }
+    
+    // Load server engines (non-blocking)
+    loadUnifiedEngines().catch(err => console.error('Failed to load engines:', err));
+    
+    // Show modal
+    const serverModal = document.getElementById('server-modal');
+    if (serverModal) {
+      serverModal.classList.add('active');
+    }
+    
+  } catch (error) {
+    console.error('Error in openAddServerModal:', error);
+    const serverModal = document.getElementById('server-modal');
+    if (serverModal) serverModal.classList.add('active');
+  }
+}
+
+function resetUnifiedForm() {
+  document.getElementById('u-name').value = '';
+  document.getElementById('u-name').removeAttribute('required');
+  document.getElementById('u-category').value = '';
+  document.getElementById('u-version').value = '';
+  document.getElementById('u-version').disabled = true;
+  document.getElementById('u-min-ram').value = '1G';
+  document.getElementById('u-max-ram').value = '2G';
+  document.getElementById('u-jvm-args').value = '';
   
-  // Reset server properties fields
-  document.getElementById('fresh-server-port').value = '25565';
-  document.getElementById('fresh-max-players').value = '20';
-  document.getElementById('fresh-gamemode').value = 'survival';
-  document.getElementById('fresh-difficulty').value = 'easy';
-  document.getElementById('fresh-level-seed').value = '';
-  document.getElementById('fresh-pvp').checked = true;
-  document.getElementById('fresh-white-list').checked = false;
-  document.getElementById('fresh-hardcore').checked = false;
+  const uploadJarCheckbox = document.getElementById('u-upload-jar');
+  if (uploadJarCheckbox) uploadJarCheckbox.checked = false;
+  document.getElementById('u-custom-jar-upload').style.display = 'none';
+  
+  // Reset server properties
+  document.getElementById('u-server-port').value = '25565';
+  document.getElementById('u-max-players').value = '20';
+  document.getElementById('u-gamemode').value = 'survival';
+  document.getElementById('u-difficulty').value = 'easy';
+  document.getElementById('u-level-seed').value = '';
+  document.getElementById('u-pvp').checked = true;
+  document.getElementById('u-white-list').checked = false;
+  document.getElementById('u-hardcore').checked = false;
   
   // Hide conditional fields
-  document.getElementById('engine-group').style.display = 'none';
-  document.getElementById('version-group').style.display = 'none';
-  document.getElementById('ram-fields-group').style.display = 'none';
-  document.getElementById('upload-jar-group').style.display = 'none';
-  document.getElementById('server-properties-group').style.display = 'none';
+  document.getElementById('u-engine-group').style.display = 'none';
+  document.getElementById('u-version-group').style.display = 'none';
+  document.getElementById('u-ram-group').style.display = 'none';
+  document.getElementById('u-upload-jar-group').style.display = 'none';
+  document.getElementById('u-server-props').style.display = 'none';
+  document.getElementById('u-import-fields').style.display = 'none';
+  document.getElementById('u-world-file-group').style.display = 'none';
+  document.getElementById('u-import-props-hint').style.display = 'none';
   
   // Reset download status UI
-  const downloadStatusGroup = document.getElementById('download-status-group');
-  const versionStatus = document.getElementById('version-status');
-  const progressFill = document.querySelector('#jar-download-status .progress-fill');
-  const progressText = document.querySelector('#jar-download-status .progress-text');
-  const downloadProgress = document.querySelector('#jar-download-status .download-progress');
-  const downloadInfo = document.querySelector('#jar-download-status .download-info');
+  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  const versionStatus = document.getElementById('u-version-status');
+  const progressFill = document.querySelector('#u-jar-download-status .progress-fill');
+  const progressText = document.querySelector('#u-jar-download-status .progress-text');
+  const downloadProgress = document.querySelector('#u-jar-download-status .download-progress');
+  const downloadInfo = document.querySelector('#u-jar-download-status .download-info');
   
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   if (versionStatus) versionStatus.textContent = '';
@@ -1499,65 +1538,19 @@ async function openAddServerModal() {
     downloadInfo.innerHTML = '';
     downloadInfo.classList.remove('error');
   }
-  versionAvailability = {};
+  uVersionAvailability = {};
   
-  // Reset import form
-  document.getElementById('import-name').value = '';
-  document.getElementById('import-file').value = '';
-  document.getElementById('import-executable-name').value = '';
-  document.getElementById('import-category').value = 'unmodded';
-  document.getElementById('import-min-ram').value = '1G';
-  document.getElementById('import-max-ram').value = '2G';
-  document.getElementById('import-jvm-args').value = '';
-  
-  // Reset import-world form
-  document.getElementById('iworld-name').value = '';
-  document.getElementById('iworld-category').value = '';
-  document.getElementById('iworld-world-file').value = '';
-  document.getElementById('iworld-min-ram').value = '1G';
-  document.getElementById('iworld-max-ram').value = '2G';
-  document.getElementById('iworld-jvm-args').value = '';
-  document.getElementById('iworld-engine-group').style.display = 'none';
-  document.getElementById('iworld-version-group').style.display = 'none';
-  document.getElementById('iworld-ram-fields-group').style.display = 'none';
-  document.getElementById('iworld-download-status-group').style.display = 'none';
-  document.getElementById('iworld-version').innerHTML = '<option value="">Select category first...</option>';
-  document.getElementById('iworld-version').disabled = true;
-  iworldVersionAvailability = {};
-  
-  // Reset manual form with default path placeholder
-  document.getElementById('input-name').value = '';
-  document.getElementById('input-category').value = 'unmodded';
-  document.getElementById('input-path').value = '';
-  document.getElementById('input-path').placeholder = defaultServerPath ? `${defaultServerPath}/<server-id>` : '/path/to/minecraft/server';
-  document.getElementById('input-min-ram').value = '1G';
-  document.getElementById('input-max-ram').value = '2G';
-  document.getElementById('input-jvm-args').value = '';
-  document.getElementById('input-auto-start').checked = false;
-  
-  // Update path hint with actual default path
-  const pathHint = document.getElementById('path-hint');
-  if (pathHint && defaultServerPath) {
-    pathHint.innerHTML = `Leave empty to auto-create in <code>${escapeHtml(defaultServerPath)}/</code>`;
-  }
-  
-  // Load server engines for fresh server option (non-blocking)
-  loadServerEngines().catch(err => console.error('Failed to load engines:', err));
-  
-  // Show modal immediately (don't wait for async operations)
-  const serverModal = document.getElementById('server-modal');
-  if (serverModal) {
-    serverModal.classList.add('active');
-  } else {
-    console.error('server-modal element not found');
-  }
-  
-  } catch (error) {
-    console.error('Error in openAddServerModal:', error);
-    // Try to show modal anyway
-    const serverModal = document.getElementById('server-modal');
-    if (serverModal) serverModal.classList.add('active');
-  }
+  // Reset import file inputs
+  const importFile = document.getElementById('u-import-file');
+  if (importFile) importFile.value = '';
+  const importExec = document.getElementById('u-import-executable');
+  if (importExec) importExec.value = '';
+  const worldFile = document.getElementById('u-world-file');
+  if (worldFile) worldFile.value = '';
+
+  // Reset submit button text
+  const submitBtn = document.getElementById('u-submit-btn');
+  if (submitBtn) submitBtn.textContent = 'Create Server';
 }
 
 function selectCreationType(type) {
@@ -1566,18 +1559,58 @@ function selectCreationType(type) {
   // Hide creation type section
   document.getElementById('creation-type-section').style.display = 'none';
   
-  // Show the appropriate form
-  if (type === 'fresh') {
-    document.getElementById('fresh-server-form').style.display = 'block';
-  } else if (type === 'import') {
-    document.getElementById('import-server-form').style.display = 'block';
-  } else if (type === 'import-world') {
-    document.getElementById('import-world-form').style.display = 'block';
-    loadIWorldEngines();
-  } else if (type === 'manual') {
+  if (type === 'manual') {
     document.getElementById('manual-server-form').style.display = 'block';
-    // Show the back button in manual mode
     document.querySelector('#manual-server-form .back-btn').style.display = 'inline-block';
+    return;
+  }
+  
+  // Show unified form for fresh / import / import-world
+  document.getElementById('unified-server-form').style.display = 'block';
+  
+  // Configure form based on type
+  const nameInput = document.getElementById('u-name');
+  const categorySelect = document.getElementById('u-category');
+  const submitBtn = document.getElementById('u-submit-btn');
+  const importFields = document.getElementById('u-import-fields');
+  const worldFileGroup = document.getElementById('u-world-file-group');
+  const importPropsHint = document.getElementById('u-import-props-hint');
+  
+  // Reset bedrock option visibility
+  const bedrockOption = categorySelect.querySelector('option[value="bedrock"]');
+  
+  if (type === 'fresh') {
+    nameInput.setAttribute('required', '');
+    submitBtn.textContent = 'Create Server';
+    importFields.style.display = 'none';
+    worldFileGroup.style.display = 'none';
+    importPropsHint.style.display = 'none';
+    if (bedrockOption) bedrockOption.style.display = '';
+  } else if (type === 'import') {
+    // Import existing server: fields can be blank (managed.conf fills them)
+    nameInput.removeAttribute('required');
+    nameInput.placeholder = 'Leave blank to use from managed.conf';
+    submitBtn.textContent = 'Import Server';
+    importFields.style.display = 'block';
+    worldFileGroup.style.display = 'none';
+    importPropsHint.style.display = 'block';
+    if (bedrockOption) bedrockOption.style.display = '';
+    // For import, show server props immediately (with blank-for-managed.conf hint)
+    document.getElementById('u-server-props').style.display = 'flex';
+    document.getElementById('u-ram-group').style.display = 'block';
+    // Clear defaults so blank = use managed.conf
+    document.getElementById('u-server-port').value = '';
+    document.getElementById('u-server-port').placeholder = 'From managed.conf';
+    document.getElementById('u-max-players').value = '';
+    document.getElementById('u-max-players').placeholder = 'From managed.conf';
+  } else if (type === 'import-world') {
+    nameInput.setAttribute('required', '');
+    submitBtn.textContent = 'Create Server & Import World';
+    importFields.style.display = 'none';
+    worldFileGroup.style.display = 'block';
+    importPropsHint.style.display = 'none';
+    // No bedrock for world import
+    if (bedrockOption) bedrockOption.style.display = 'none';
   }
 }
 
@@ -1585,136 +1618,169 @@ function backToCreationType() {
   currentCreationType = null;
   
   // Hide all forms
-  document.getElementById('fresh-server-form').style.display = 'none';
-  document.getElementById('import-server-form').style.display = 'none';
-  document.getElementById('import-world-form').style.display = 'none';
+  document.getElementById('unified-server-form').style.display = 'none';
   document.getElementById('manual-server-form').style.display = 'none';
+  
+  // Reset unified form
+  resetUnifiedForm();
   
   // Show creation type selection
   document.getElementById('creation-type-section').style.display = 'block';
 }
 
-// Track JAR availability for versions
-let versionAvailability = {};  // {version: {downloaded: bool}}
+// ==================== Unified Form Dynamic Logic ====================
 
-// Track JAR availability for the import-world form
-let iworldVersionAvailability = {};  // {version: {downloaded: bool}}
+function checkUnifiedFormReady() {
+  // Check if required fields are filled to show server properties panel
+  const name = document.getElementById('u-name').value.trim();
+  const category = document.getElementById('u-category').value;
+  const isBedrock = category === 'bedrock';
+  const isModded = category === 'modded';
+  const engine = isModded ? document.getElementById('u-engine').value : 'n/a';
+  const version = isBedrock ? 'latest' : document.getElementById('u-version').value;
+  
+  // For import mode, show props immediately (already handled in selectCreationType)
+  if (currentCreationType === 'import') return;
+  
+  const propsPanel = document.getElementById('u-server-props');
+  const ramGroup = document.getElementById('u-ram-group');
+  const uploadJarGroup = document.getElementById('u-upload-jar-group');
+  
+  // Check if all required fields are filled
+  const nameOk = name.length > 0;
+  const categoryOk = category !== '';
+  const engineOk = !isModded || engine !== '';
+  const versionOk = isBedrock || version !== '';
+  
+  if (nameOk && categoryOk && engineOk && versionOk) {
+    if (propsPanel) propsPanel.style.display = 'flex';
+    if (ramGroup && !isBedrock) ramGroup.style.display = 'block';
+    if (uploadJarGroup && !isBedrock) uploadJarGroup.style.display = 'block';
+  }
+}
 
-// Handle category change for fresh server form
-function onCategoryChange() {
-  const category = document.getElementById('fresh-category').value;
-  const engineGroup = document.getElementById('engine-group');
-  const versionGroup = document.getElementById('version-group');
-  const ramFieldsGroup = document.getElementById('ram-fields-group');
-  const uploadJarGroup = document.getElementById('upload-jar-group');
-  const downloadStatusGroup = document.getElementById('download-status-group');
-  const versionSelect = document.getElementById('fresh-version');
-  const categoryDesc = document.getElementById('category-description');
+function onUnifiedCategoryChange() {
+  const category = document.getElementById('u-category').value;
+  const engineGroup = document.getElementById('u-engine-group');
+  const versionGroup = document.getElementById('u-version-group');
+  const ramGroup = document.getElementById('u-ram-group');
+  const uploadJarGroup = document.getElementById('u-upload-jar-group');
+  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  const versionSelect = document.getElementById('u-version');
+  const categoryDesc = document.getElementById('u-category-desc');
+  const propsPanel = document.getElementById('u-server-props');
   
-  // Reset version availability
-  versionAvailability = {};
-  
-  // Hide download status
+  uVersionAvailability = {};
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   if (!category) {
-    // Hide all conditional fields
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'none';
-    ramFieldsGroup.style.display = 'none';
+    ramGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
-    document.getElementById('server-properties-group').style.display = 'none';
+    if (propsPanel && currentCreationType !== 'import') propsPanel.style.display = 'none';
     categoryDesc.textContent = 'Choose whether you want a Java or Bedrock server';
     return;
   }
   
-  const engineSelect = document.getElementById('fresh-engine');
-  const pvpOption = document.getElementById('pvp-option');
-  const hardcoreOption = document.getElementById('hardcore-option');
-  const bedrockStatus = document.getElementById('bedrock-setup-status');
-  const jarStatus = document.getElementById('jar-download-status');
+  const engineSelect = document.getElementById('u-engine');
+  const pvpOption = document.getElementById('u-pvp-option');
+  const hardcoreOption = document.getElementById('u-hardcore-option');
+  const bedrockStatus = document.getElementById('u-bedrock-setup-status');
+  const jarStatus = document.getElementById('u-jar-download-status');
 
   if (category === 'unmodded') {
-    // Java Vanilla: Hide engine, show version directly
     engineGroup.style.display = 'none';
-    engineSelect.removeAttribute('required');
     versionGroup.style.display = 'block';
     versionSelect.setAttribute('required', '');
-    ramFieldsGroup.style.display = 'block';
-    uploadJarGroup.style.display = 'block';
-    document.getElementById('server-properties-group').style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
     if (pvpOption) pvpOption.style.display = '';
     if (hardcoreOption) hardcoreOption.style.display = '';
     if (bedrockStatus) bedrockStatus.style.display = 'none';
     if (jarStatus) jarStatus.style.display = '';
-    
-    // Update server port default
-    document.getElementById('fresh-server-port').value = '25565';
-    
-    // Load vanilla versions from JAR Bucket
-    loadVersionsForEngine('vanilla');
+    document.getElementById('u-server-port').value = document.getElementById('u-server-port').value || '25565';
+    loadUnifiedVersionsForEngine('vanilla');
   } else if (category === 'modded') {
-    // Java Modded: Show engine selector
     engineGroup.style.display = 'block';
     engineSelect.setAttribute('required', '');
     versionGroup.style.display = 'none';
     versionSelect.removeAttribute('required');
-    ramFieldsGroup.style.display = 'none';
-    uploadJarGroup.style.display = 'none';
-    document.getElementById('server-properties-group').style.display = 'none';
     categoryDesc.textContent = 'Java Edition server with plugin/mod support';
     if (pvpOption) pvpOption.style.display = '';
     if (hardcoreOption) hardcoreOption.style.display = '';
     if (bedrockStatus) bedrockStatus.style.display = 'none';
     if (jarStatus) jarStatus.style.display = '';
-    
-    // Reset engine and version
     engineSelect.value = '';
     versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
     versionSelect.disabled = true;
+    // Hide optional fields until engine+version selected
+    if (currentCreationType !== 'import') {
+      ramGroup.style.display = 'none';
+      uploadJarGroup.style.display = 'none';
+      propsPanel.style.display = 'none';
+    }
   } else if (category === 'bedrock') {
-    // Bedrock: No engine/version selection, no Java args
     engineGroup.style.display = 'none';
-    engineSelect.removeAttribute('required');
     versionGroup.style.display = 'none';
     versionSelect.removeAttribute('required');
-    ramFieldsGroup.style.display = 'none';
-    uploadJarGroup.style.display = 'none';
-    document.getElementById('server-properties-group').style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft Bedrock Edition server - latest version will be downloaded automatically';
-    // Hide Java-only form options
     if (pvpOption) pvpOption.style.display = 'none';
     if (hardcoreOption) hardcoreOption.style.display = 'none';
     if (bedrockStatus) bedrockStatus.style.display = 'none';
     if (jarStatus) jarStatus.style.display = 'none';
-    
-    // Set Bedrock default port
-    document.getElementById('fresh-server-port').value = '19132';
-    // Bedrock default max players is 10
-    document.getElementById('fresh-max-players').value = '10';
+    ramGroup.style.display = 'none';
+    uploadJarGroup.style.display = 'none';
+    document.getElementById('u-server-port').value = '19132';
+    document.getElementById('u-max-players').value = document.getElementById('u-max-players').value || '10';
+    // Show props for bedrock since no version step
+    propsPanel.style.display = 'flex';
   }
+  
+  checkUnifiedFormReady();
 }
 
-async function loadServerEngines() {
+function onUnifiedEngineChange() {
+  const engineSelect = document.getElementById('u-engine');
+  const versionSelect = document.getElementById('u-version');
+  const engineDesc = document.getElementById('u-engine-desc');
+  const versionGroup = document.getElementById('u-version-group');
+  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  
+  const serverEngine = engineSelect.value;
+  uVersionAvailability = {};
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+  
+  if (!serverEngine) {
+    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
+    versionSelect.disabled = true;
+    versionGroup.style.display = 'none';
+    engineDesc.textContent = '';
+    if (currentCreationType !== 'import') {
+      document.getElementById('u-ram-group').style.display = 'none';
+      document.getElementById('u-upload-jar-group').style.display = 'none';
+      document.getElementById('u-server-props').style.display = 'none';
+    }
+    return;
+  }
+  
+  const selectedOption = engineSelect.options[engineSelect.selectedIndex];
+  engineDesc.textContent = selectedOption.dataset.description || '';
+  
+  versionGroup.style.display = 'block';
+  loadUnifiedVersionsForEngine(serverEngine);
+}
+
+async function loadUnifiedEngines() {
   try {
-    // Load all available server types from JAR Bucket (not just local)
     const result = await apiRequest('/api/jar-bucket/all-types');
     const allTypes = result.types || [];
+    const moddedEngines = allTypes.filter(t => t.id !== 'vanilla' && (t.category === 'java_servers' || t.category === 'modded'));
     
-    // Filter to server types (not proxies)
-    const serverTypes = allTypes.filter(t => t.category === 'java_servers' || t.category === 'modded');
-    
-    // Filter to only modded engines (exclude vanilla)
-    const moddedEngines = serverTypes.filter(e => e.id !== 'vanilla');
-    
-    const engineSelect = document.getElementById('fresh-engine');
+    const engineSelect = document.getElementById('u-engine');
     
     if (moddedEngines.length === 0) {
       engineSelect.innerHTML = '<option value="">No server types available</option>';
       engineSelect.disabled = true;
-      document.getElementById('engine-description').textContent = 
-        'No server types found.';
       return;
     }
     
@@ -1730,62 +1796,20 @@ async function loadServerEngines() {
     });
   } catch (error) {
     console.error('Failed to load server engines:', error);
-    const engineSelect = document.getElementById('fresh-engine');
+    const engineSelect = document.getElementById('u-engine');
     engineSelect.innerHTML = '<option value="">Error loading server engines</option>';
   }
 }
 
-async function loadVersions() {
-  const engineSelect = document.getElementById('fresh-engine');
-  const versionSelect = document.getElementById('fresh-version');
-  const engineDesc = document.getElementById('engine-description');
-  const versionGroup = document.getElementById('version-group');
-  const ramFieldsGroup = document.getElementById('ram-fields-group');
-  const uploadJarGroup = document.getElementById('upload-jar-group');
-  const downloadStatusGroup = document.getElementById('download-status-group');
-  
-  const serverEngine = engineSelect.value;
-  
-  // Reset version availability
-  versionAvailability = {};
-  
-  // Hide download status
-  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-  
-  if (!serverEngine) {
-    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
-    versionSelect.disabled = true;
-    versionGroup.style.display = 'none';
-    ramFieldsGroup.style.display = 'none';
-    uploadJarGroup.style.display = 'none';
-    document.getElementById('server-properties-group').style.display = 'none';
-    engineDesc.textContent = '';
-    return;
-  }
-  
-  // Show engine description
-  const selectedOption = engineSelect.options[engineSelect.selectedIndex];
-  engineDesc.textContent = selectedOption.dataset.description || '';
-  
-  // Show remaining fields
-  versionGroup.style.display = 'block';
-  ramFieldsGroup.style.display = 'block';
-  uploadJarGroup.style.display = 'block';
-  document.getElementById('server-properties-group').style.display = 'block';
-  
-  await loadVersionsForEngine(serverEngine);
-}
-
-async function loadVersionsForEngine(serverEngine) {
-  const versionSelect = document.getElementById('fresh-version');
-  const versionStatus = document.getElementById('version-status');
+async function loadUnifiedVersionsForEngine(serverEngine) {
+  const versionSelect = document.getElementById('u-version');
+  const versionStatus = document.getElementById('u-version-status');
   
   try {
     versionSelect.innerHTML = '<option value="">Loading versions...</option>';
     versionSelect.disabled = true;
     if (versionStatus) versionStatus.textContent = '';
     
-    // Use JAR Bucket API to get all available versions (not just local)
     const result = await apiRequest(`/api/jar-bucket/all-versions/${serverEngine}`);
     const versions = result.versions || [];
     
@@ -1794,10 +1818,9 @@ async function loadVersionsForEngine(serverEngine) {
       return;
     }
     
-    // Store availability info
-    versionAvailability = {};
+    uVersionAvailability = {};
     versions.forEach(v => {
-      versionAvailability[v.version] = { downloaded: v.downloaded };
+      uVersionAvailability[v.version] = { downloaded: v.downloaded };
     });
     
     versionSelect.innerHTML = '<option value="">Select version...</option>';
@@ -1817,14 +1840,12 @@ async function loadVersionsForEngine(serverEngine) {
   }
 }
 
-// Handle version selection change
-function onVersionChange() {
-  const version = document.getElementById('fresh-version').value;
-  const downloadStatusGroup = document.getElementById('download-status-group');
-  const versionStatus = document.getElementById('version-status');
-  const versionDesc = document.getElementById('version-description');
+function onUnifiedVersionChange() {
+  const version = document.getElementById('u-version').value;
+  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  const versionStatus = document.getElementById('u-version-status');
+  const versionDesc = document.getElementById('u-version-desc');
   
-  // Always hide download status until Create Server is clicked
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   if (!version) {
@@ -1833,22 +1854,816 @@ function onVersionChange() {
     return;
   }
   
-  const info = versionAvailability[version] || {};
+  const info = uVersionAvailability[version] || {};
   
   if (info.downloaded) {
-    // JAR is available locally
     if (versionStatus) {
       versionStatus.textContent = '✓ Downloaded';
       versionStatus.className = 'version-status downloaded';
     }
     if (versionDesc) versionDesc.textContent = 'JAR file is already downloaded and ready to use';
   } else {
-    // JAR needs to be downloaded
     if (versionStatus) {
       versionStatus.textContent = '⬇ Will Download';
       versionStatus.className = 'version-status not-downloaded';
     }
     if (versionDesc) versionDesc.textContent = 'JAR will be automatically downloaded when server is created';
+  }
+  
+  checkUnifiedFormReady();
+}
+
+// Listen for name input to trigger dynamic reveal
+document.addEventListener('DOMContentLoaded', () => {
+  const nameInput = document.getElementById('u-name');
+  if (nameInput) {
+    nameInput.addEventListener('input', checkUnifiedFormReady);
+  }
+});
+
+function toggleUnifiedCustomJar() {
+  const checkbox = document.getElementById('u-upload-jar');
+  const customSection = document.getElementById('u-custom-jar-upload');
+  
+  if (checkbox.checked) {
+    customSection.style.display = 'block';
+  } else {
+    customSection.style.display = 'none';
+  }
+}
+
+// ==================== Unified Form Submit ====================
+
+async function submitUnifiedForm(e) {
+  e.preventDefault();
+  
+  if (currentCreationType === 'fresh') {
+    await createFreshServer(e);
+  } else if (currentCreationType === 'import') {
+    await importServer(e);
+  } else if (currentCreationType === 'import-world') {
+    await importWorld(e);
+  }
+}
+
+// Create fresh server with JAR download
+async function createFreshServer(e) {
+  const name = document.getElementById('u-name').value;
+  const category = document.getElementById('u-category').value;
+  const isBedrock = category === 'bedrock';
+  const serverEngine = isBedrock ? 'bedrock' : (category === 'modded' 
+    ? document.getElementById('u-engine').value 
+    : 'vanilla');
+  const version = isBedrock ? 'latest' : document.getElementById('u-version').value;
+  const executable = isBedrock ? 'server.sh' : 'server.jar';
+  const minRam = document.getElementById('u-min-ram').value;
+  const maxRam = document.getElementById('u-max-ram').value;
+  const extraJvmArgs = document.getElementById('u-jvm-args').value.trim();
+  const javaArgs = isBedrock ? '' : `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
+  const uploadCustom = !isBedrock && document.getElementById('u-upload-jar').checked;
+  
+  // Server properties
+  const serverPort = parseInt(document.getElementById('u-server-port').value) || (isBedrock ? 19132 : 25565);
+  const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('u-max-players').value) || (isBedrock ? 10 : 20)));
+  const gamemode = document.getElementById('u-gamemode').value || 'survival';
+  const difficulty = document.getElementById('u-difficulty').value || 'easy';
+  const levelSeed = document.getElementById('u-level-seed').value.trim();
+  const pvp = document.getElementById('u-pvp').checked;
+  const whiteList = document.getElementById('u-white-list').checked;
+  const hardcore = document.getElementById('u-hardcore').checked;
+  
+  const versionInfo = uVersionAvailability[version] || {};
+  const needsDownload = !isBedrock && !versionInfo.downloaded;
+  
+  if (!category) {
+    showNotification('Please select a category', 'error');
+    return;
+  }
+  
+  if (category === 'modded' && !serverEngine) {
+    showNotification('Please select a server engine', 'error');
+    return;
+  }
+  
+  if (!isBedrock && !uploadCustom && !version) {
+    showNotification('Please select a version', 'error');
+    return;
+  }
+  
+  // Get UI elements
+  const submitBtn = document.getElementById('u-submit-btn');
+  const backBtn = e.target.querySelector('.btn:not([type="submit"])');
+  const originalText = submitBtn.textContent;
+  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  const downloadProgress = document.querySelector('#u-jar-download-status .download-progress');
+  const progressFill = document.querySelector('#u-jar-download-status .progress-fill');
+  const progressText = document.querySelector('#u-jar-download-status .progress-text');
+  const downloadInfo = document.querySelector('#u-jar-download-status .download-info');
+  
+  if (progressFill) progressFill.style.width = '0%';
+  if (progressText) progressText.textContent = '0%';
+  if (downloadProgress) downloadProgress.style.display = 'none';
+  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
+  
+  const updateProgress = (message, percent = null, isError = false) => {
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    if (downloadInfo) {
+      const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
+      downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
+      if (isError) downloadInfo.classList.add('error');
+      else downloadInfo.classList.remove('error');
+    }
+    if (percent !== null && downloadProgress) {
+      downloadProgress.style.display = 'flex';
+      if (progressFill) progressFill.style.width = `${percent}%`;
+      if (progressText) progressText.textContent = `${Math.round(percent)}%`;
+    }
+  };
+  
+  const resetOnError = (errorMsg) => {
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+    if (backBtn) backBtn.disabled = false;
+    updateProgress(errorMsg, null, true);
+    showNotification(errorMsg, 'error');
+  };
+  
+  try {
+    submitBtn.textContent = 'Creating...';
+    submitBtn.disabled = true;
+    if (backBtn) backBtn.disabled = true;
+    
+    if (isBedrock) {
+      // Bedrock step-by-step creation flow
+      const bedrockStatusEl = document.getElementById('u-bedrock-setup-status');
+      const jarStatusEl = document.getElementById('u-jar-download-status');
+      if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+      if (bedrockStatusEl) bedrockStatusEl.style.display = 'block';
+      if (jarStatusEl) jarStatusEl.style.display = 'none';
+
+      for (let i = 1; i <= 5; i++) {
+        const stepEl = document.getElementById(`bstep-${i}`);
+        if (stepEl) {
+          stepEl.dataset.state = 'pending';
+          stepEl.querySelector('.bstep-icon').textContent = '○';
+        }
+      }
+      const bstepFill = document.querySelector('#bstep-2 .bstep-fill');
+      const bstepPct = document.querySelector('#bstep-2 .bstep-pct');
+      if (bstepFill) bstepFill.style.width = '0%';
+      if (bstepPct) bstepPct.textContent = '0%';
+
+      const advanceToStep = (stepNum, labelText = null) => {
+        for (let i = 1; i < stepNum; i++) {
+          const el = document.getElementById(`bstep-${i}`);
+          if (el && el.dataset.state !== 'done' && el.dataset.state !== 'error') {
+            el.dataset.state = 'done';
+            el.querySelector('.bstep-icon').textContent = '✓';
+          }
+        }
+        const el = document.getElementById(`bstep-${stepNum}`);
+        if (el && el.dataset.state !== 'done') {
+          el.dataset.state = 'active';
+          el.querySelector('.bstep-icon').textContent = '⏳';
+          if (labelText) el.querySelector('.bstep-label').textContent = labelText;
+        }
+      };
+
+      const failAtCurrentStep = (errMsg) => {
+        for (let i = 1; i <= 5; i++) {
+          const el = document.getElementById(`bstep-${i}`);
+          if (el && el.dataset.state === 'active') {
+            el.dataset.state = 'error';
+            el.querySelector('.bstep-icon').textContent = '✗';
+            break;
+          }
+        }
+        submitBtn.textContent = originalText;
+        submitBtn.disabled = false;
+        if (backBtn) backBtn.disabled = false;
+        showNotification(errMsg, 'error');
+      };
+
+      try {
+        advanceToStep(1);
+        submitBtn.textContent = 'Creating...';
+
+        const result = await apiRequest('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            executable: 'server.sh',
+            javaArgs: '',
+            category: 'bedrock',
+            serverEngine: 'bedrock',
+            serverType: 'bedrock',
+            version: 'latest',
+            serverProperties: {}
+          })
+        });
+
+        if (result.pendingApproval) {
+          advanceToStep(1);
+          const el1 = document.getElementById('bstep-1');
+          if (el1) { el1.dataset.state = 'done'; el1.querySelector('.bstep-icon').textContent = '✓'; }
+          showNotification('Server created and pending admin approval', 'info');
+          closeServerModal();
+          await loadServers();
+          return;
+        }
+
+        advanceToStep(2, 'Downloading latest Bedrock server...');
+        submitBtn.textContent = 'Downloading...';
+
+        let setupResult;
+        try {
+          setupResult = await apiRequest(`/api/servers/${result.serverId}/setup-bedrock`, {
+            method: 'POST',
+            body: JSON.stringify({
+              serverName: name,
+              serverProperties: {
+                'server-port': serverPort,
+                'max-players': maxPlayers,
+                'gamemode': gamemode,
+                'difficulty': difficulty,
+                'level-seed': levelSeed,
+                'white-list': whiteList,
+              }
+            })
+          });
+        } catch (setupErr) {
+          failAtCurrentStep(`Failed to start Bedrock download: ${setupErr.message}`);
+          return;
+        }
+
+        if (!setupResult.progress_id) {
+          failAtCurrentStep('Failed to start Bedrock download — no progress ID returned');
+          return;
+        }
+
+        const progressId = setupResult.progress_id;
+        let setupComplete = false;
+        let pollCount = 0;
+        const maxPolls = 720;
+        let lastStep = 2;
+
+        while (!setupComplete && pollCount < maxPolls) {
+          await new Promise(r => setTimeout(r, 500));
+          pollCount++;
+
+          try {
+            const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+            const step = progress.step || lastStep;
+
+            if (step > lastStep) {
+              lastStep = step;
+              if (step === 3) {
+                advanceToStep(3, 'Extracting server files...');
+                submitBtn.textContent = 'Extracting...';
+              } else if (step === 4) {
+                advanceToStep(4, 'Writing server.properties...');
+                submitBtn.textContent = 'Configuring...';
+              }
+            }
+
+            if (step === 2 && progress.progress != null) {
+              const pct = progress.progress;
+              if (bstepFill) bstepFill.style.width = `${pct}%`;
+              if (bstepPct) bstepPct.textContent = `${Math.round(pct)}%`;
+            }
+
+            if (progress.status === 'complete') {
+              for (let i = 1; i <= 5; i++) {
+                const el = document.getElementById(`bstep-${i}`);
+                if (el) { el.dataset.state = 'done'; el.querySelector('.bstep-icon').textContent = '✓'; }
+              }
+              setupComplete = true;
+            } else if (progress.status === 'error') {
+              failAtCurrentStep(progress.error || 'Bedrock setup failed');
+              return;
+            }
+          } catch (pollErr) {
+            console.error('Progress poll error:', pollErr);
+          }
+        }
+
+        if (!setupComplete) {
+          failAtCurrentStep('Bedrock setup timed out');
+          return;
+        }
+
+        await new Promise(r => setTimeout(r, 800));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+        showNotification('Bedrock server created successfully!', 'success');
+
+      } catch (error) {
+        failAtCurrentStep(error.message || 'Failed to create Bedrock server');
+      }
+
+    } else if (uploadCustom) {
+      const fileInput = document.getElementById('u-jar-file');
+      if (!fileInput.files.length) {
+        resetOnError('Please select a JAR file to upload');
+        return;
+      }
+      
+      updateProgress('Creating server...', 10);
+      
+      const result = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          executable,
+          javaArgs,
+          category,
+          serverEngine: 'custom',
+          serverProperties: {
+            'server-port': serverPort,
+            'max-players': maxPlayers,
+            'gamemode': gamemode,
+            'difficulty': difficulty,
+            'level-seed': levelSeed,
+            'pvp': pvp,
+            'white-list': whiteList,
+            'hardcore': hardcore
+          }
+        })
+      });
+      
+      if (result.pendingApproval) {
+        showNotification('Server created and pending admin approval', 'info');
+        closeServerModal();
+        await loadServers();
+        return;
+      }
+      
+      updateProgress('Uploading JAR file...', 50);
+      
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      
+      const uploadResponse = await fetch(`/api/servers/${result.serverId}/upload-jar`, {
+        method: 'POST',
+        headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
+        body: formData
+      });
+      
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to upload JAR file');
+      }
+      
+      updateProgress('Server created successfully!', 100);
+      await new Promise(r => setTimeout(r, 1000));
+      
+      await loadServers();
+      selectServer(result.serverId);
+      closeServerModal();
+      
+    } else if (needsDownload) {
+      updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
+      submitBtn.textContent = 'Downloading JAR...';
+      
+      let downloadResult;
+      try {
+        downloadResult = await apiRequest('/api/jar-bucket/download', {
+          method: 'POST',
+          body: JSON.stringify({ type: serverEngine, version })
+        });
+      } catch (downloadErr) {
+        resetOnError(`Failed to start download: ${downloadErr.message}`);
+        return;
+      }
+      
+      if (!downloadResult.progress_id) {
+        resetOnError('Failed to start download - no progress ID returned');
+        return;
+      }
+      
+      const progressId = downloadResult.progress_id;
+      let downloadComplete = false;
+      let downloadError = null;
+      let pollCount = 0;
+      const maxPolls = 600;
+      
+      while (!downloadComplete && pollCount < maxPolls) {
+        await new Promise(r => setTimeout(r, 500));
+        pollCount++;
+        
+        try {
+          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+          
+          if (progress.status === 'downloading') {
+            const pct = progress.progress || 0;
+            const downloaded = formatBytes(progress.downloaded || 0);
+            const total = formatBytes(progress.total || 0);
+            updateProgress(`Downloading ${serverEngine} ${version}... (${downloaded} / ${total})`, pct);
+          } else if (progress.status === 'complete') {
+            downloadComplete = true;
+            if (progress.success === false) {
+              downloadError = progress.error || 'Download failed';
+            } else {
+              updateProgress('Download complete!', 100);
+            }
+          } else if (progress.status === 'error') {
+            downloadComplete = true;
+            downloadError = progress.error || 'Download failed';
+          }
+        } catch (pollErr) {
+          console.error('Error polling download progress:', pollErr);
+        }
+      }
+      
+      if (!downloadComplete) {
+        resetOnError('Download timed out. Please try again.');
+        return;
+      }
+      
+      if (downloadError) {
+        resetOnError(`Download failed: ${downloadError}`);
+        return;
+      }
+      
+      submitBtn.textContent = 'Creating Server...';
+      updateProgress('Creating server files...', 0);
+      
+      let result;
+      try {
+        result = await apiRequest('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            executable,
+            javaArgs,
+            category,
+            serverEngine,
+            version,
+            downloadJar: true,
+            serverProperties: {
+              'server-port': serverPort,
+              'max-players': maxPlayers,
+              'gamemode': gamemode,
+              'difficulty': difficulty,
+              'level-seed': levelSeed,
+              'pvp': pvp,
+              'white-list': whiteList,
+              'hardcore': hardcore
+            }
+          })
+        });
+      } catch (createErr) {
+        resetOnError(`Failed to create server: ${createErr.message}`);
+        return;
+      }
+      
+      if (result.pendingApproval) {
+        updateProgress('Server created and pending admin approval', 100);
+        showNotification('Server created and pending admin approval', 'info');
+        await new Promise(r => setTimeout(r, 1500));
+        closeServerModal();
+        await loadServers();
+      } else if (result.warning) {
+        updateProgress(`Server created with warning: ${result.warning}`, 100);
+        showNotification(result.warning, 'warning');
+        await new Promise(r => setTimeout(r, 1500));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+      } else {
+        updateProgress('Server created successfully!', 100);
+        showNotification('Server created successfully!', 'success');
+        await new Promise(r => setTimeout(r, 1000));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+      }
+      
+    } else {
+      // Use existing local JAR
+      updateProgress('Creating server files...', 20);
+      
+      let result;
+      try {
+        result = await apiRequest('/api/servers', {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+            executable,
+            javaArgs,
+            category,
+            serverEngine,
+            version,
+            downloadJar: true,
+            serverProperties: {
+              'server-port': serverPort,
+              'max-players': maxPlayers,
+              'gamemode': gamemode,
+              'difficulty': difficulty,
+              'level-seed': levelSeed,
+              'pvp': pvp,
+              'white-list': whiteList,
+              'hardcore': hardcore
+            }
+          })
+        });
+      } catch (createErr) {
+        resetOnError(`Failed to create server: ${createErr.message}`);
+        return;
+      }
+      
+      if (result.pendingApproval) {
+        updateProgress('Server created and pending admin approval', 100);
+        showNotification('Server created and pending admin approval', 'info');
+        await new Promise(r => setTimeout(r, 1500));
+        closeServerModal();
+        await loadServers();
+      } else if (result.warning) {
+        updateProgress(`Server created with warning: ${result.warning}`, 100);
+        showNotification(result.warning, 'warning');
+        await new Promise(r => setTimeout(r, 1500));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+      } else {
+        updateProgress('Server created successfully!', 100);
+        showNotification('Server created successfully!', 'success');
+        await new Promise(r => setTimeout(r, 1000));
+        await loadServers();
+        selectServer(result.serverId);
+        closeServerModal();
+      }
+    }
+    
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+    if (backBtn) backBtn.disabled = false;
+    
+  } catch (error) {
+    console.error('Failed to create server:', error);
+    resetOnError(`Failed to create server: ${error.message}`);
+  }
+}
+
+// Import server from ZIP (unified)
+async function importServer(e) {
+  const name = document.getElementById('u-name').value.trim();
+  const fileInput = document.getElementById('u-import-file');
+  const executableName = document.getElementById('u-import-executable').value.trim();
+  const category = document.getElementById('u-category').value;
+  const engine = category === 'modded' ? document.getElementById('u-engine').value : 
+                 (category === 'bedrock' ? 'Bedrock' : 'Vanilla');
+  const port = document.getElementById('u-server-port').value.trim();
+  const minRam = document.getElementById('u-min-ram').value;
+  const maxRam = document.getElementById('u-max-ram').value;
+  const extraJvmArgs = document.getElementById('u-jvm-args').value.trim();
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
+  
+  if (!fileInput.files.length) {
+    showNotification('Please select a ZIP file to import', 'error');
+    return;
+  }
+  
+  try {
+    const submitBtn = document.getElementById('u-submit-btn');
+    const originalText = submitBtn.textContent;
+    submitBtn.textContent = 'Importing...';
+    submitBtn.disabled = true;
+    
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    // Only send non-empty fields — empty means "use managed.conf"
+    if (name) formData.append('name', name);
+    if (executableName) formData.append('executableName', executableName);
+    formData.append('javaArgs', javaArgs);
+    if (category) formData.append('category', category);
+    if (engine) formData.append('engine', engine);
+    if (port) formData.append('port', port);
+    
+    // Pass optional server property overrides
+    const maxPlayers = document.getElementById('u-max-players').value.trim();
+    const gamemode = document.getElementById('u-gamemode').value;
+    const difficulty = document.getElementById('u-difficulty').value;
+    const levelSeed = document.getElementById('u-level-seed').value.trim();
+    if (maxPlayers) formData.append('maxPlayers', maxPlayers);
+    if (gamemode) formData.append('gamemode', gamemode);
+    if (difficulty) formData.append('difficulty', difficulty);
+    if (levelSeed) formData.append('levelSeed', levelSeed);
+    
+    const response = await fetch('/api/servers/import', {
+      method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const errResult = await response.json();
+        throw new Error(errResult.error || `Import failed (${response.status})`);
+      } else if (response.status === 413) {
+        throw new Error('File too large — please reduce the ZIP size and try again');
+      } else {
+        throw new Error(`Import failed (HTTP ${response.status})`);
+      }
+    }
+    
+    const result = await response.json();
+    
+    if (result.pendingApproval) {
+      showNotification('Server imported and pending admin approval', 'info');
+    } else {
+      await loadServers();
+      selectServer(result.serverId);
+    }
+    
+    closeServerModal();
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+  } catch (error) {
+    console.error('Failed to import server:', error);
+    showNotification('Failed to import server: ' + error.message, 'error');
+    const submitBtn = document.getElementById('u-submit-btn');
+    submitBtn.textContent = 'Import Server';
+    submitBtn.disabled = false;
+  }
+}
+
+// Import world (unified)
+async function importWorld(e) {
+  const name = document.getElementById('u-name').value;
+  const category = document.getElementById('u-category').value;
+  const serverEngine = category === 'modded'
+    ? document.getElementById('u-engine').value
+    : 'vanilla';
+  const version = document.getElementById('u-version').value;
+  const worldFileInput = document.getElementById('u-world-file');
+  const minRam = document.getElementById('u-min-ram').value;
+  const maxRam = document.getElementById('u-max-ram').value;
+  const extraJvmArgs = document.getElementById('u-jvm-args').value.trim();
+  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
+
+  if (!category) { showNotification('Please select a category', 'error'); return; }
+  if (category === 'modded' && !serverEngine) { showNotification('Please select a server engine', 'error'); return; }
+  if (!version) { showNotification('Please select a version', 'error'); return; }
+  if (!worldFileInput.files.length) { showNotification('Please select a world ZIP file', 'error'); return; }
+
+  const submitBtn = document.getElementById('u-submit-btn');
+  const backBtn = e.target.querySelector('.btn:not([type="submit"])');
+  const originalText = submitBtn.textContent;
+  submitBtn.textContent = 'Working...';
+  submitBtn.disabled = true;
+  if (backBtn) backBtn.disabled = true;
+
+  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  const downloadProgress = document.querySelector('#u-jar-download-status .download-progress');
+  const progressFill = document.querySelector('#u-jar-download-status .progress-fill');
+  const progressText = document.querySelector('#u-jar-download-status .progress-text');
+  const downloadInfo = document.querySelector('#u-jar-download-status .download-info');
+
+  const updateProgress = (message, percent = null, isError = false) => {
+    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    if (downloadInfo) {
+      const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
+      downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
+      if (isError) downloadInfo.classList.add('error');
+      else downloadInfo.classList.remove('error');
+    }
+    if (percent !== null && downloadProgress) {
+      downloadProgress.style.display = 'flex';
+      if (progressFill) progressFill.style.width = `${percent}%`;
+      if (progressText) progressText.textContent = `${Math.round(percent)}%`;
+    }
+  };
+
+  const resetOnError = (msg) => {
+    submitBtn.textContent = originalText;
+    submitBtn.disabled = false;
+    if (backBtn) backBtn.disabled = false;
+    updateProgress(msg, null, true);
+    showNotification(msg, 'error');
+  };
+
+  try {
+    // Step 1: Download JAR if not already available
+    const versionInfo = uVersionAvailability[version] || {};
+    if (!versionInfo.downloaded) {
+      updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
+      submitBtn.textContent = 'Downloading JAR...';
+
+      let downloadResult;
+      try {
+        downloadResult = await apiRequest('/api/jar-bucket/download', {
+          method: 'POST',
+          body: JSON.stringify({ type: serverEngine, version })
+        });
+      } catch (err) {
+        resetOnError(`Failed to start download: ${err.message}`);
+        return;
+      }
+
+      if (!downloadResult.progress_id) {
+        resetOnError('Failed to start download — no progress ID returned');
+        return;
+      }
+
+      const progressId = downloadResult.progress_id;
+      let done = false;
+      let dlError = null;
+      let polls = 0;
+
+      while (!done && polls < 600) {
+        await new Promise(r => setTimeout(r, 500));
+        polls++;
+        try {
+          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
+          if (progress.status === 'downloading') {
+            const pct = progress.progress || 0;
+            const dl = formatBytes(progress.downloaded || 0);
+            const tot = formatBytes(progress.total || 0);
+            updateProgress(`Downloading ${serverEngine} ${version}... (${dl} / ${tot})`, pct);
+          } else if (progress.status === 'complete') {
+            done = true;
+            if (progress.success === false) dlError = progress.error || 'Download failed';
+            else updateProgress('Download complete!', 100);
+          } else if (progress.status === 'error') {
+            done = true;
+            dlError = progress.error || 'Download failed';
+          }
+        } catch (_) { /* keep polling */ }
+      }
+
+      if (!done) { resetOnError('Download timed out. Please try again.'); return; }
+      if (dlError) { resetOnError(`Download failed: ${dlError}`); return; }
+    }
+
+    // Step 2: Create the fresh server
+    submitBtn.textContent = 'Creating Server...';
+    updateProgress('Creating server files...', 0);
+
+    let serverResult;
+    try {
+      serverResult = await apiRequest('/api/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          executable: 'server.jar',
+          javaArgs,
+          category,
+          serverEngine,
+          version,
+          downloadJar: true,
+          serverProperties: {}
+        })
+      });
+    } catch (err) {
+      resetOnError(`Failed to create server: ${err.message}`);
+      return;
+    }
+
+    if (serverResult.pendingApproval) {
+      updateProgress('Server created and pending admin approval', 100);
+      showNotification('Server created and pending admin approval', 'info');
+      await new Promise(r => setTimeout(r, 1500));
+      closeServerModal();
+      await loadServers();
+      return;
+    }
+
+    // Step 3: Upload and import the world ZIP
+    submitBtn.textContent = 'Importing World...';
+    updateProgress('Uploading and importing world data...', 50);
+
+    const formData = new FormData();
+    formData.append('file', worldFileInput.files[0]);
+
+    const worldResponse = await fetch(`/api/servers/${serverResult.serverId}/import-world`, {
+      method: 'POST',
+      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
+      body: formData
+    });
+
+    const worldResult = await worldResponse.json();
+
+    if (!worldResponse.ok) {
+      console.error('World import failed:', worldResult.error);
+      await loadServers();
+      selectServer(serverResult.serverId);
+      closeServerModal();
+      showNotification(`Server created but world import failed: ${worldResult.error}`, 'warning');
+    } else {
+      updateProgress('Server created with world!', 100);
+      await new Promise(r => setTimeout(r, 800));
+      await loadServers();
+      selectServer(serverResult.serverId);
+      closeServerModal();
+      showNotification('Server created and world imported successfully!', 'success');
+    }
+
+  } catch (error) {
+    console.error('Failed to import world:', error);
+    resetOnError(`Failed: ${error.message}`);
   }
 }
 
@@ -1863,10 +2678,9 @@ async function openEditServerModal() {
     
     document.getElementById('modal-title').textContent = 'Edit Server';
     
-    // Hide creation type section and other forms
+    // Hide creation type section and unified form
     document.getElementById('creation-type-section').style.display = 'none';
-    document.getElementById('fresh-server-form').style.display = 'none';
-    document.getElementById('import-server-form').style.display = 'none';
+    document.getElementById('unified-server-form').style.display = 'none';
     document.getElementById('manual-server-form').style.display = 'block';
     
     // Hide the back button in edit mode
@@ -2280,963 +3094,7 @@ async function saveServer(e) {
   }
 }
 
-// Create fresh server with JAR download
-async function createFreshServer(e) {
-  e.preventDefault();
-  
-  const name = document.getElementById('fresh-name').value;
-  const category = document.getElementById('fresh-category').value;
-  const isBedrock = category === 'bedrock';
-  const serverEngine = isBedrock ? 'bedrock' : (category === 'modded' 
-    ? document.getElementById('fresh-engine').value 
-    : 'vanilla');
-  const version = isBedrock ? 'latest' : document.getElementById('fresh-version').value;
-  const executable = isBedrock ? 'server.sh' : 'server.jar';
-  const minRam = document.getElementById('fresh-min-ram').value;
-  const maxRam = document.getElementById('fresh-max-ram').value;
-  const extraJvmArgs = document.getElementById('fresh-jvm-args').value.trim();
-  const javaArgs = isBedrock ? '' : `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
-  const uploadCustom = !isBedrock && document.getElementById('fresh-upload-jar').checked;
-  
-  // Server properties
-  const serverPort = parseInt(document.getElementById('fresh-server-port').value) || (isBedrock ? 19132 : 25565);
-  const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('fresh-max-players').value) || (isBedrock ? 10 : 20)));
-  const gamemode = document.getElementById('fresh-gamemode').value || 'survival';
-  const difficulty = document.getElementById('fresh-difficulty').value || 'easy';
-  const levelSeed = document.getElementById('fresh-level-seed').value.trim();
-  const pvp = document.getElementById('fresh-pvp').checked;
-  const whiteList = document.getElementById('fresh-white-list').checked;
-  const hardcore = document.getElementById('fresh-hardcore').checked;
-  
-  // Check JAR availability - automatically download if not available (Java only)
-  const versionInfo = versionAvailability[version] || {};
-  const needsDownload = !isBedrock && !versionInfo.downloaded;
-  
-  if (!category) {
-    showNotification('Please select a category', 'error');
-    return;
-  }
-  
-  if (category === 'modded' && !serverEngine) {
-    showNotification('Please select a server engine', 'error');
-    return;
-  }
-  
-  if (!isBedrock && !uploadCustom && !version) {
-    showNotification('Please select a version', 'error');
-    return;
-  }
-  
-  // Get UI elements
-  const submitBtn = e.target.querySelector('button[type="submit"]');
-  const backBtn = e.target.querySelector('.btn:not([type="submit"])');
-  const originalText = submitBtn.textContent;
-  const downloadStatusGroup = document.getElementById('download-status-group');
-  const downloadProgress = document.querySelector('#jar-download-status .download-progress');
-  const progressFill = document.querySelector('#jar-download-status .progress-fill');
-  const progressText = document.querySelector('#jar-download-status .progress-text');
-  const downloadInfo = document.querySelector('#jar-download-status .download-info');
-  
-  // Reset progress bar to 0
-  if (progressFill) progressFill.style.width = '0%';
-  if (progressText) progressText.textContent = '0%';
-  if (downloadProgress) downloadProgress.style.display = 'none';
-  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-  
-  // Helper to update progress UI
-  const updateProgress = (message, percent = null, isError = false) => {
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
-    if (downloadInfo) {
-      const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
-      downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
-      if (isError) downloadInfo.classList.add('error');
-      else downloadInfo.classList.remove('error');
-    }
-    if (percent !== null && downloadProgress) {
-      downloadProgress.style.display = 'flex';
-      if (progressFill) progressFill.style.width = `${percent}%`;
-      if (progressText) progressText.textContent = `${Math.round(percent)}%`;
-    }
-  };
-  
-  // Helper to reset UI on error
-  const resetOnError = (errorMsg) => {
-    submitBtn.textContent = originalText;
-    submitBtn.disabled = false;
-    if (backBtn) backBtn.disabled = false;
-    updateProgress(errorMsg, null, true);
-    showNotification(errorMsg, 'error');
-  };
-  
-  try {
-    // Disable form controls during creation
-    submitBtn.textContent = 'Creating...';
-    submitBtn.disabled = true;
-    if (backBtn) backBtn.disabled = true;
-    
-    if (isBedrock) {
-      // Bedrock step-by-step creation flow
-      const bedrockStatusEl = document.getElementById('bedrock-setup-status');
-      const jarStatusEl = document.getElementById('jar-download-status');
-      if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
-      if (bedrockStatusEl) bedrockStatusEl.style.display = 'block';
-      if (jarStatusEl) jarStatusEl.style.display = 'none';
-
-      // Reset all steps to pending
-      for (let i = 1; i <= 5; i++) {
-        const stepEl = document.getElementById(`bstep-${i}`);
-        if (stepEl) {
-          stepEl.dataset.state = 'pending';
-          stepEl.querySelector('.bstep-icon').textContent = '○';
-        }
-      }
-      const bstepFill = document.querySelector('#bstep-2 .bstep-fill');
-      const bstepPct = document.querySelector('#bstep-2 .bstep-pct');
-      if (bstepFill) bstepFill.style.width = '0%';
-      if (bstepPct) bstepPct.textContent = '0%';
-
-      // Mark all steps before stepNum as done, set stepNum as active
-      const advanceToStep = (stepNum, labelText = null) => {
-        for (let i = 1; i < stepNum; i++) {
-          const el = document.getElementById(`bstep-${i}`);
-          if (el && el.dataset.state !== 'done' && el.dataset.state !== 'error') {
-            el.dataset.state = 'done';
-            el.querySelector('.bstep-icon').textContent = '✓';
-          }
-        }
-        const el = document.getElementById(`bstep-${stepNum}`);
-        if (el && el.dataset.state !== 'done') {
-          el.dataset.state = 'active';
-          el.querySelector('.bstep-icon').textContent = '⏳';
-          if (labelText) el.querySelector('.bstep-label').textContent = labelText;
-        }
-      };
-
-      const failAtCurrentStep = (errMsg) => {
-        for (let i = 1; i <= 5; i++) {
-          const el = document.getElementById(`bstep-${i}`);
-          if (el && el.dataset.state === 'active') {
-            el.dataset.state = 'error';
-            el.querySelector('.bstep-icon').textContent = '✗';
-            break;
-          }
-        }
-        submitBtn.textContent = originalText;
-        submitBtn.disabled = false;
-        if (backBtn) backBtn.disabled = false;
-        showNotification(errMsg, 'error');
-      };
-
-      try {
-        // Step 1: Create server config
-        advanceToStep(1);
-        submitBtn.textContent = 'Creating...';
-
-        const result = await apiRequest('/api/servers', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            executable: 'server.sh',
-            javaArgs: '',
-            category: 'bedrock',
-            serverEngine: 'bedrock',
-            serverType: 'bedrock',
-            version: 'latest',
-            serverProperties: {}
-          })
-        });
-
-        if (result.pendingApproval) {
-          advanceToStep(1);
-          const el1 = document.getElementById('bstep-1');
-          if (el1) { el1.dataset.state = 'done'; el1.querySelector('.bstep-icon').textContent = '✓'; }
-          showNotification('Server created and pending admin approval', 'info');
-          closeServerModal();
-          await loadServers();
-          return;
-        }
-
-        // Step 2: Trigger backend download + extract + config pipeline
-        advanceToStep(2, 'Downloading latest Bedrock server...');
-        submitBtn.textContent = 'Downloading...';
-
-        let setupResult;
-        try {
-          setupResult = await apiRequest(`/api/servers/${result.serverId}/setup-bedrock`, {
-            method: 'POST',
-            body: JSON.stringify({
-              serverName: name,
-              serverProperties: {
-                'server-port': serverPort,
-                'max-players': maxPlayers,
-                'gamemode': gamemode,
-                'difficulty': difficulty,
-                'level-seed': levelSeed,
-                'white-list': whiteList,
-              }
-            })
-          });
-        } catch (setupErr) {
-          failAtCurrentStep(`Failed to start Bedrock download: ${setupErr.message}`);
-          return;
-        }
-
-        if (!setupResult.progress_id) {
-          failAtCurrentStep('Failed to start Bedrock download — no progress ID returned');
-          return;
-        }
-
-        // Poll step-by-step progress
-        const progressId = setupResult.progress_id;
-        let setupComplete = false;
-        let pollCount = 0;
-        const maxPolls = 720; // 6 minutes
-        let lastStep = 2;
-
-        while (!setupComplete && pollCount < maxPolls) {
-          await new Promise(r => setTimeout(r, 500));
-          pollCount++;
-
-          try {
-            const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
-            const step = progress.step || lastStep;
-
-            if (step > lastStep) {
-              lastStep = step;
-              if (step === 3) {
-                advanceToStep(3, 'Extracting server files...');
-                submitBtn.textContent = 'Extracting...';
-              } else if (step === 4) {
-                advanceToStep(4, 'Writing server.properties...');
-                submitBtn.textContent = 'Configuring...';
-              }
-            }
-
-            // Update download progress bar while step 2 is active
-            if (step === 2 && progress.progress != null) {
-              const pct = progress.progress;
-              if (bstepFill) bstepFill.style.width = `${pct}%`;
-              if (bstepPct) bstepPct.textContent = `${Math.round(pct)}%`;
-            }
-
-            if (progress.status === 'complete') {
-              for (let i = 1; i <= 5; i++) {
-                const el = document.getElementById(`bstep-${i}`);
-                if (el) { el.dataset.state = 'done'; el.querySelector('.bstep-icon').textContent = '✓'; }
-              }
-              setupComplete = true;
-            } else if (progress.status === 'error') {
-              failAtCurrentStep(progress.error || 'Bedrock setup failed');
-              return;
-            }
-          } catch (pollErr) {
-            console.error('Progress poll error:', pollErr);
-          }
-        }
-
-        if (!setupComplete) {
-          failAtCurrentStep('Bedrock setup timed out');
-          return;
-        }
-
-        await new Promise(r => setTimeout(r, 800));
-        await loadServers();
-        selectServer(result.serverId);
-        closeServerModal();
-        showNotification('Bedrock server created successfully!', 'success');
-
-      } catch (error) {
-        failAtCurrentStep(error.message || 'Failed to create Bedrock server');
-      }
-
-    } else if (uploadCustom) {
-      // Custom JAR upload flow
-      const fileInput = document.getElementById('fresh-jar-file');
-      if (!fileInput.files.length) {
-        resetOnError('Please select a JAR file to upload');
-        return;
-      }
-      
-      updateProgress('Creating server...', 10);
-      
-      // First create the server
-      const result = await apiRequest('/api/servers', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          executable,
-          javaArgs,
-          category,
-          serverEngine: 'custom',
-          serverProperties: {
-            'server-port': serverPort,
-            'max-players': maxPlayers,
-            'gamemode': gamemode,
-            'difficulty': difficulty,
-            'level-seed': levelSeed,
-            'pvp': pvp,
-            'white-list': whiteList,
-            'hardcore': hardcore
-          }
-        })
-      });
-      
-      if (result.pendingApproval) {
-        showNotification('Server created and pending admin approval', 'info');
-        closeServerModal();
-        await loadServers();
-        return;
-      }
-      
-      updateProgress('Uploading JAR file...', 50);
-      
-      // Then upload the JAR
-      const formData = new FormData();
-      formData.append('file', fileInput.files[0]);
-      
-      const uploadResponse = await fetch(`/api/servers/${result.serverId}/upload-jar`, {
-        method: 'POST',
-        headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
-        body: formData
-      });
-      
-      if (!uploadResponse.ok) {
-        const errorData = await uploadResponse.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to upload JAR file');
-      }
-      
-      updateProgress('Server created successfully!', 100);
-      await new Promise(r => setTimeout(r, 1000)); // Brief pause to show completion
-      
-      await loadServers();
-      selectServer(result.serverId);
-      closeServerModal();
-      
-    } else if (needsDownload) {
-      // Need to download from JAR Bucket first
-      updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
-      submitBtn.textContent = 'Downloading JAR...';
-      
-      // Start the download
-      let downloadResult;
-      try {
-        downloadResult = await apiRequest('/api/jar-bucket/download', {
-          method: 'POST',
-          body: JSON.stringify({ type: serverEngine, version })
-        });
-      } catch (downloadErr) {
-        resetOnError(`Failed to start download: ${downloadErr.message}`);
-        return;
-      }
-      
-      if (!downloadResult.progress_id) {
-        resetOnError('Failed to start download - no progress ID returned');
-        return;
-      }
-      
-      // Poll for progress with timeout
-      const progressId = downloadResult.progress_id;
-      let downloadComplete = false;
-      let downloadError = null;
-      let pollCount = 0;
-      const maxPolls = 600; // 5 minutes timeout (600 * 500ms)
-      
-      while (!downloadComplete && pollCount < maxPolls) {
-        await new Promise(r => setTimeout(r, 500));
-        pollCount++;
-        
-        try {
-          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
-          
-          if (progress.status === 'downloading') {
-            const pct = progress.progress || 0;
-            const downloaded = formatBytes(progress.downloaded || 0);
-            const total = formatBytes(progress.total || 0);
-            updateProgress(`Downloading ${serverEngine} ${version}... (${downloaded} / ${total})`, pct);
-          } else if (progress.status === 'complete') {
-            downloadComplete = true;
-            if (progress.success === false) {
-              downloadError = progress.error || 'Download failed';
-            } else {
-              updateProgress('Download complete!', 100);
-            }
-          } else if (progress.status === 'error') {
-            downloadComplete = true;
-            downloadError = progress.error || 'Download failed';
-          }
-        } catch (pollErr) {
-          console.error('Error polling download progress:', pollErr);
-          // Don't fail immediately, keep trying
-        }
-      }
-      
-      if (!downloadComplete) {
-        resetOnError('Download timed out. Please try again.');
-        return;
-      }
-      
-      if (downloadError) {
-        resetOnError(`Download failed: ${downloadError}`);
-        return;
-      }
-      
-      // Now create the server with the downloaded JAR
-      submitBtn.textContent = 'Creating Server...';
-      updateProgress('Creating server files...', 0);
-      
-      let result;
-      try {
-        result = await apiRequest('/api/servers', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            executable,
-            javaArgs,
-            category,
-            serverEngine,
-            version,
-            downloadJar: true,  // Copy from local repo
-            serverProperties: {
-              'server-port': serverPort,
-              'max-players': maxPlayers,
-              'gamemode': gamemode,
-              'difficulty': difficulty,
-              'level-seed': levelSeed,
-              'pvp': pvp,
-              'white-list': whiteList,
-              'hardcore': hardcore
-            }
-          })
-        });
-      } catch (createErr) {
-        resetOnError(`Failed to create server: ${createErr.message}`);
-        return;
-      }
-      
-      if (result.pendingApproval) {
-        updateProgress('Server created and pending admin approval', 100);
-        showNotification('Server created and pending admin approval', 'info');
-        await new Promise(r => setTimeout(r, 1500));
-        closeServerModal();
-        await loadServers();
-      } else if (result.warning) {
-        updateProgress(`Server created with warning: ${result.warning}`, 100);
-        showNotification(result.warning, 'warning');
-        await new Promise(r => setTimeout(r, 1500));
-        await loadServers();
-        selectServer(result.serverId);
-        closeServerModal();
-      } else {
-        updateProgress('Server created successfully!', 100);
-        showNotification('Server created successfully!', 'success');
-        await new Promise(r => setTimeout(r, 1000));
-        await loadServers();
-        selectServer(result.serverId);
-        closeServerModal();
-      }
-      
-    } else {
-      // Use existing local JAR
-      updateProgress('Creating server files...', 20);
-      
-      let result;
-      try {
-        result = await apiRequest('/api/servers', {
-          method: 'POST',
-          body: JSON.stringify({
-            name,
-            executable,
-            javaArgs,
-            category,
-            serverEngine,
-            version,
-            downloadJar: true,
-            serverProperties: {
-              'server-port': serverPort,
-              'max-players': maxPlayers,
-              'gamemode': gamemode,
-              'difficulty': difficulty,
-              'level-seed': levelSeed,
-              'pvp': pvp,
-              'white-list': whiteList,
-              'hardcore': hardcore
-            }
-          })
-        });
-      } catch (createErr) {
-        resetOnError(`Failed to create server: ${createErr.message}`);
-        return;
-      }
-      
-      if (result.pendingApproval) {
-        updateProgress('Server created and pending admin approval', 100);
-        showNotification('Server created and pending admin approval', 'info');
-        await new Promise(r => setTimeout(r, 1500));
-        closeServerModal();
-        await loadServers();
-      } else if (result.warning) {
-        updateProgress(`Server created with warning: ${result.warning}`, 100);
-        showNotification(result.warning, 'warning');
-        await new Promise(r => setTimeout(r, 1500));
-        await loadServers();
-        selectServer(result.serverId);
-        closeServerModal();
-      } else {
-        updateProgress('Server created successfully!', 100);
-        showNotification('Server created successfully!', 'success');
-        await new Promise(r => setTimeout(r, 1000));
-        await loadServers();
-        selectServer(result.serverId);
-        closeServerModal();
-      }
-    }
-    
-    // Reset button state (in case modal wasn't closed)
-    submitBtn.textContent = originalText;
-    submitBtn.disabled = false;
-    if (backBtn) backBtn.disabled = false;
-    
-  } catch (error) {
-    console.error('Failed to create server:', error);
-    resetOnError(`Failed to create server: ${error.message}`);
-  }
-}
-
 // Note: formatBytes is in utils.js
-
-// ==================== Import World helpers ====================
-
-async function loadIWorldEngines() {
-  try {
-    const result = await apiRequest('/api/jar-bucket/all-types');
-    const allTypes = result.types || [];
-    const moddedEngines = allTypes.filter(t => t.id !== 'vanilla' && (t.category === 'java_servers' || t.category === 'modded'));
-
-    const engineSelect = document.getElementById('iworld-engine');
-    engineSelect.innerHTML = '<option value="">Select server engine...</option>';
-    engineSelect.disabled = false;
-    moddedEngines.forEach(engine => {
-      const option = document.createElement('option');
-      option.value = engine.id;
-      option.textContent = `${engine.icon || '📦'} ${engine.name}`;
-      option.dataset.description = engine.description || '';
-      engineSelect.appendChild(option);
-    });
-  } catch (error) {
-    console.error('Failed to load server engines for import-world:', error);
-  }
-}
-
-function onIWorldCategoryChange() {
-  const category = document.getElementById('iworld-category').value;
-  const engineGroup = document.getElementById('iworld-engine-group');
-  const versionGroup = document.getElementById('iworld-version-group');
-  const ramGroup = document.getElementById('iworld-ram-fields-group');
-  const versionSelect = document.getElementById('iworld-version');
-
-  iworldVersionAvailability = {};
-  document.getElementById('iworld-download-status-group').style.display = 'none';
-
-  if (!category) {
-    engineGroup.style.display = 'none';
-    versionGroup.style.display = 'none';
-    ramGroup.style.display = 'none';
-    return;
-  }
-
-  if (category === 'unmodded') {
-    engineGroup.style.display = 'none';
-    versionGroup.style.display = 'block';
-    versionSelect.setAttribute('required', '');
-    ramGroup.style.display = 'block';
-    loadIWorldVersionsForEngine('vanilla');
-  } else if (category === 'modded') {
-    engineGroup.style.display = 'block';
-    versionGroup.style.display = 'none';
-    versionSelect.removeAttribute('required');
-    ramGroup.style.display = 'none';
-    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
-    versionSelect.disabled = true;
-  }
-}
-
-async function loadIWorldVersions() {
-  const engineSelect = document.getElementById('iworld-engine');
-  const descEl = document.getElementById('iworld-engine-description');
-  const versionGroup = document.getElementById('iworld-version-group');
-  const ramGroup = document.getElementById('iworld-ram-fields-group');
-  const versionSelect = document.getElementById('iworld-version');
-  const engine = engineSelect.value;
-
-  iworldVersionAvailability = {};
-  document.getElementById('iworld-download-status-group').style.display = 'none';
-
-  if (!engine) {
-    versionGroup.style.display = 'none';
-    ramGroup.style.display = 'none';
-    if (descEl) descEl.textContent = '';
-    return;
-  }
-
-  const selectedOpt = engineSelect.options[engineSelect.selectedIndex];
-  if (descEl) descEl.textContent = selectedOpt.dataset.description || '';
-
-  versionSelect.setAttribute('required', '');
-  versionGroup.style.display = 'block';
-  ramGroup.style.display = 'block';
-  await loadIWorldVersionsForEngine(engine);
-}
-
-async function loadIWorldVersionsForEngine(serverEngine) {
-  const versionSelect = document.getElementById('iworld-version');
-  const statusEl = document.getElementById('iworld-version-status');
-
-  try {
-    versionSelect.innerHTML = '<option value="">Loading versions...</option>';
-    versionSelect.disabled = true;
-    if (statusEl) statusEl.textContent = '';
-
-    const result = await apiRequest(`/api/jar-bucket/all-versions/${serverEngine}`);
-    const versions = result.versions || [];
-
-    if (versions.length === 0) {
-      versionSelect.innerHTML = '<option value="">No versions available</option>';
-      return;
-    }
-
-    iworldVersionAvailability = {};
-    versions.forEach(v => { iworldVersionAvailability[v.version] = { downloaded: v.downloaded }; });
-
-    versionSelect.innerHTML = '<option value="">Select version...</option>';
-    versions.forEach(v => {
-      const option = document.createElement('option');
-      option.value = v.version;
-      option.textContent = v.downloaded ? `${v.version} ✓ (Downloaded)` : v.version;
-      option.dataset.downloaded = v.downloaded;
-      versionSelect.appendChild(option);
-    });
-    versionSelect.disabled = false;
-  } catch (error) {
-    console.error('Failed to load versions for import-world:', error);
-    versionSelect.innerHTML = '<option value="">Error loading versions</option>';
-  }
-}
-
-async function importWorld(e) {
-  e.preventDefault();
-
-  const name = document.getElementById('iworld-name').value;
-  const category = document.getElementById('iworld-category').value;
-  const serverEngine = category === 'modded'
-    ? document.getElementById('iworld-engine').value
-    : 'vanilla';
-  const version = document.getElementById('iworld-version').value;
-  const worldFileInput = document.getElementById('iworld-world-file');
-  const minRam = document.getElementById('iworld-min-ram').value;
-  const maxRam = document.getElementById('iworld-max-ram').value;
-  const extraJvmArgs = document.getElementById('iworld-jvm-args').value.trim();
-  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
-
-  if (!category) { showNotification('Please select a category', 'error'); return; }
-  if (category === 'modded' && !serverEngine) { showNotification('Please select a server engine', 'error'); return; }
-  if (!version) { showNotification('Please select a version', 'error'); return; }
-  if (!worldFileInput.files.length) { showNotification('Please select a world ZIP file', 'error'); return; }
-
-  const submitBtn = e.target.querySelector('button[type="submit"]');
-  const backBtn = e.target.querySelector('.btn:not([type="submit"])');
-  const originalText = submitBtn.textContent;
-  submitBtn.textContent = 'Working...';
-  submitBtn.disabled = true;
-  if (backBtn) backBtn.disabled = true;
-
-  const downloadStatusGroup = document.getElementById('iworld-download-status-group');
-  const downloadProgress = document.querySelector('#iworld-jar-download-status .download-progress');
-  const progressFill = document.querySelector('#iworld-jar-download-status .progress-fill');
-  const progressText = document.querySelector('#iworld-jar-download-status .progress-text');
-  const downloadInfo = document.querySelector('#iworld-jar-download-status .download-info');
-
-  const updateProgress = (message, percent = null, isError = false) => {
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
-    if (downloadInfo) {
-      const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
-      downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
-      if (isError) downloadInfo.classList.add('error');
-      else downloadInfo.classList.remove('error');
-    }
-    if (percent !== null && downloadProgress) {
-      downloadProgress.style.display = 'flex';
-      if (progressFill) progressFill.style.width = `${percent}%`;
-      if (progressText) progressText.textContent = `${Math.round(percent)}%`;
-    }
-  };
-
-  const resetOnError = (msg) => {
-    submitBtn.textContent = originalText;
-    submitBtn.disabled = false;
-    if (backBtn) backBtn.disabled = false;
-    updateProgress(msg, null, true);
-    showNotification(msg, 'error');
-  };
-
-  try {
-    // Step 1: Download JAR if not already available
-    const versionInfo = iworldVersionAvailability[version] || {};
-    if (!versionInfo.downloaded) {
-      updateProgress(`Downloading ${serverEngine} ${version}...`, 0);
-      submitBtn.textContent = 'Downloading JAR...';
-
-      let downloadResult;
-      try {
-        downloadResult = await apiRequest('/api/jar-bucket/download', {
-          method: 'POST',
-          body: JSON.stringify({ type: serverEngine, version })
-        });
-      } catch (err) {
-        resetOnError(`Failed to start download: ${err.message}`);
-        return;
-      }
-
-      if (!downloadResult.progress_id) {
-        resetOnError('Failed to start download — no progress ID returned');
-        return;
-      }
-
-      const progressId = downloadResult.progress_id;
-      let done = false;
-      let dlError = null;
-      let polls = 0;
-
-      while (!done && polls < 600) {
-        await new Promise(r => setTimeout(r, 500));
-        polls++;
-        try {
-          const progress = await apiRequest(`/api/jar-bucket/progress/${progressId}`);
-          if (progress.status === 'downloading') {
-            const pct = progress.progress || 0;
-            const dl = formatBytes(progress.downloaded || 0);
-            const tot = formatBytes(progress.total || 0);
-            updateProgress(`Downloading ${serverEngine} ${version}... (${dl} / ${tot})`, pct);
-          } else if (progress.status === 'complete') {
-            done = true;
-            if (progress.success === false) dlError = progress.error || 'Download failed';
-            else updateProgress('Download complete!', 100);
-          } else if (progress.status === 'error') {
-            done = true;
-            dlError = progress.error || 'Download failed';
-          }
-        } catch (_) { /* keep polling */ }
-      }
-
-      if (!done) { resetOnError('Download timed out. Please try again.'); return; }
-      if (dlError) { resetOnError(`Download failed: ${dlError}`); return; }
-    }
-
-    // Step 2: Create the fresh server
-    submitBtn.textContent = 'Creating Server...';
-    updateProgress('Creating server files...', 0);
-
-    let serverResult;
-    try {
-      serverResult = await apiRequest('/api/servers', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          executable: 'server.jar',
-          javaArgs,
-          category,
-          serverEngine,
-          version,
-          downloadJar: true,
-          serverProperties: {}
-        })
-      });
-    } catch (err) {
-      resetOnError(`Failed to create server: ${err.message}`);
-      return;
-    }
-
-    if (serverResult.pendingApproval) {
-      updateProgress('Server created and pending admin approval', 100);
-      showNotification('Server created and pending admin approval', 'info');
-      await new Promise(r => setTimeout(r, 1500));
-      closeServerModal();
-      await loadServers();
-      return;
-    }
-
-    // Step 3: Upload and import the world ZIP
-    submitBtn.textContent = 'Importing World...';
-    updateProgress('Uploading and importing world data...', 50);
-
-    const formData = new FormData();
-    formData.append('file', worldFileInput.files[0]);
-
-    const worldResponse = await fetch(`/api/servers/${serverResult.serverId}/import-world`, {
-      method: 'POST',
-      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
-      body: formData
-    });
-
-    const worldResult = await worldResponse.json();
-
-    if (!worldResponse.ok) {
-      // Server was created but world import failed — still show the server
-      console.error('World import failed:', worldResult.error);
-      await loadServers();
-      selectServer(serverResult.serverId);
-      closeServerModal();
-      showNotification(`Server created but world import failed: ${worldResult.error}`, 'warning');
-    } else {
-      updateProgress('Server created with world!', 100);
-      await new Promise(r => setTimeout(r, 800));
-      await loadServers();
-      selectServer(serverResult.serverId);
-      closeServerModal();
-      showNotification('Server created and world imported successfully!', 'success');
-    }
-
-  } catch (error) {
-    console.error('Failed to import world:', error);
-    resetOnError(`Failed: ${error.message}`);
-  }
-}
-
-// ==================== End Import World helpers ====================
-
-// Import server from ZIP
-async function importServer(e) {
-  e.preventDefault();
-  
-  const name = document.getElementById('import-name').value;
-  const fileInput = document.getElementById('import-file');
-  const executableName = document.getElementById('import-executable-name').value.trim();
-  const category = document.getElementById('import-category').value;
-  const engine = document.getElementById('import-engine').value;
-  const port = document.getElementById('import-port').value;
-  const minRam = document.getElementById('import-min-ram').value;
-  const maxRam = document.getElementById('import-max-ram').value;
-  const extraJvmArgs = document.getElementById('import-jvm-args').value.trim();
-  const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
-  
-  if (!fileInput.files.length) {
-    showNotification('Please select a ZIP file to import', 'error');
-    return;
-  }
-  
-  if (!category) {
-    showNotification('Please select a category', 'error');
-    return;
-  }
-  
-  if (!engine) {
-    showNotification('Please select a server engine', 'error');
-    return;
-  }
-  
-  if (!port || port < 1 || port > 65535) {
-    showNotification('Please enter a valid port (1-65535)', 'error');
-    return;
-  }
-  
-  try {
-    // Show loading state
-    const submitBtn = e.target.querySelector('button[type="submit"]');
-    const originalText = submitBtn.textContent;
-    submitBtn.textContent = 'Importing...';
-    submitBtn.disabled = true;
-    
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-    formData.append('name', name);
-    if (executableName) formData.append('executableName', executableName);
-    formData.append('javaArgs', javaArgs);
-    formData.append('category', category);
-    formData.append('engine', engine);
-    formData.append('port', port);
-    
-    const response = await fetch('/api/servers/import', {
-      method: 'POST',
-      headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
-      body: formData
-    });
-    
-    if (!response.ok) {
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const errResult = await response.json();
-        throw new Error(errResult.error || `Import failed (${response.status})`);
-      } else if (response.status === 413) {
-        throw new Error('File too large — please reduce the ZIP size and try again');
-      } else {
-        throw new Error(`Import failed (HTTP ${response.status})`);
-      }
-    }
-    
-    const result = await response.json();
-    
-    if (result.pendingApproval) {
-      showNotification('Server imported and pending admin approval', 'info');
-    } else {
-      await loadServers();
-      selectServer(result.serverId);
-    }
-    
-    closeServerModal();
-    submitBtn.textContent = originalText;
-    submitBtn.disabled = false;
-  } catch (error) {
-    console.error('Failed to import server:', error);
-    showNotification('Failed to import server: ' + error.message, 'error');
-    // Reset button state
-    const submitBtn = e.target.querySelector('button[type="submit"]');
-    submitBtn.textContent = 'Import Server';
-    submitBtn.disabled = false;
-  }
-}
-
-// Update engine options when import category changes
-function updateImportEngineOptions() {
-  const category = document.getElementById('import-category').value;
-  const engineSelect = document.getElementById('import-engine');
-  engineSelect.innerHTML = '';
-  
-  if (category === 'bedrock') {
-    engineSelect.innerHTML = '<option value="Bedrock">Bedrock</option>';
-  } else if (category === 'modded') {
-    const engines = ['Paper', 'Folia', 'Purpur', 'Spigot', 'Forge', 'NeoForge', 'Fabric', 'Other'];
-    engines.forEach(e => {
-      const opt = document.createElement('option');
-      opt.value = e;
-      opt.textContent = e;
-      engineSelect.appendChild(opt);
-    });
-  } else {
-    engineSelect.innerHTML = '<option value="Vanilla">Vanilla</option>';
-  }
-}
-
-// Toggle custom JAR upload section
-function toggleCustomJarUpload() {
-  const checkbox = document.getElementById('fresh-upload-jar');
-  const customSection = document.getElementById('custom-jar-upload');
-  const categoryGroup = document.getElementById('fresh-category').closest('.form-group');
-  const engineGroup = document.getElementById('fresh-engine').closest('.form-group');
-  const versionGroup = document.getElementById('fresh-version').closest('.form-group');
-  
-  if (checkbox.checked) {
-    customSection.style.display = 'block';
-    categoryGroup.style.display = 'none';
-    engineGroup.style.display = 'none';
-    versionGroup.style.display = 'none';
-  } else {
-    customSection.style.display = 'none';
-    categoryGroup.style.display = 'block';
-    // Engine visibility depends on category selection
-    const category = document.getElementById('fresh-category').value;
-    engineGroup.style.display = category === 'modded' ? 'block' : 'none';
-    versionGroup.style.display = 'block';
-  }
-}
 
 function deleteServer() {
   if (!currentServerId) return;
@@ -6344,16 +6202,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   
   // Server forms
-  const freshForm = document.getElementById('fresh-server-form');
-  const importForm = document.getElementById('import-server-form');
+  const unifiedForm = document.getElementById('unified-server-form');
   const manualForm = document.getElementById('manual-server-form');
-  if (freshForm) freshForm.onsubmit = createFreshServer;
-  if (importForm) importForm.onsubmit = importServer;
+  if (unifiedForm) unifiedForm.onsubmit = submitUnifiedForm;
   if (manualForm) manualForm.onsubmit = saveServer;
   
   // Custom JAR upload toggle
-  const uploadJarToggle = document.getElementById('fresh-upload-jar');
-  if (uploadJarToggle) uploadJarToggle.onchange = toggleCustomJarUpload;
+  const uploadJarToggle = document.getElementById('u-upload-jar');
+  if (uploadJarToggle) uploadJarToggle.onchange = toggleUnifiedCustomJar;
   
   // Server actions
   const startBtn = document.getElementById('start-btn');

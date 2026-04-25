@@ -682,7 +682,7 @@
 
     <!-- Add/Edit Server Modal -->
     <div id="server-modal" class="modal">
-      <div class="modal-content modal-medium">
+      <div class="modal-content modal-unified">
         <div class="modal-header">
           <h2 id="modal-title">Add Server</h2>
           <button class="close-btn" onclick="closeServerModal()">&times;</button>
@@ -715,50 +715,55 @@
           </div>
         </div>
 
-        <!-- Fresh Server Form -->
-        <form id="fresh-server-form" class="server-form horizontal-server-form" style="display: none;" onsubmit="createFreshServer(event)">
-          <div class="server-form-horizontal-wrapper">
-            <div class="server-form-main-fields">
+        <!-- Unified Server Form (Fresh / Import Server / Import World) -->
+        <form id="unified-server-form" class="server-form unified-server-form" style="display: none;" onsubmit="submitUnifiedForm(event)">
+          <div class="unified-form-columns">
+            <!-- LEFT COLUMN: MServer Configuration -->
+            <div class="unified-form-left">
               <div class="form-group">
-                <label for="fresh-name">Server Name:</label>
-                <input type="text" id="fresh-name" class="form-control" placeholder="My Minecraft Server" required autocomplete="off">
+                <label for="u-name">Server Name:</label>
+                <input type="text" id="u-name" class="form-control" placeholder="My Minecraft Server" autocomplete="off">
               </div>
+
               <div class="form-group">
-                <label for="fresh-category">Category: <span style="color: #ff6b6b;">*</span></label>
-                <select id="fresh-category" class="form-control" required onchange="onCategoryChange()">
+                <label for="u-category">Category: <span class="u-required-star" style="color: #ff6b6b;">*</span></label>
+                <select id="u-category" class="form-control" onchange="onUnifiedCategoryChange()">
                   <option value="">Select category...</option>
                   <option value="unmodded">Java (Vanilla)</option>
                   <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
                   <option value="bedrock">Bedrock</option>
                 </select>
-                <small id="category-description" class="type-desc">Choose whether you want a Java or Bedrock server</small>
+                <small id="u-category-desc" class="type-desc">Choose whether you want a Java or Bedrock server</small>
               </div>
-              <div class="form-group" id="engine-group" style="display: none;">
-                <label for="fresh-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
-                <select id="fresh-engine" class="form-control" required onchange="loadVersions()">
+
+              <div class="form-group" id="u-engine-group" style="display: none;">
+                <label for="u-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
+                <select id="u-engine" class="form-control" onchange="onUnifiedEngineChange()">
                   <option value="">Select server engine...</option>
                 </select>
-                <small id="engine-description" class="type-desc">Select a server type</small>
+                <small id="u-engine-desc" class="type-desc">Select a server type</small>
               </div>
-              <div class="form-group" id="version-group" style="display: none;">
-                <label for="fresh-version">Version: <span style="color: #ff6b6b;">*</span></label>
+
+              <div class="form-group" id="u-version-group" style="display: none;">
+                <label for="u-version">Version: <span style="color: #ff6b6b;">*</span></label>
                 <div class="version-selector">
-                  <select id="fresh-version" class="form-control" disabled required onchange="onVersionChange()">
+                  <select id="u-version" class="form-control" disabled onchange="onUnifiedVersionChange()">
                     <option value="">Select category first...</option>
                   </select>
-                  <span id="version-status" class="version-status"></span>
+                  <span id="u-version-status" class="version-status"></span>
                 </div>
-                <small id="version-description" class="type-desc">Select the Minecraft version</small>
+                <small id="u-version-desc" class="type-desc">Select the Minecraft version</small>
               </div>
-              <div id="download-status-group" class="form-group" style="display: none;">
-                <div id="jar-download-status" class="jar-download-status">
+
+              <div id="u-download-status-group" class="form-group" style="display: none;">
+                <div id="u-jar-download-status" class="jar-download-status">
                   <div class="download-info"></div>
                   <div class="download-progress" style="display: none;">
                     <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
                     <span class="progress-text">0%</span>
                   </div>
                 </div>
-                <div id="bedrock-setup-status" class="bedrock-setup-status" style="display: none;">
+                <div id="u-bedrock-setup-status" class="bedrock-setup-status" style="display: none;">
                   <div class="bedrock-steps">
                     <div class="bedrock-step" id="bstep-1" data-state="pending">
                       <div class="bedrock-step-row">
@@ -798,13 +803,35 @@
                 </div>
               </div>
 
-              <div id="ram-fields-group" style="display: none;">
+              <!-- Import-specific fields -->
+              <div id="u-import-fields" class="form-group" style="display: none;">
+                <div class="form-group">
+                  <label for="u-import-file">Server ZIP File: <span style="color: #ff6b6b;">*</span></label>
+                  <input type="file" id="u-import-file" class="form-control" accept=".zip">
+                  <small>Upload a ZIP file containing your existing server files</small>
+                </div>
+                <div class="form-group">
+                  <label for="u-import-executable">Server Executable (optional):</label>
+                  <input type="text" id="u-import-executable" class="form-control" placeholder="e.g. paper-1.21.4.jar — leave blank to auto-detect" autocomplete="off">
+                  <small>The JAR file name inside the ZIP to use as the server. It will be renamed to <code>server.jar</code>.</small>
+                </div>
+              </div>
+
+              <!-- Import World field -->
+              <div id="u-world-file-group" class="form-group" style="display: none;">
+                <label for="u-world-file">World ZIP File: <span style="color: #ff6b6b;">*</span></label>
+                <input type="file" id="u-world-file" class="form-control" accept=".zip">
+                <small>ZIP containing your Minecraft world folder (must include <code>level.dat</code>)</small>
+              </div>
+
+              <!-- RAM & JVM (shown dynamically) -->
+              <div id="u-ram-group" style="display: none;">
                 <div class="form-group">
                   <label>Memory Allocation:</label>
                   <div class="ram-inputs">
                     <div class="ram-field">
-                      <label for="fresh-min-ram">Min RAM:</label>
-                      <select id="fresh-min-ram" class="form-control">
+                      <label for="u-min-ram">Min RAM:</label>
+                      <select id="u-min-ram" class="form-control">
                         <option value="512M">512 MB</option>
                         <option value="1G" selected>1 GB</option>
                         <option value="2G">2 GB</option>
@@ -817,8 +844,8 @@
                       </select>
                     </div>
                     <div class="ram-field">
-                      <label for="fresh-max-ram">Max RAM:</label>
-                      <select id="fresh-max-ram" class="form-control">
+                      <label for="u-max-ram">Max RAM:</label>
+                      <select id="u-max-ram" class="form-control">
                         <option value="1G">1 GB</option>
                         <option value="2G" selected>2 GB</option>
                         <option value="3G">3 GB</option>
@@ -835,282 +862,97 @@
                   <small>Minimum and maximum memory for the JVM</small>
                 </div>
                 <div class="form-group jvm-args-group">
-                  <label for="fresh-jvm-args">Additional JVM Arguments (optional):</label>
-                  <input type="text" id="fresh-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
+                  <label for="u-jvm-args">Additional JVM Arguments (optional):</label>
+                  <input type="text" id="u-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
                   <small>Extra Java arguments (memory args are set automatically above)</small>
                 </div>
               </div>
-              <div class="form-group" id="upload-jar-group" style="display: none;">
+
+              <div class="form-group" id="u-upload-jar-group" style="display: none;">
                 <label>
-                  <input type="checkbox" id="fresh-upload-jar" onchange="toggleCustomJarUpload()"> Upload my own JAR file instead
+                  <input type="checkbox" id="u-upload-jar" onchange="toggleUnifiedCustomJar()"> Upload my own JAR file instead
                 </label>
               </div>
-              <div id="custom-jar-upload" class="form-group" style="display: none;">
-                <label for="fresh-jar-file">Custom JAR File:</label>
-                <input type="file" id="fresh-jar-file" class="form-control" accept=".jar">
+              <div id="u-custom-jar-upload" class="form-group" style="display: none;">
+                <label for="u-jar-file">Custom JAR File:</label>
+                <input type="file" id="u-jar-file" class="form-control" accept=".jar">
                 <small>Upload your own server JAR file</small>
               </div>
             </div>
-            <div class="server-form-properties-fields">
-              <div id="server-properties-group" style="display: none;">
-                <div class="form-group-header">
-                  <h4>🎮 Server Properties</h4>
-                  <small>These settings will be saved to server.properties</small>
+
+            <!-- RIGHT COLUMN: Server Properties (appears dynamically) -->
+            <div class="unified-form-right" id="u-server-props" style="display: none;">
+              <div class="form-group-header">
+                <h4>🎮 Server Properties</h4>
+                <small>These settings will be saved to server.properties</small>
+              </div>
+              <div class="form-row">
+                <div class="form-group half">
+                  <label for="u-server-port">Server Port:</label>
+                  <input type="number" id="u-server-port" class="form-control" value="25565" min="1" max="65535" autocomplete="off">
+                  <small>Default: 25565 (1-65535)</small>
                 </div>
-                <div class="form-row">
-                  <div class="form-group half">
-                    <label for="fresh-server-port">Server Port:</label>
-                    <input type="number" id="fresh-server-port" class="form-control" value="25565" min="1" max="65535" autocomplete="off">
-                    <small>Default: 25565 (1-65535)</small>
-                  </div>
-                  <div class="form-group half">
-                    <label for="fresh-max-players">Max Players:</label>
-                    <input type="number" id="fresh-max-players" class="form-control" value="20" min="1" max="100" autocomplete="off">
-                    <small>Maximum players (1-100)</small>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group half">
-                    <label for="fresh-gamemode">Game Mode:</label>
-                    <select id="fresh-gamemode" class="form-control">
-                      <option value="survival" selected>Survival</option>
-                      <option value="creative">Creative</option>
-                      <option value="adventure">Adventure</option>
-                      <option value="spectator">Spectator</option>
-                    </select>
-                  </div>
-                  <div class="form-group half">
-                    <label for="fresh-difficulty">Difficulty:</label>
-                    <select id="fresh-difficulty" class="form-control">
-                      <option value="peaceful">Peaceful</option>
-                      <option value="easy" selected>Easy</option>
-                      <option value="normal">Normal</option>
-                      <option value="hard">Hard</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group half">
-                    <label for="fresh-level-seed">Level Seed (optional):</label>
-                    <input type="text" id="fresh-level-seed" class="form-control" placeholder="Leave blank for random" autocomplete="off">
-                    <small>Leave empty for a random seed</small>
-                  </div>
-                  <div class="form-group half">
-                    <label for="fresh-level-seed"></label>
-                    <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 8px;">
-                      <label id="pvp-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
-                        <input type="checkbox" id="fresh-pvp" style="margin-right: 8px;">
-                        <span>Enable PvP</span>
-                      </label>
-                      <label style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
-                        <input type="checkbox" id="fresh-white-list" style="margin-right: 8px;">
-                        <span>Enable Whitelist</span>
-                      </label>
-                      <label id="hardcore-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
-                        <input type="checkbox" id="fresh-hardcore" style="margin-right: 8px;">
-                        <span>Hardcore Mode</span>
-                      </label>
-                    </div>
-                  </div>
+                <div class="form-group half">
+                  <label for="u-max-players">Max Players:</label>
+                  <input type="number" id="u-max-players" class="form-control" value="20" min="1" max="100" autocomplete="off">
+                  <small>Maximum players (1-100)</small>
                 </div>
               </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
-            <button type="submit" class="btn btn-success">Create Server</button>
-          </div>
-        </form>
-
-        <!-- Import Server Form -->
-        <form id="import-server-form" class="server-form" style="display: none;" onsubmit="importServer(event)">
-          <div class="form-group">
-            <label for="import-name">Server Name:</label>
-            <input type="text" id="import-name" class="form-control" placeholder="Imported Server" required autocomplete="off">
-          </div>
-          
-          <div class="form-group">
-            <label for="import-category">Category:</label>
-            <select id="import-category" class="form-control" onchange="updateImportEngineOptions()">
-              <option value="unmodded">Java (Vanilla)</option>
-              <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
-              <option value="bedrock">Bedrock</option>
-            </select>
-            <small>Select the type of server you're importing</small>
-          </div>
-
-          <div class="form-group">
-            <label for="import-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
-            <select id="import-engine" class="form-control" required>
-              <option value="Vanilla">Vanilla</option>
-            </select>
-            <small>The engine/platform this server runs on</small>
-          </div>
-
-          <div class="form-group">
-            <label for="import-port">Server Port: <span style="color: #ff6b6b;">*</span></label>
-            <input type="number" id="import-port" class="form-control" value="25565" min="1" max="65535" required>
-            <small>The port the server listens on (check server.properties)</small>
-          </div>
-          
-          <div class="form-group">
-            <label for="import-file">Server ZIP File:</label>
-            <input type="file" id="import-file" class="form-control" accept=".zip" required>
-            <small>Upload a ZIP file containing your existing server files</small>
-          </div>
-
-          <div class="form-group">
-            <label for="import-executable-name">Server Executable (optional):</label>
-            <input type="text" id="import-executable-name" class="form-control" placeholder="e.g. paper-1.21.4.jar — leave blank to auto-detect" autocomplete="off">
-            <small>The JAR file name inside the ZIP to use as the server. It will be renamed to <code>server.jar</code>.</small>
-          </div>
-
-          
-          <div class="form-group">
-            <label>Memory Allocation:</label>
-            <div class="ram-inputs">
-              <div class="ram-field">
-                <label for="import-min-ram">Min RAM:</label>
-                <select id="import-min-ram" class="form-control">
-                  <option value="512M">512 MB</option>
-                  <option value="1G" selected>1 GB</option>
-                  <option value="2G">2 GB</option>
-                  <option value="3G">3 GB</option>
-                  <option value="4G">4 GB</option>
-                  <option value="6G">6 GB</option>
-                  <option value="8G">8 GB</option>
-                  <option value="12G">12 GB</option>
-                  <option value="16G">16 GB</option>
-                </select>
-              </div>
-              <div class="ram-field">
-                <label for="import-max-ram">Max RAM:</label>
-                <select id="import-max-ram" class="form-control">
-                  <option value="1G">1 GB</option>
-                  <option value="2G" selected>2 GB</option>
-                  <option value="3G">3 GB</option>
-                  <option value="4G">4 GB</option>
-                  <option value="6G">6 GB</option>
-                  <option value="8G">8 GB</option>
-                  <option value="12G">12 GB</option>
-                  <option value="16G">16 GB</option>
-                  <option value="24G">24 GB</option>
-                  <option value="32G">32 GB</option>
-                </select>
-              </div>
-            </div>
-            <small>Minimum and maximum memory for the JVM</small>
-          </div>
-          
-          <div class="form-group">
-            <label for="import-jvm-args">Additional JVM Arguments (optional):</label>
-            <input type="text" id="import-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
-            <small>Extra Java arguments (memory args are set automatically above)</small>
-          </div>
-          
-          <div class="modal-footer">
-            <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
-            <button type="submit" class="btn btn-success">Import Server</button>
-          </div>
-        </form>
-
-        <!-- Import World Form -->
-        <form id="import-world-form" class="server-form" style="display: none;" onsubmit="importWorld(event)">
-          <div class="form-group">
-            <label for="iworld-name">Server Name:</label>
-            <input type="text" id="iworld-name" class="form-control" placeholder="My Minecraft Server" required autocomplete="off">
-          </div>
-
-          <div class="form-group">
-            <label for="iworld-category">Category: <span style="color: #ff6b6b;">*</span></label>
-            <select id="iworld-category" class="form-control" required onchange="onIWorldCategoryChange()">
-              <option value="">Select category...</option>
-              <option value="unmodded">Java (Vanilla)</option>
-              <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
-            </select>
-            <small>Bedrock world format is not supported for this import type</small>
-          </div>
-
-          <div class="form-group" id="iworld-engine-group" style="display: none;">
-            <label for="iworld-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
-            <select id="iworld-engine" class="form-control" onchange="loadIWorldVersions()">
-              <option value="">Select server engine...</option>
-            </select>
-            <small id="iworld-engine-description" class="type-desc"></small>
-          </div>
-
-          <div class="form-group" id="iworld-version-group" style="display: none;">
-            <label for="iworld-version">Version: <span style="color: #ff6b6b;">*</span></label>
-            <div class="version-selector">
-              <select id="iworld-version" class="form-control" disabled required>
-                <option value="">Select category first...</option>
-              </select>
-              <span id="iworld-version-status" class="version-status"></span>
-            </div>
-          </div>
-
-          <div id="iworld-download-status-group" class="form-group" style="display: none;">
-            <div id="iworld-jar-download-status" class="jar-download-status">
-              <div class="download-info"></div>
-              <div class="download-progress" style="display: none;">
-                <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
-                <span class="progress-text">0%</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="iworld-world-file">World ZIP File: <span style="color: #ff6b6b;">*</span></label>
-            <input type="file" id="iworld-world-file" class="form-control" accept=".zip" required>
-            <small>ZIP containing your Minecraft world folder (must include <code>level.dat</code>)</small>
-          </div>
-
-          <div id="iworld-ram-fields-group" style="display: none;">
-            <div class="form-group">
-              <label>Memory Allocation:</label>
-              <div class="ram-inputs">
-                <div class="ram-field">
-                  <label for="iworld-min-ram">Min RAM:</label>
-                  <select id="iworld-min-ram" class="form-control">
-                    <option value="512M">512 MB</option>
-                    <option value="1G" selected>1 GB</option>
-                    <option value="2G">2 GB</option>
-                    <option value="3G">3 GB</option>
-                    <option value="4G">4 GB</option>
-                    <option value="6G">6 GB</option>
-                    <option value="8G">8 GB</option>
-                    <option value="12G">12 GB</option>
-                    <option value="16G">16 GB</option>
+              <div class="form-row">
+                <div class="form-group half">
+                  <label for="u-gamemode">Game Mode:</label>
+                  <select id="u-gamemode" class="form-control">
+                    <option value="survival" selected>Survival</option>
+                    <option value="creative">Creative</option>
+                    <option value="adventure">Adventure</option>
+                    <option value="spectator">Spectator</option>
                   </select>
                 </div>
-                <div class="ram-field">
-                  <label for="iworld-max-ram">Max RAM:</label>
-                  <select id="iworld-max-ram" class="form-control">
-                    <option value="1G">1 GB</option>
-                    <option value="2G" selected>2 GB</option>
-                    <option value="3G">3 GB</option>
-                    <option value="4G">4 GB</option>
-                    <option value="6G">6 GB</option>
-                    <option value="8G">8 GB</option>
-                    <option value="12G">12 GB</option>
-                    <option value="16G">16 GB</option>
-                    <option value="24G">24 GB</option>
-                    <option value="32G">32 GB</option>
+                <div class="form-group half">
+                  <label for="u-difficulty">Difficulty:</label>
+                  <select id="u-difficulty" class="form-control">
+                    <option value="peaceful">Peaceful</option>
+                    <option value="easy" selected>Easy</option>
+                    <option value="normal">Normal</option>
+                    <option value="hard">Hard</option>
                   </select>
                 </div>
               </div>
-              <small>Minimum and maximum memory for the JVM</small>
-            </div>
-            <div class="form-group jvm-args-group">
-              <label for="iworld-jvm-args">Additional JVM Arguments (optional):</label>
-              <input type="text" id="iworld-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
-              <small>Extra Java arguments (memory args are set automatically above)</small>
+              <div class="form-row">
+                <div class="form-group half">
+                  <label for="u-level-seed">Level Seed (optional):</label>
+                  <input type="text" id="u-level-seed" class="form-control" placeholder="Leave blank for random" autocomplete="off">
+                  <small>Leave empty for a random seed</small>
+                </div>
+                <div class="form-group half">
+                  <label>&nbsp;</label>
+                  <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 8px;">
+                    <label id="u-pvp-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
+                      <input type="checkbox" id="u-pvp" checked style="margin-right: 8px;">
+                      <span>Enable PvP</span>
+                    </label>
+                    <label style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
+                      <input type="checkbox" id="u-white-list" style="margin-right: 8px;">
+                      <span>Enable Whitelist</span>
+                    </label>
+                    <label id="u-hardcore-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
+                      <input type="checkbox" id="u-hardcore" style="margin-right: 8px;">
+                      <span>Hardcore Mode</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Import Server: hint about managed.conf -->
+              <div id="u-import-props-hint" class="import-props-hint" style="display: none;">
+                <small>💡 Leave fields blank to use values from the imported server's managed.conf</small>
+              </div>
             </div>
           </div>
 
           <div class="modal-footer">
             <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
-            <button type="submit" class="btn btn-success">Create Server &amp; Import World</button>
+            <button type="submit" class="btn btn-success" id="u-submit-btn">Create Server</button>
           </div>
         </form>
 
@@ -1145,8 +987,6 @@
             </div>
             <small>Change the Minecraft server version (e.g., upgrade or downgrade)</small>
           </div>
-          
-
           
           <div class="form-group">
             <label>Memory Allocation:</label>

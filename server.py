@@ -5835,6 +5835,29 @@ def change_server_version(server_id):
         except Exception as e:
             return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
     
+    # Copy the new version JAR into the server directory (download first if needed)
+    engine = managed_conf.get('Engine', server_config.get('serverType', 'vanilla'))
+    server_type = engine.lower() if engine else 'vanilla'
+    is_bedrock = server_config.get('category') == 'bedrock'
+    executable = server_config.get('executable', 'server.sh' if is_bedrock else 'server.jar')
+    jar_dest = server_dir / executable
+
+    if not is_bedrock:
+        # Try local copy first; if the JAR isn't cached, download it from upstream
+        jar_ok, jar_msg = jar_manager.copy_jar_to_server(server_type, new_version, jar_dest)
+        if not jar_ok:
+            dl_result = jar_bucket.download_jar(server_type, new_version)
+            if not dl_result.get('success'):
+                return jsonify({
+                    'error': f'Failed to download {server_type} {new_version} JAR: {dl_result.get("error", "Unknown error")}'
+                }), 500
+            # Now copy the freshly-downloaded JAR
+            jar_ok, jar_msg = jar_manager.copy_jar_to_server(server_type, new_version, jar_dest)
+            if not jar_ok:
+                return jsonify({
+                    'error': f'Downloaded JAR but failed to copy to server: {jar_msg}'
+                }), 500
+
     # Update version in DB and managed.conf
     server_manager.update_server(server_id, version=new_version)
 

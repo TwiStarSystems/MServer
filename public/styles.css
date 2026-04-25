@@ -1,16 +1,16 @@
-/* Horizontal Server Creation Form Layout */
-.horizontal-server-form {
+/* Unified Server Creation Form Layout */
+.unified-server-form {
   padding: 20px 25px;
 }
 
-.horizontal-server-form .server-form-horizontal-wrapper {
+.unified-form-columns {
   display: flex;
   flex-direction: row;
   gap: 30px;
-  align-items: stretch;
+  align-items: flex-start;
 }
 
-.horizontal-server-form .server-form-main-fields {
+.unified-form-left {
   flex: 1 1 auto;
   min-width: 300px;
   max-width: 500px;
@@ -19,7 +19,7 @@
   gap: 14px;
 }
 
-.horizontal-server-form .server-form-properties-fields {
+.unified-form-right {
   flex: 1 1 auto;
   min-width: 280px;
   max-width: 450px;
@@ -30,24 +30,18 @@
   flex-direction: column;
 }
 
-.horizontal-server-form .server-form-properties-fields:empty,
-.horizontal-server-form .server-form-properties-fields:not(:has(*:not([style*="display: none"]))) {
-  display: none;
-}
-
-/* When properties panel is hidden, main fields can expand */
-.horizontal-server-form .server-form-horizontal-wrapper:has(.server-form-properties-fields:empty) .server-form-main-fields,
-.horizontal-server-form .server-form-horizontal-wrapper:has(.server-form-properties-fields[style*="display: none"]) .server-form-main-fields {
+/* When right panel is hidden, left expands */
+.unified-form-columns:has(.unified-form-right[style*="display: none"]) .unified-form-left {
   max-width: 600px;
 }
 
 @media (max-width: 900px) {
-  .horizontal-server-form .server-form-horizontal-wrapper {
+  .unified-form-columns {
     flex-direction: column;
     gap: 20px;
   }
-  .horizontal-server-form .server-form-main-fields,
-  .horizontal-server-form .server-form-properties-fields {
+  .unified-form-left,
+  .unified-form-right {
     max-width: 100%;
     min-width: 0;
     width: 100%;
@@ -55,12 +49,36 @@
 }
 
 /* Auto-sizing form based on visible content */
-.horizontal-server-form .form-group {
+.unified-server-form .form-group {
   margin-bottom: 0;
 }
 
-.horizontal-server-form .form-group[style*="display: none"] + .form-group {
+.unified-server-form .form-group[style*="display: none"] + .form-group {
   margin-top: 0;
+}
+
+/* Unified modal sizing — ~40% screen width */
+.modal-content.modal-unified {
+  width: 40vw;
+  min-width: 420px;
+  max-width: 1100px;
+  max-height: 85vh;
+  transition: width 0.3s ease;
+}
+
+/* Expand to fit two columns when server properties are shown */
+.modal-content.modal-unified:has(.unified-form-right:not([style*="display: none"])) {
+  width: 55vw;
+  min-width: 700px;
+}
+
+/* Import hint banner */
+.import-props-hint {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  color: var(--color-muted);
 }
 /* MServerController - Multi-Server CSS */
 
@@ -1285,10 +1303,8 @@ body {
   min-width: 400px;
 }
 
-/* Adaptive modal for server creation */
-#server-modal .modal-content.modal-medium {
-  width: auto;
-  max-width: 1100px;
+/* Adaptive modal for server creation — now uses .modal-unified */
+#server-modal .modal-content.modal-unified {
   transition: width 0.3s ease;
 }
 
