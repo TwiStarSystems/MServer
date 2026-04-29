@@ -1595,10 +1595,6 @@ function selectCreationType(type) {
     worldFileGroup.style.display = 'none';
     importPropsHint.style.display = 'block';
     if (bedrockOption) bedrockOption.style.display = '';
-    // Category/engine/version are optional — managed.conf provides them
-    document.getElementById('u-category').removeAttribute('required');
-    document.getElementById('u-engine').removeAttribute('required');
-    document.getElementById('u-version').removeAttribute('required');
     // For import, show server props immediately (with blank-for-managed.conf hint)
     document.getElementById('u-server-props').style.display = 'flex';
     document.getElementById('u-ram-group').style.display = 'block';
@@ -1636,6 +1632,7 @@ function backToCreationType() {
 
 function checkUnifiedFormReady() {
   // Check if required fields are filled to show server properties panel
+  const name = document.getElementById('u-name').value.trim();
   const category = document.getElementById('u-category').value;
   const isBedrock = category === 'bedrock';
   const isModded = category === 'modded';
@@ -1649,12 +1646,13 @@ function checkUnifiedFormReady() {
   const ramGroup = document.getElementById('u-ram-group');
   const uploadJarGroup = document.getElementById('u-upload-jar-group');
   
-  // Show server props once category + engine + version are selected (name is validated at submit)
+  // Check if all required fields are filled
+  const nameOk = name.length > 0;
   const categoryOk = category !== '';
   const engineOk = !isModded || engine !== '';
   const versionOk = isBedrock || version !== '';
   
-  if (categoryOk && engineOk && versionOk) {
+  if (nameOk && categoryOk && engineOk && versionOk) {
     if (propsPanel) propsPanel.style.display = 'flex';
     if (ramGroup && !isBedrock) ramGroup.style.display = 'block';
     if (uploadJarGroup && !isBedrock) uploadJarGroup.style.display = 'block';
@@ -1694,7 +1692,7 @@ function onUnifiedCategoryChange() {
   if (category === 'unmodded') {
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'block';
-    if (currentCreationType !== 'import') versionSelect.setAttribute('required', '');
+    versionSelect.setAttribute('required', '');
     categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
     if (pvpOption) pvpOption.style.display = '';
     if (hardcoreOption) hardcoreOption.style.display = '';
@@ -1704,7 +1702,7 @@ function onUnifiedCategoryChange() {
     loadUnifiedVersionsForEngine('vanilla');
   } else if (category === 'modded') {
     engineGroup.style.display = 'block';
-    if (currentCreationType !== 'import') engineSelect.setAttribute('required', '');
+    engineSelect.setAttribute('required', '');
     versionGroup.style.display = 'none';
     versionSelect.removeAttribute('required');
     categoryDesc.textContent = 'Java Edition server with plugin/mod support';
