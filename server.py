@@ -3432,7 +3432,6 @@ class ServerManager:
         'AutoStart',
         'CreatedAt',
         'EULAAccepted',
-        'LastStarted'
     ]
     
     def _create_managed_conf(self, server_dir, server_id, name, engine=None, owner=None, version=None, port=None, auto_start=False):
