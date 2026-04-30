@@ -139,10 +139,22 @@ def _to_bool(v):
 
 # ==================== Players ====================
 
+def _playerdata_dir(world_path):
+    """Return the playerdata directory, supporting both legacy and modern layouts.
+
+    Legacy (<=1.21.x): world/playerdata/
+    Modern (26.x+):    world/players/data/
+    """
+    legacy = world_path / 'playerdata'
+    if legacy.is_dir():
+        return legacy
+    return world_path / 'players' / 'data'
+
+
 def list_players(session):
     """List player UUIDs available in the world."""
     players = []
-    pdir = session.world_path / 'playerdata'
+    pdir = _playerdata_dir(session.world_path)
     if pdir.exists():
         for f in pdir.glob('*.dat'):
             players.append({'uuid': f.stem, 'platform': 'java', 'path': str(f)})
@@ -151,7 +163,7 @@ def list_players(session):
 
 def read_player(session, player_uuid):
     """Read player data file and return structured info."""
-    pf = session.world_path / 'playerdata' / f'{player_uuid}.dat'
+    pf = _playerdata_dir(session.world_path) / f'{player_uuid}.dat'
     if not pf.exists():
         return None
 
@@ -190,7 +202,7 @@ def read_player(session, player_uuid):
 
 def write_player(session, player_uuid, updates):
     """Write updates to player data file."""
-    pf = session.world_path / 'playerdata' / f'{player_uuid}.dat'
+    pf = _playerdata_dir(session.world_path) / f'{player_uuid}.dat'
     if not pf.exists():
         return False
 

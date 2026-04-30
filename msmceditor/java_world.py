@@ -224,12 +224,26 @@ class JavaWorld:
     # ---------- Region management ----------
 
     def _region_dir(self, dimension):
+        # For the three built-in dimensions, legacy servers store regions in the
+        # classic layout (world/region, world/DIM-1/region, world/DIM1/region).
+        # Modern servers (MC 1.26 / 26.x+) store ALL dimensions under
+        # world/dimensions/<namespace>/<name>/region/.  We prefer the legacy
+        # path when it exists so old worlds continue to work.
         if dimension == 'minecraft:overworld':
-            return self.world_path / 'region'
+            legacy = self.world_path / 'region'
+            if legacy.is_dir():
+                return legacy
+            return self.world_path / 'dimensions' / 'minecraft' / 'overworld' / 'region'
         if dimension == 'minecraft:the_nether':
-            return self.world_path / 'DIM-1' / 'region'
+            legacy = self.world_path / 'DIM-1' / 'region'
+            if legacy.is_dir():
+                return legacy
+            return self.world_path / 'dimensions' / 'minecraft' / 'the_nether' / 'region'
         if dimension == 'minecraft:the_end':
-            return self.world_path / 'DIM1' / 'region'
+            legacy = self.world_path / 'DIM1' / 'region'
+            if legacy.is_dir():
+                return legacy
+            return self.world_path / 'dimensions' / 'minecraft' / 'the_end' / 'region'
         if ':' in dimension:
             ns, nm = dimension.split(':', 1)
             return self.world_path / 'dimensions' / ns / nm / 'region'

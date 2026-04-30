@@ -275,7 +275,23 @@ async function _msmcLoadPalette() {
 }
 
 async function msmcRefreshViewer() {
-  if (!_msmcSession || !currentServerId || !window.MSMC3D) return;
+  if (!_msmcSession || !currentServerId) return;
+  // ES module (msmceditor-3d.js) may still be loading Three.js from CDN —
+  // retry after a short delay rather than silently dropping the refresh.
+  if (!window.MSMC3D) {
+    setTimeout(msmcRefreshViewer, 300);
+    return;
+  }
+  // Lazy-init the canvas in case initMSMCEditor ran before the module loaded.
+  if (!_msmcInitialized) {
+    const canvas = document.getElementById('msmceditor-canvas');
+    if (canvas) {
+      MSMC3D.init(canvas);
+      MSMC3D.onPick(_msmcOnBlockPicked);
+      _msmcInitialized = true;
+      _msmcApplySettingsToViewer();
+    }
+  }
   const cam = MSMC3D.getCameraChunk();
   const r = _msmcSettings.renderDistance;
   try {
