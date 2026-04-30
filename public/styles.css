@@ -6733,176 +6733,6 @@ select.form-control:disabled {
   white-space: nowrap;
 }
 
-/* ==================== World Map (BlueMap) Tab ==================== */
-
-.worldmap-container {
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  height: 100%;
-}
-
-.worldmap-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.worldmap-header h3 {
-  margin: 0;
-}
-
-.worldmap-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.worldmap-info {
-  color: var(--color-muted);
-  font-size: 0.9rem;
-  margin: 0;
-}
-
-.worldmap-info a {
-  color: var(--color-secondary);
-}
-
-/* Setup card */
-.bluemap-setup {
-  display: flex;
-  justify-content: center;
-  padding: 40px 0;
-}
-
-.bluemap-setup-card {
-  text-align: center;
-  background: rgba(15, 52, 96, 0.3);
-  border: 1px solid var(--color-border);
-  padding: 40px 50px;
-  max-width: 420px;
-}
-
-.bluemap-setup-icon {
-  font-size: 3rem;
-  margin-bottom: 12px;
-}
-
-.bluemap-setup-card h4 {
-  margin: 0 0 8px;
-  font-size: 1.2rem;
-}
-
-.bluemap-setup-card p {
-  color: var(--color-muted);
-  margin: 0 0 20px;
-  font-size: 0.9rem;
-}
-
-.bluemap-setup-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: center;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.bluemap-setup-or {
-  color: var(--color-muted);
-  font-size: 0.85rem;
-}
-
-.bluemap-setup-hint {
-  display: block;
-  color: var(--color-muted);
-  font-size: 0.8rem;
-}
-
-.bluemap-setup-hint a {
-  color: var(--color-secondary);
-}
-
-/* Status card */
-.bluemap-status-card {
-  background: rgba(15, 52, 96, 0.3);
-  border: 1px solid var(--color-border);
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.bluemap-status-row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
-.bluemap-status-label {
-  color: var(--color-muted);
-  font-size: 0.85rem;
-  min-width: 120px;
-}
-
-.bluemap-status-value {
-  font-size: 0.9rem;
-}
-
-.bluemap-render-progress .progress-bar {
-  margin-top: 6px;
-  height: 6px;
-  background: rgba(255,255,255,0.1);
-  overflow: hidden;
-}
-
-.bluemap-render-progress .progress-fill {
-  height: 100%;
-  background: var(--color-primary);
-  transition: width 0.3s;
-}
-
-/* Viewer */
-.bluemap-viewer {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 500px;
-}
-
-.bluemap-viewer-controls {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.bluemap-iframe {
-  flex: 1;
-  width: 100%;
-  min-height: 480px;
-  border: 1px solid var(--color-border);
-  background: #000;
-}
-
-/* Empty state */
-.bluemap-empty {
-  text-align: center;
-  padding: 40px 0;
-  color: var(--color-muted);
-}
-
-.bluemap-empty p {
-  margin: 6px 0;
-}
-
-.bluemap-hint {
-  font-size: 0.85rem;
-  color: var(--color-gold);
-}
-
 /* ==================== Toast Notification Stack ==================== */
 
 .toast-container {
@@ -7518,4 +7348,370 @@ select.form-control:disabled {
   font-size: 0.82rem;
   resize: vertical;
   min-height: 80px;
+}
+
+/* ==================== MSMCeditor (World Editor) ==================== */
+
+.msmceditor-container {
+  display: grid;
+  grid-template-columns: 250px 1fr 350px;
+  height: calc(100vh - 140px);
+  gap: 0;
+}
+
+/* Left sidebar */
+.msmceditor-sidebar {
+  background: var(--color-surface, #1a1a2e);
+  border-right: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.msmceditor-sidebar h5 {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.7;
+}
+
+.msmceditor-sidebar select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  background: var(--color-bg, #0f0f1a);
+  color: var(--color-text, #e0e0e0);
+  font-size: 0.85rem;
+}
+
+.msmceditor-dims {
+  display: flex;
+  gap: 4px;
+}
+
+.msmceditor-dim-btn {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  border: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  background: transparent;
+  color: var(--color-text, #e0e0e0);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.msmceditor-dim-btn.active {
+  background: var(--color-primary, #7c3aed);
+  color: #fff;
+  border-color: var(--color-primary, #7c3aed);
+}
+
+.msmceditor-dim-btn:hover:not(.active) {
+  background: rgba(124, 58, 237, 0.2);
+}
+
+.msmceditor-controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.msmceditor-controls .btn {
+  flex: 1;
+  font-size: 0.8rem;
+  padding: 6px 8px;
+}
+
+.msmceditor-status-badge {
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.msmceditor-status-badge.readonly {
+  background: rgba(234, 179, 8, 0.2);
+  color: #eab308;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+
+.msmceditor-status-badge.editable {
+  background: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.msmceditor-readonly-banner {
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  color: #eab308;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.msmceditor-save-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.msmceditor-save-controls .btn {
+  flex: 1;
+  font-size: 0.8rem;
+  padding: 6px;
+}
+
+/* Center map area */
+.msmceditor-map-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+#msmceditor-map {
+  flex: 1;
+  background: #111;
+  border: none;
+}
+
+.msmceditor-map-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--color-surface, #1a1a2e);
+  border-top: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  font-size: 0.75rem;
+  color: var(--color-text-secondary, #aaa);
+}
+
+/* Right panel */
+.msmceditor-panel {
+  background: var(--color-surface, #1a1a2e);
+  border-left: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.msmceditor-panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  overflow-x: auto;
+}
+
+.msmceditor-panel-tab {
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-secondary, #aaa);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.msmceditor-panel-tab.active {
+  color: var(--color-primary, #7c3aed);
+  border-bottom-color: var(--color-primary, #7c3aed);
+}
+
+.msmceditor-panel-tab:hover:not(.active) {
+  color: var(--color-text, #e0e0e0);
+}
+
+.msmceditor-panel-content {
+  display: none;
+  padding: 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.msmceditor-panel-content.active {
+  display: block;
+}
+
+/* Block inspector */
+.msmceditor-block-info {
+  background: var(--color-bg, #0f0f1a);
+  border: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.msmceditor-block-info dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-top: 6px;
+}
+
+.msmceditor-block-info dd {
+  margin: 0;
+  font-family: 'Courier New', monospace;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.msmceditor-block-info pre {
+  font-size: 0.75rem;
+  background: rgba(0,0,0,0.3);
+  padding: 6px;
+  border-radius: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+  margin: 4px 0 0;
+}
+
+/* Forms within panels */
+.msmceditor-panel-content .form-group {
+  margin-bottom: 8px;
+}
+
+.msmceditor-panel-content .form-group label {
+  display: block;
+  font-size: 0.75rem;
+  margin-bottom: 2px;
+  opacity: 0.8;
+}
+
+.msmceditor-panel-content .form-group-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.msmceditor-panel-content .form-group-inline label {
+  flex: 0 0 120px;
+  margin: 0;
+}
+
+.msmceditor-panel-content .form-group-inline .form-control {
+  flex: 1;
+}
+
+.msmceditor-panel-content .form-control {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  background: var(--color-bg, #0f0f1a);
+  color: var(--color-text, #e0e0e0);
+  font-size: 0.82rem;
+}
+
+.msmceditor-panel-content .form-control:focus {
+  outline: none;
+  border-color: var(--color-primary, #7c3aed);
+}
+
+.msmceditor-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.msmceditor-hint {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary, #aaa);
+  font-style: italic;
+}
+
+/* Coord row for replace */
+.msmceditor-coord-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.msmceditor-coord-row input {
+  width: 100%;
+}
+
+/* Player list */
+.msmceditor-player-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.msmceditor-player-list li {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border, rgba(204,156,223,0.15));
+}
+
+.msmceditor-player-list li a {
+  color: var(--color-primary, #7c3aed);
+  text-decoration: none;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+
+.msmceditor-player-list li a:hover {
+  text-decoration: underline;
+}
+
+/* Tasks */
+.msmceditor-task {
+  background: var(--color-bg, #0f0f1a);
+  border: 1px solid var(--color-border, rgba(204,156,223,0.25));
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.msmceditor-task-label {
+  font-size: 0.82rem;
+  margin-bottom: 6px;
+}
+
+.msmceditor-task .progress-bar {
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.msmceditor-task .progress-fill {
+  height: 100%;
+  background: var(--color-primary, #7c3aed);
+  transition: width 0.3s ease;
+}
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .msmceditor-container {
+    grid-template-columns: 200px 1fr 280px;
+  }
+}
+
+@media (max-width: 800px) {
+  .msmceditor-container {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+  }
+  .msmceditor-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--color-border, rgba(204,156,223,0.25));
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow-y: visible;
+    max-height: 140px;
+  }
+  .msmceditor-panel {
+    border-left: none;
+    border-top: 1px solid var(--color-border, rgba(204,156,223,0.25));
+    max-height: 300px;
+  }
 }

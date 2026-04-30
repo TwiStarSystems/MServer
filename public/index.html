@@ -8,6 +8,7 @@
   <meta http-equiv="Expires" content="0">
   <title>MServerController - Minecraft Server Manager</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 </head>
 <body>
   <div class="app-container">
@@ -115,7 +116,7 @@
           <button class="tab-button" data-tab="players">Players</button>
           <button class="tab-button" data-tab="backups">Backups</button>
           <button class="tab-button" data-tab="tasks">Tasks</button>
-          <button class="tab-button" data-tab="worldmap" id="worldmap-tab-btn">World Map</button>
+          <button class="tab-button" data-tab="msmceditor" id="msmceditor-tab-btn">World Editor</button>
         </nav>
 
         <!-- Terminal Tab -->
@@ -604,76 +605,157 @@
           </div>
         </div>
 
-        <!-- World Map Tab -->
-        <div id="worldmap-tab" class="tab-content">
-          <div class="worldmap-container">
-            <div class="worldmap-header">
-              <h3>🗺️ World Map</h3>
-              <div class="worldmap-actions">
-                <button id="bluemap-render-btn" class="btn btn-success" onclick="startBlueMapRender()">Render Map</button>
-                <button id="bluemap-render-full-btn" class="btn btn-primary" onclick="startBlueMapRender(true)">Full Re-render</button>
-                <button id="bluemap-refresh-btn" class="btn" onclick="loadBlueMapStatus()">Refresh Status</button>
-              </div>
-            </div>
-            <p class="worldmap-info">Interactive 3D world map powered by <a href="https://bluemap.bluecolored.de/" target="_blank" rel="noopener">BlueMap</a>. Renders your Minecraft world into a browsable 3D map with surface models.</p>
-
-            <!-- Setup Required State -->
-            <div id="bluemap-setup" class="bluemap-setup" style="display: none;">
-              <div class="bluemap-setup-card">
-                <div class="bluemap-setup-icon">🗺️</div>
-                <h4>BlueMap Not Installed</h4>
-                <p>BlueMap CLI needs to be downloaded and configured before you can render maps.</p>
-                <div class="bluemap-setup-actions">
-                  <button class="btn btn-success" onclick="setupBlueMap()">Download &amp; Install</button>
-                  <span class="bluemap-setup-or">or</span>
-                  <label for="bluemap-jar-upload" class="btn btn-primary">Upload JAR from Local</label>
-                  <input type="file" id="bluemap-jar-upload" style="display: none;" accept=".jar" onchange="uploadBlueMapJar(this)">
+        <!-- World Editor (MSMCeditor) Tab -->
+        <div id="msmceditor-tab" class="tab-content">
+          <div class="msmceditor-container">
+            <!-- Left Sidebar -->
+            <div class="msmceditor-sidebar">
+              <div class="msmceditor-session-controls">
+                <h4>World Editor</h4>
+                <div class="form-group">
+                  <label for="msmceditor-world-select">World</label>
+                  <select id="msmceditor-world-select" class="form-control">
+                    <option value="">— Select World —</option>
+                  </select>
                 </div>
-                <small class="bluemap-setup-hint">Downloads the latest CLI JAR from <a href="https://github.com/BlueMap-Minecraft/BlueMap/releases" target="_blank" rel="noopener">GitHub Releases</a></small>
-              </div>
-            </div>
-
-            <!-- Status / Render Progress -->
-            <div id="bluemap-status" class="bluemap-status" style="display: none;">
-              <div class="bluemap-status-card">
-                <div class="bluemap-status-row">
-                  <span class="bluemap-status-label">Status:</span>
-                  <span id="bluemap-status-text" class="bluemap-status-value">Checking...</span>
-                </div>
-                <div class="bluemap-status-row">
-                  <span class="bluemap-status-label">Last Render:</span>
-                  <span id="bluemap-last-render" class="bluemap-status-value">Never</span>
-                </div>
-                <div class="bluemap-status-row">
-                  <span class="bluemap-status-label">BlueMap Version:</span>
-                  <span id="bluemap-version" class="bluemap-status-value">-</span>
-                  <button class="btn btn-small" onclick="updateBlueMap()" title="Download latest version from GitHub">Update</button>
-                </div>
-                <div id="bluemap-render-progress" class="bluemap-render-progress" style="display: none;">
-                  <div class="bluemap-status-row">
-                    <span class="bluemap-status-label">Rendering:</span>
-                    <span id="bluemap-render-status" class="bluemap-status-value">In Progress...</span>
-                  </div>
-                  <div class="progress-bar">
-                    <div id="bluemap-progress-fill" class="progress-fill" style="width: 0%;"></div>
+                <div class="form-group">
+                  <label>Dimension</label>
+                  <div class="msmceditor-dim-tabs">
+                    <button class="btn btn-small msmceditor-dim-btn active" data-dim="minecraft:overworld">Overworld</button>
+                    <button class="btn btn-small msmceditor-dim-btn" data-dim="minecraft:the_nether">Nether</button>
+                    <button class="btn btn-small msmceditor-dim-btn" data-dim="minecraft:the_end">End</button>
                   </div>
                 </div>
+                <button id="msmceditor-open-btn" class="btn btn-success" onclick="msmcOpenSession()" style="width:100%">Open World</button>
+                <button id="msmceditor-close-btn" class="btn btn-danger" onclick="msmcCloseSession()" style="width:100%; display:none;">Close Session</button>
+                <div id="msmceditor-session-status" class="msmceditor-status-badge" style="display:none;"></div>
+              </div>
+              <div class="msmceditor-save-controls" style="display:none;">
+                <button id="msmceditor-save-btn" class="btn btn-primary" onclick="msmcSave()" style="width:100%">💾 Save Changes</button>
+              </div>
+              <div id="msmceditor-readonly-banner" class="msmceditor-readonly-banner" style="display:none;">
+                ⚠️ Read-Only — Stop the server to enable editing
               </div>
             </div>
 
-            <!-- Map Viewer (iframe) -->
-            <div id="bluemap-viewer" class="bluemap-viewer" style="display: none;">
-              <div class="bluemap-viewer-controls">
-                <button class="btn btn-small" onclick="openBlueMapFullscreen()">⛶ Fullscreen</button>
-                <a id="bluemap-external-link" href="#" target="_blank" rel="noopener" class="btn btn-small">↗ Open in New Tab</a>
-              </div>
-              <iframe id="bluemap-iframe" class="bluemap-iframe" src="" frameborder="0" allowfullscreen></iframe>
+            <!-- Center: Map Area -->
+            <div class="msmceditor-map-area">
+              <div id="msmceditor-map" class="msmceditor-map"></div>
+              <div id="msmceditor-coords" class="msmceditor-coords">X: — Z: —</div>
             </div>
 
-            <!-- No Map Data State -->
-            <div id="bluemap-empty" class="bluemap-empty" style="display: none;">
-              <p>No map data yet. Click <strong>Render Map</strong> to generate your world map.</p>
-              <p class="bluemap-hint">⚠️ The Minecraft server should be <strong>stopped</strong> during rendering for best results, though it can work while running.</p>
+            <!-- Right Panel -->
+            <div class="msmceditor-panel">
+              <div class="msmceditor-panel-tabs">
+                <button class="btn btn-small msmceditor-panel-tab active" data-panel="block">Block</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="replace">Replace</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="leveldat">Level.dat</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="players">Players</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="chunks">Chunks</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="tasks">Tasks</button>
+              </div>
+
+              <!-- Block Inspector Panel -->
+              <div id="msmceditor-panel-block" class="msmceditor-panel-content active">
+                <h5>Block Inspector</h5>
+                <p class="msmceditor-hint">Click the map to inspect a block</p>
+                <div id="msmceditor-block-info" style="display:none;">
+                  <div class="form-group">
+                    <label>Coordinates</label>
+                    <div id="msmceditor-block-coords" class="msmceditor-value"></div>
+                  </div>
+                  <div class="form-group">
+                    <label>Block ID</label>
+                    <div id="msmceditor-block-id" class="msmceditor-value"></div>
+                  </div>
+                  <div class="form-group">
+                    <label>Properties</label>
+                    <pre id="msmceditor-block-props" class="msmceditor-pre"></pre>
+                  </div>
+                  <div class="form-group">
+                    <label>Block Entity NBT</label>
+                    <pre id="msmceditor-block-nbt" class="msmceditor-pre"></pre>
+                  </div>
+                </div>
+                <div id="msmceditor-block-edit" class="msmceditor-block-edit" style="display:none;">
+                  <h5>Set Block</h5>
+                  <div class="form-group">
+                    <label>Block ID</label>
+                    <input type="text" id="msmceditor-set-block-id" class="form-control" placeholder="minecraft:stone">
+                  </div>
+                  <div class="form-group">
+                    <label>Y Level</label>
+                    <input type="number" id="msmceditor-set-block-y" class="form-control" value="64">
+                  </div>
+                  <button class="btn btn-primary" onclick="msmcSetBlock()">Set Block</button>
+                </div>
+              </div>
+
+              <!-- Replace Panel -->
+              <div id="msmceditor-panel-replace" class="msmceditor-panel-content">
+                <h5>Region Replace</h5>
+                <div class="form-group">
+                  <label>Find Block</label>
+                  <input type="text" id="msmceditor-replace-from" class="form-control" placeholder="minecraft:stone">
+                </div>
+                <div class="form-group">
+                  <label>Replace With</label>
+                  <input type="text" id="msmceditor-replace-to" class="form-control" placeholder="minecraft:cobblestone">
+                </div>
+                <div class="form-group">
+                  <label>Bounding Box</label>
+                  <div class="msmceditor-coord-grid">
+                    <input type="number" id="msmceditor-replace-x1" class="form-control" placeholder="X1">
+                    <input type="number" id="msmceditor-replace-y1" class="form-control" placeholder="Y1">
+                    <input type="number" id="msmceditor-replace-z1" class="form-control" placeholder="Z1">
+                    <input type="number" id="msmceditor-replace-x2" class="form-control" placeholder="X2">
+                    <input type="number" id="msmceditor-replace-y2" class="form-control" placeholder="Y2">
+                    <input type="number" id="msmceditor-replace-z2" class="form-control" placeholder="Z2">
+                  </div>
+                </div>
+                <label class="msmceditor-checkbox"><input type="checkbox" id="msmceditor-replace-dryrun"> Dry Run (preview only)</label>
+                <button class="btn btn-primary" onclick="msmcReplace()" style="width:100%; margin-top:8px;">Run Replace</button>
+                <div id="msmceditor-replace-result" class="msmceditor-result" style="display:none;"></div>
+              </div>
+
+              <!-- Level.dat Panel -->
+              <div id="msmceditor-panel-leveldat" class="msmceditor-panel-content">
+                <h5>Level.dat Editor</h5>
+                <div id="msmceditor-leveldat-form"></div>
+                <button class="btn btn-primary" onclick="msmcSaveLevelDat()" style="width:100%; margin-top:8px;">Save Level.dat</button>
+              </div>
+
+              <!-- Players Panel -->
+              <div id="msmceditor-panel-players" class="msmceditor-panel-content">
+                <h5>Player Data</h5>
+                <div id="msmceditor-players-list"></div>
+                <div id="msmceditor-player-detail" style="display:none;"></div>
+              </div>
+
+              <!-- Chunks Panel -->
+              <div id="msmceditor-panel-chunks" class="msmceditor-panel-content">
+                <h5>Chunk Operations</h5>
+                <p class="msmceditor-hint">Draw a rectangle on the map to select chunks, or enter coordinates.</p>
+                <div class="form-group">
+                  <label>Chunk Range</label>
+                  <div class="msmceditor-coord-grid msmceditor-coord-grid-2col">
+                    <input type="number" id="msmceditor-chunk-x1" class="form-control" placeholder="CX1">
+                    <input type="number" id="msmceditor-chunk-z1" class="form-control" placeholder="CZ1">
+                    <input type="number" id="msmceditor-chunk-x2" class="form-control" placeholder="CX2">
+                    <input type="number" id="msmceditor-chunk-z2" class="form-control" placeholder="CZ2">
+                  </div>
+                </div>
+                <button class="btn btn-danger" onclick="msmcDeleteChunks()" style="width:100%; margin-top:4px;">Delete Selected Chunks</button>
+                <button class="btn btn-warning" onclick="msmcPruneChunks()" style="width:100%; margin-top:4px;">Prune (Keep Only Selected)</button>
+              </div>
+
+              <!-- Tasks Panel -->
+              <div id="msmceditor-panel-tasks" class="msmceditor-panel-content">
+                <h5>Background Tasks</h5>
+                <div id="msmceditor-tasks-list">
+                  <p class="msmceditor-hint">No active tasks</p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1856,7 +1938,9 @@
   </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="vendor/leaflet/leaflet.js"></script>
   <script src="utils.js"></script>
+  <script src="msmceditor.js"></script>
   <script src="app.js"></script>
 
   <!-- Toast notification container -->

@@ -29,6 +29,7 @@ import qrcode
 import argparse
 import sys
 import smtplib
+import msmceditor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from enum import Enum
@@ -9968,363 +9969,323 @@ def delete_downloaded_jar_legacy():
     except Exception as e:
         return jsonify({'error': f'Failed to delete: {str(e)}'}), 500
 
+# ==================== MSMCeditor (World Editor) API ====================
 
-# ==================== BlueMap (World Map) API ====================
-
-BLUEMAP_DIR = TOOLS_DIR / 'bluemap'
-BLUEMAP_JAR = BLUEMAP_DIR / 'bluemap-cli.jar'
-BLUEMAP_GITHUB_API = 'https://api.github.com/repos/BlueMap-Minecraft/BlueMap/releases/latest'
-
-# Track active render processes per server
-_bluemap_renders = {}  # server_id -> { process, started, status }
-
-
-def _get_bluemap_config_dir(server_id):
-    """Get the BlueMap config directory for a server"""
+@app.route('/api/servers/<server_id>/msmceditor/worlds', methods=['GET'])
+@server_access_required
+def msmceditor_worlds(server_id):
+    """List editable worlds for a server and return active session info."""
+    if not msmceditor.AMULET_AVAILABLE:
+        return jsonify({'error': 'World Editor dependencies not installed (amulet-core)'}), 503
     server_path = server_manager.get_server_path(server_id)
-    return server_path / 'bluemap-config'
-
-
-def _get_bluemap_web_dir(server_id):
-    """Get the BlueMap web output directory for a server"""
-    server_path = server_manager.get_server_path(server_id)
-    return server_path / 'bluemap' / 'web'
-
-
-def _bluemap_is_installed():
-    """Check if the BlueMap CLI JAR exists"""
-    return BLUEMAP_JAR.exists()
-
-
-def _get_bluemap_version():
-    """Get BlueMap version from the JAR filename pattern or by running --version"""
-    if not _bluemap_is_installed():
-        return None
-    try:
-        result = subprocess.run(
-            ['java', '-jar', str(BLUEMAP_JAR), '--version'],
-            capture_output=True, text=True, timeout=15
-        )
-        output = (result.stdout + result.stderr).strip()
-        # BlueMap prints version info on stdout
-        for line in output.splitlines():
-            line = line.strip()
-            if line and any(c.isdigit() for c in line):
-                return line
-        return 'Installed'
-    except Exception:
-        return 'Installed'
-
-
-def _bluemap_has_map_data(server_id):
-    """Check if any rendered map data exists for this server"""
-    web_dir = _get_bluemap_web_dir(server_id)
-    maps_dir = web_dir / 'maps'
-    if not maps_dir.exists():
-        return False
-    # Check if any map subdirectory has hires data
-    for item in maps_dir.iterdir():
-        if item.is_dir():
-            return True
-    return False
-
-
-def _bluemap_last_render_time(server_id):
-    """Get the last render timestamp"""
-    config_dir = _get_bluemap_config_dir(server_id)
-    marker_file = config_dir / '.last_render'
-    if marker_file.exists():
-        try:
-            ts = marker_file.read_text().strip()
-            dt = datetime.fromisoformat(ts)
-            return dt.strftime('%Y-%m-%d %H:%M:%S')
-        except Exception:
-            pass
-    return None
-
-
-def _bluemap_generate_configs(server_id):
-    """Run BlueMap once with -c to generate default configs, then patch world paths"""
-    config_dir = _get_bluemap_config_dir(server_id)
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    server_path = server_manager.get_server_path(server_id)
-
-    # Generate default configs
-    subprocess.run(
-        ['java', '-jar', str(BLUEMAP_JAR), '-c', str(config_dir)],
-        capture_output=True, text=True, timeout=30,
-        cwd=str(server_path)
-    )
-
-    # Accept the download in core.conf
-    core_conf = config_dir / 'core.conf'
-    if core_conf.exists():
-        content = core_conf.read_text()
-        content = content.replace('accept-download: false', 'accept-download: true')
-        core_conf.write_text(content)
-
-    # Set webserver to disabled (we serve via Flask)
-    webserver_conf = config_dir / 'webserver.conf'
-    if webserver_conf.exists():
-        content = webserver_conf.read_text()
-        content = content.replace('enabled: true', 'enabled: false')
-        webserver_conf.write_text(content)
-
-    # Point webapp.conf webroot to our output dir
-    webapp_conf = config_dir / 'webapp.conf'
-    web_dir = _get_bluemap_web_dir(server_id)
-    if webapp_conf.exists():
-        content = webapp_conf.read_text()
-        content = re.sub(
-            r'webroot\s*:\s*"[^"]*"',
-            f'webroot: "{str(web_dir)}"',
-            content
-        )
-        webapp_conf.write_text(content)
-
-    # Point file storage root to web/maps
-    file_conf = config_dir / 'storages' / 'file.conf'
-    if file_conf.exists():
-        content = file_conf.read_text()
-        content = re.sub(
-            r'root\s*:\s*"[^"]*"',
-            f'root: "{str(web_dir / "maps")}"',
-            content
-        )
-        file_conf.write_text(content)
-
-    # Patch map configs to point to the correct world directory
-    maps_conf_dir = config_dir / 'maps'
-    if maps_conf_dir.exists():
-        world_dir = server_path / 'world'
-        for map_conf in maps_conf_dir.glob('*.conf'):
-            content = map_conf.read_text()
-            content = re.sub(
-                r'world\s*:\s*"[^"]*"',
-                f'world: "{str(world_dir)}"',
-                content
-            )
-            map_conf.write_text(content)
-
-
-def _run_bluemap_render(server_id, force=False):
-    """Run BlueMap render in background thread"""
-    config_dir = _get_bluemap_config_dir(server_id)
-    server_path = server_manager.get_server_path(server_id)
-
-    cmd = ['java', '-jar', str(BLUEMAP_JAR), '-c', str(config_dir), '-r', '-g']
-    if force:
-        cmd.append('-f')
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            cwd=str(server_path)
-        )
-        _bluemap_renders[server_id] = {
-            'process': process,
-            'started': datetime.now().isoformat(),
-            'status': 'Rendering...',
-            'progress': 0
+    worlds = msmceditor.discover_worlds(server_path)
+    session_info = None
+    existing = msmceditor.session_manager.get(server_id)
+    if existing:
+        session_info = {
+            'platform': existing.platform,
+            'dimensions': existing.dimensions,
+            'readOnly': _msmceditor_is_readonly(server_id),
         }
-
-        # Read output for progress
-        for line in iter(process.stdout.readline, ''):
-            line = line.strip()
-            if not line:
-                continue
-            # Try to parse progress from BlueMap output
-            _bluemap_renders[server_id]['status'] = line[-120:] if len(line) > 120 else line
-            # Look for percentage patterns
-            pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', line)
-            if pct_match:
-                _bluemap_renders[server_id]['progress'] = min(float(pct_match.group(1)), 100)
-
-        process.wait()
-
-        # Mark completion
-        marker_file = config_dir / '.last_render'
-        marker_file.write_text(datetime.now().isoformat())
-
-    except Exception as e:
-        print(f'[BlueMap] Render error for {server_id}: {e}')
-    finally:
-        _bluemap_renders.pop(server_id, None)
+    return jsonify({'worlds': worlds, 'session': session_info})
 
 
-@app.route('/api/servers/<server_id>/bluemap/status', methods=['GET'])
+@app.route('/api/servers/<server_id>/msmceditor/open', methods=['POST'])
 @server_access_required
-@limiter.exempt
-def bluemap_status(server_id):
-    """Get BlueMap status for a server"""
-    installed = _bluemap_is_installed()
-    rendering = server_id in _bluemap_renders
-    render_info = _bluemap_renders.get(server_id, {})
-
-    return jsonify({
-        'installed': installed,
-        'version': _get_bluemap_version() if installed else None,
-        'hasMapData': _bluemap_has_map_data(server_id) if installed else False,
-        'lastRender': _bluemap_last_render_time(server_id),
-        'rendering': rendering,
-        'renderStatus': render_info.get('status', ''),
-        'renderProgress': render_info.get('progress', 0)
-    })
-
-
-def _download_bluemap_jar():
-    """Download the latest BlueMap CLI JAR from GitHub releases.
-    Uses the GitHub API to find the correct asset URL (name varies by version).
-    """
-    # Query GitHub API for latest release
-    api_resp = requests.get(BLUEMAP_GITHUB_API, timeout=30, headers={'Accept': 'application/vnd.github.v3+json'})
-    api_resp.raise_for_status()
-    release = api_resp.json()
-
-    # Find the CLI asset (pattern: bluemap-*-cli.jar)
-    cli_asset_url = None
-    for asset in release.get('assets', []):
-        name = asset.get('name', '')
-        if name.endswith('-cli.jar'):
-            cli_asset_url = asset['browser_download_url']
-            break
-
-    if not cli_asset_url:
-        raise RuntimeError(f"No CLI JAR found in release {release.get('tag_name', 'unknown')}")
-
-    # Download the JAR
-    resp = requests.get(cli_asset_url, stream=True, timeout=120)
-    resp.raise_for_status()
-    BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
-    with open(BLUEMAP_JAR, 'wb') as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
-
-    return release.get('tag_name', 'latest')
-
-
-@app.route('/api/servers/<server_id>/bluemap/setup', methods=['POST'])
-@server_access_required
-def bluemap_setup(server_id):
-    """Download BlueMap CLI JAR (or use existing) and generate configs"""
-    BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not BLUEMAP_JAR.exists():
-        try:
-            tag = _download_bluemap_jar()
-            print(f'[BlueMap] Downloaded {tag}')
-        except Exception as e:
-            return jsonify({'error': f'Failed to download BlueMap: {str(e)}'}), 500
-
-    # Generate configs for this server
+def msmceditor_open(server_id):
+    """Open a world session."""
+    if not msmceditor.AMULET_AVAILABLE:
+        return jsonify({'error': 'World Editor dependencies not installed'}), 503
+    data = request.get_json(force=True)
+    world_path = data.get('worldPath')
+    if not world_path:
+        return jsonify({'error': 'worldPath required'}), 400
+    # Security: ensure path is within the server directory
+    server_path = server_manager.get_server_path(server_id)
     try:
-        _bluemap_generate_configs(server_id)
-    except Exception as e:
-        return jsonify({'error': f'Failed to generate configs: {str(e)}'}), 500
-
-    return jsonify({'success': True, 'message': 'BlueMap installed and configured'})
-
-
-@app.route('/api/servers/<server_id>/bluemap/update', methods=['POST'])
-@server_access_required
-def bluemap_update(server_id):
-    """Force re-download the latest BlueMap CLI JAR"""
-    # Remove old JAR
-    if BLUEMAP_JAR.exists():
-        BLUEMAP_JAR.unlink()
-
+        resolved = Path(world_path).resolve()
+        if not str(resolved).startswith(str(Path(server_path).resolve())):
+            return jsonify({'error': 'Invalid world path'}), 403
+    except Exception:
+        return jsonify({'error': 'Invalid path'}), 400
     try:
-        tag = _download_bluemap_jar()
+        sess = msmceditor.session_manager.open(server_id, world_path)
+        return jsonify({
+            'platform': sess.platform,
+            'dimensions': sess.dimensions,
+            'readOnly': _msmceditor_is_readonly(server_id),
+        })
     except Exception as e:
-        return jsonify({'error': f'Failed to download BlueMap: {str(e)}'}), 500
-
-    return jsonify({'success': True, 'message': f'BlueMap updated to {tag})'})
+        return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/servers/<server_id>/bluemap/upload', methods=['POST'])
+@app.route('/api/servers/<server_id>/msmceditor/close', methods=['POST'])
 @server_access_required
-def bluemap_upload(server_id):
-    """Upload a BlueMap CLI JAR from local storage"""
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-
-    file = request.files['file']
-    if file.filename == '' or not file.filename.lower().endswith('.jar'):
-        return jsonify({'error': 'Please upload a .jar file'}), 400
-
-    BLUEMAP_DIR.mkdir(parents=True, exist_ok=True)
-    file.save(str(BLUEMAP_JAR))
-
-    # Generate configs for this server
-    try:
-        _bluemap_generate_configs(server_id)
-    except Exception as e:
-        return jsonify({'error': f'Failed to generate configs: {str(e)}'}), 500
-
-    return jsonify({'success': True, 'message': 'BlueMap JAR uploaded and configured'})
+def msmceditor_close(server_id):
+    """Close the world session."""
+    msmceditor.session_manager.close(server_id)
+    return jsonify({'success': True})
 
 
-@app.route('/api/servers/<server_id>/bluemap/render', methods=['POST'])
+@app.route('/api/servers/<server_id>/msmceditor/tile/<dim>/<int:cz>/<int:cx>.png', methods=['GET'])
 @server_access_required
-def bluemap_render(server_id):
-    """Start a BlueMap render for this server"""
-    if not _bluemap_is_installed():
-        return jsonify({'error': 'BlueMap is not installed. Run setup first.'}), 400
+def msmceditor_tile(server_id, dim, cz, cx):
+    """Serve a 16x16 PNG chunk tile."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return '', 404
+    dimension = dim.replace('_', ':')
+    # Check cache
+    cached = msmceditor.get_cached_tile(sess.world_path, dimension, cx, cz)
+    if cached:
+        return send_file(io.BytesIO(cached), mimetype='image/png')
+    # Render
+    palette = msmceditor.get_palette(BASE_DIR)
+    png = msmceditor.render_chunk_tile(sess.level, cx, cz, dimension, palette)
+    if not png:
+        return '', 204
+    msmceditor.save_cached_tile(sess.world_path, dimension, cx, cz, png)
+    return send_file(io.BytesIO(png), mimetype='image/png')
 
-    if server_id in _bluemap_renders:
-        return jsonify({'error': 'A render is already in progress for this server'}), 409
 
-    # Ensure configs exist
-    config_dir = _get_bluemap_config_dir(server_id)
-    if not config_dir.exists():
-        _bluemap_generate_configs(server_id)
+@app.route('/api/servers/<server_id>/msmceditor/block', methods=['GET'])
+@server_access_required
+def msmceditor_get_block(server_id):
+    """Inspect a block at coordinates."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    x = int(request.args.get('x', 0))
+    y = int(request.args.get('y', 64))
+    z = int(request.args.get('z', 0))
+    dim = request.args.get('dim', 'minecraft:overworld')
+    info = msmceditor.get_block_info(sess, x, y, z, dim)
+    return jsonify(info)
 
-    data = request.get_json(silent=True) or {}
-    force = data.get('force', False)
 
-    # Start render in background thread
+@app.route('/api/servers/<server_id>/msmceditor/block', methods=['POST'])
+@server_access_required
+def msmceditor_set_block(server_id):
+    """Set a block at coordinates."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    data = request.get_json(force=True)
+    dim = data.get('dim', 'minecraft:overworld')
+    x, y, z = int(data['x']), int(data['y']), int(data['z'])
+    block = data.get('block', '')
+    result = msmceditor.set_block(sess, x, y, z, dim, block)
+    return jsonify(result)
+
+
+@app.route('/api/servers/<server_id>/msmceditor/replace', methods=['POST'])
+@server_access_required
+def msmceditor_replace(server_id):
+    """Start a block replace task."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    # Only 1 task at a time per server
+    if msmceditor.get_active_tasks(server_id):
+        return jsonify({'error': 'A task is already running'}), 409
+    data = request.get_json(force=True)
+    dim = data.get('dim', 'minecraft:overworld')
+    box = data['box']
+    from_block = data['from']
+    to_block = data['to']
+    dry_run = data.get('dryRun', False)
+    task_id = str(uuid.uuid4())
+    task = msmceditor.EditorTask(task_id, server_id, f'Replace {from_block} → {to_block}')
+    msmceditor.register_task(task)
+
+    def emit_fn(event, payload):
+        socketio.emit(event, payload, namespace='/')
+
     thread = threading.Thread(
-        target=_run_bluemap_render,
-        args=(server_id,),
-        kwargs={'force': force},
+        target=msmceditor.run_replace,
+        args=(sess, dim, box, from_block, to_block, dry_run, task, emit_fn),
         daemon=True
     )
     thread.start()
+    return jsonify({'taskId': task_id})
 
-    return jsonify({'success': True, 'message': 'Render started'})
 
-
-@app.route('/api/servers/<server_id>/bluemap/viewer/', defaults={'path': 'index.html'}, methods=['GET'])
-@app.route('/api/servers/<server_id>/bluemap/viewer/<path:path>', methods=['GET'])
+@app.route('/api/servers/<server_id>/msmceditor/levelinfo', methods=['GET'])
 @server_access_required
-@limiter.exempt
-def bluemap_viewer(server_id, path):
-    """Serve BlueMap web viewer files"""
-    web_dir = _get_bluemap_web_dir(server_id)
+def msmceditor_get_levelinfo(server_id):
+    """Read level.dat info."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    info = msmceditor.read_level_info(sess)
+    if info is None:
+        return jsonify({'error': 'Could not read level.dat'}), 500
+    return jsonify(info)
 
-    if not web_dir.exists():
-        return jsonify({'error': 'No map data available'}), 404
 
-    # Security: prevent directory traversal
-    if not is_safe_path(str(web_dir), str(web_dir / path)):
-        return jsonify({'error': 'Invalid path'}), 403
+@app.route('/api/servers/<server_id>/msmceditor/levelinfo', methods=['POST'])
+@server_access_required
+def msmceditor_set_levelinfo(server_id):
+    """Write level.dat updates."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    updates = request.get_json(force=True)
+    ok = msmceditor.write_level_info(sess, updates)
+    return jsonify({'success': ok})
 
-    full_path = web_dir / path
-    if full_path.is_file():
-        return send_from_directory(str(web_dir), path)
 
-    # Try with .gz extension (BlueMap stores tiles gzipped)
-    gz_path = web_dir / (path + '.gz')
-    if gz_path.is_file():
-        response = make_response(send_from_directory(str(web_dir), path + '.gz'))
-        response.headers['Content-Encoding'] = 'gzip'
-        return response
+@app.route('/api/servers/<server_id>/msmceditor/players', methods=['GET'])
+@server_access_required
+def msmceditor_players(server_id):
+    """List players in the world."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    players = msmceditor.list_players(sess)
+    return jsonify({'players': players})
 
-    return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/servers/<server_id>/msmceditor/player/<player_uuid>', methods=['GET'])
+@server_access_required
+def msmceditor_get_player(server_id, player_uuid):
+    """Read a player's data."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    info = msmceditor.read_player(sess, player_uuid)
+    if info is None:
+        return jsonify({'error': 'Player not found'}), 404
+    return jsonify(info)
+
+
+@app.route('/api/servers/<server_id>/msmceditor/player/<player_uuid>', methods=['POST'])
+@server_access_required
+def msmceditor_set_player(server_id, player_uuid):
+    """Update a player's data."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    updates = request.get_json(force=True)
+    ok = msmceditor.write_player(sess, player_uuid, updates)
+    return jsonify({'success': ok})
+
+
+@app.route('/api/servers/<server_id>/msmceditor/chunk/delete', methods=['POST'])
+@server_access_required
+def msmceditor_chunk_delete(server_id):
+    """Delete specified chunks."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    if msmceditor.get_active_tasks(server_id):
+        return jsonify({'error': 'A task is already running'}), 409
+    data = request.get_json(force=True)
+    dim = data.get('dim', 'minecraft:overworld')
+    coords = data.get('coords', [])
+    task_id = str(uuid.uuid4())
+    task = msmceditor.EditorTask(task_id, server_id, f'Delete {len(coords)} chunks')
+    msmceditor.register_task(task)
+
+    def emit_fn(event, payload):
+        socketio.emit(event, payload, namespace='/')
+
+    thread = threading.Thread(
+        target=msmceditor.delete_chunks,
+        args=(sess, dim, coords, task, emit_fn),
+        daemon=True
+    )
+    thread.start()
+    return jsonify({'taskId': task_id})
+
+
+@app.route('/api/servers/<server_id>/msmceditor/chunk/prune', methods=['POST'])
+@server_access_required
+def msmceditor_chunk_prune(server_id):
+    """Prune chunks outside a keep box."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    if msmceditor.get_active_tasks(server_id):
+        return jsonify({'error': 'A task is already running'}), 409
+    data = request.get_json(force=True)
+    dim = data.get('dim', 'minecraft:overworld')
+    keep_box = data.get('keepBox', {})
+    task_id = str(uuid.uuid4())
+    task = msmceditor.EditorTask(task_id, server_id, f'Prune chunks')
+    msmceditor.register_task(task)
+
+    def emit_fn(event, payload):
+        socketio.emit(event, payload, namespace='/')
+
+    thread = threading.Thread(
+        target=msmceditor.prune_chunks,
+        args=(sess, dim, keep_box, task, emit_fn),
+        daemon=True
+    )
+    thread.start()
+    return jsonify({'taskId': task_id})
+
+
+@app.route('/api/servers/<server_id>/msmceditor/save', methods=['POST'])
+@server_access_required
+def msmceditor_save(server_id):
+    """Save the world with auto-backup."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    backup_dir = BACKUPS_DIR / server_id
+    success, msg = msmceditor.save_world(sess, backup_dir)
+    if success:
+        return jsonify({'success': True, 'message': msg})
+    return jsonify({'error': msg}), 500
+
+
+@app.route('/api/servers/<server_id>/msmceditor/cancel/<task_id>', methods=['POST'])
+@server_access_required
+def msmceditor_cancel(server_id, task_id):
+    """Cancel an active task."""
+    task = msmceditor.get_task(task_id)
+    if not task or task.server_id != server_id:
+        return jsonify({'error': 'Task not found'}), 404
+    task.cancel()
+    return jsonify({'success': True})
+
+
+@app.route('/api/msmceditor/build-palette', methods=['POST'])
+@admin_required
+def msmceditor_build_palette():
+    """Build a color palette from a Minecraft client JAR."""
+    data = request.get_json(force=True)
+    jar_path = data.get('jarPath')
+    if not jar_path or not Path(jar_path).exists():
+        return jsonify({'error': 'Valid jarPath required'}), 400
+    output_path = BASE_DIR / 'configs' / 'msmceditor' / 'palette.json'
+    try:
+        palette = msmceditor.build_palette_from_jar(jar_path, output_path)
+        return jsonify({'success': True, 'count': len(palette)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def _msmceditor_is_readonly(server_id):
+    """Server is read-only if the MC server process is running."""
+    instance = server_manager.servers.get(server_id)
+    return instance is not None and instance.is_running()
 
 
 # ==================== Tools API ====================
@@ -10510,12 +10471,7 @@ def run_tool(tool_name):
 def add_security_headers(response):
     """Add security headers to all responses for production hardening"""
     # Prevent clickjacking attacks.
-    # BlueMap viewer is served same-origin inside an iframe, so allow SAMEORIGIN for those paths.
-    bluemap_viewer_path = '/bluemap/viewer'
-    if bluemap_viewer_path in request.path:
-        response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    else:
-        response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Frame-Options'] = 'DENY'
     
     # Prevent MIME-sniffing vulnerabilities
     response.headers['X-Content-Type-Options'] = 'nosniff'
