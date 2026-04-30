@@ -3827,7 +3827,7 @@ class ServerManager:
     def get_all_server_ports(self, exclude_server_id=None):
         """Get all server ports currently in use (excluding a specific server if specified)"""
         ports = {}
-        for server_id in self.config.get('servers', {}).keys():
+        for server_id in self.get_all_server_ids():
             if exclude_server_id and server_id == exclude_server_id:
                 continue
             port = self.get_server_port(server_id)
