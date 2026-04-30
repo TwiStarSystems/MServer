@@ -41,10 +41,14 @@ psutil>=5.9.0
 # Encryption for secure Master-Slave communication
 cryptography>=41.0.0
 
-# World Editor (MSMCeditor) - Minecraft world I/O and tile rendering
-amulet-core>=1.9.0
-amulet-nbt>=2.0.0
+# World Editor (MSMCeditor) — pure-Python NBT + Anvil region I/O.
+# No amulet/cmake needed. Pillow is used for chunk thumbnails and JAR palette extraction.
 Pillow>=10.0.0
+numpy>=1.24.0
+# Optional: only needed for chunk LZ4 compression (rare; MC 1.20.5+ servers can opt-in)
+# lz4>=4.0.0
+# Optional: Bedrock world LevelDB support (requires libleveldb-dev system package)
+# plyvel>=1.5.0
 
 # Optional: S3 external backup storage support
 # Uncomment or install separately if you want to use S3/S3-compatible external backup destinations:

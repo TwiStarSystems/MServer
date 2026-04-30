@@ -8,7 +8,6 @@
   <meta http-equiv="Expires" content="0">
   <title>MServerController - Minecraft Server Manager</title>
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 </head>
 <body>
   <div class="app-container">
@@ -632,16 +631,23 @@
               </div>
               <div class="msmceditor-save-controls" style="display:none;">
                 <button id="msmceditor-save-btn" class="btn btn-primary" onclick="msmcSave()" style="width:100%">💾 Save Changes</button>
+                <div class="msmceditor-undo-row">
+                  <button id="msmceditor-undo-btn" class="btn btn-small" onclick="msmcUndo()" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
+                  <button id="msmceditor-redo-btn" class="btn btn-small" onclick="msmcRedo()" disabled title="Redo (Ctrl+Y)">↷ Redo</button>
+                </div>
               </div>
               <div id="msmceditor-readonly-banner" class="msmceditor-readonly-banner" style="display:none;">
                 ⚠️ Read-Only — Stop the server to enable editing
               </div>
             </div>
 
-            <!-- Center: Map Area -->
+            <!-- Center: 3D Viewer -->
             <div class="msmceditor-map-area">
-              <div id="msmceditor-map" class="msmceditor-map"></div>
-              <div id="msmceditor-coords" class="msmceditor-coords">X: — Z: —</div>
+              <canvas id="msmceditor-canvas" class="msmceditor-canvas"></canvas>
+              <div id="msmceditor-coords" class="msmceditor-coords">X: — Y: — Z: —</div>
+              <div id="msmceditor-viewer-help" class="msmceditor-viewer-help">
+                <strong>Controls:</strong> WASD/Arrows move • Mouse drag to look • Scroll to zoom • Click to inspect
+              </div>
             </div>
 
             <!-- Right Panel -->
@@ -649,10 +655,12 @@
               <div class="msmceditor-panel-tabs">
                 <button class="btn btn-small msmceditor-panel-tab active" data-panel="block">Block</button>
                 <button class="btn btn-small msmceditor-panel-tab" data-panel="replace">Replace</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="fill">Fill</button>
                 <button class="btn btn-small msmceditor-panel-tab" data-panel="leveldat">Level.dat</button>
                 <button class="btn btn-small msmceditor-panel-tab" data-panel="players">Players</button>
                 <button class="btn btn-small msmceditor-panel-tab" data-panel="chunks">Chunks</button>
                 <button class="btn btn-small msmceditor-panel-tab" data-panel="tasks">Tasks</button>
+                <button class="btn btn-small msmceditor-panel-tab" data-panel="settings">⚙</button>
               </div>
 
               <!-- Block Inspector Panel -->
@@ -755,6 +763,61 @@
                 <div id="msmceditor-tasks-list">
                   <p class="msmceditor-hint">No active tasks</p>
                 </div>
+              </div>
+
+              <!-- Fill Panel -->
+              <div id="msmceditor-panel-fill" class="msmceditor-panel-content">
+                <h5>Fill Region</h5>
+                <div class="form-group">
+                  <label>Block</label>
+                  <input type="text" id="msmceditor-fill-block" class="form-control" placeholder="minecraft:stone">
+                </div>
+                <div class="form-group">
+                  <label>Bounding Box</label>
+                  <div class="msmceditor-coord-grid">
+                    <input type="number" id="msmceditor-fill-x1" class="form-control" placeholder="X1">
+                    <input type="number" id="msmceditor-fill-y1" class="form-control" placeholder="Y1">
+                    <input type="number" id="msmceditor-fill-z1" class="form-control" placeholder="Z1">
+                    <input type="number" id="msmceditor-fill-x2" class="form-control" placeholder="X2">
+                    <input type="number" id="msmceditor-fill-y2" class="form-control" placeholder="Y2">
+                    <input type="number" id="msmceditor-fill-z2" class="form-control" placeholder="Z2">
+                  </div>
+                </div>
+                <button class="btn btn-primary" onclick="msmcFill()" style="width:100%">Run Fill</button>
+                <div id="msmceditor-fill-result" class="msmceditor-result" style="display:none;"></div>
+              </div>
+
+              <!-- Settings Panel -->
+              <div id="msmceditor-panel-settings" class="msmceditor-panel-content">
+                <h5>Editor Settings</h5>
+                <div class="form-group">
+                  <label for="msmceditor-setting-render-distance">
+                    Render Distance: <span id="msmceditor-setting-render-distance-val">8</span> chunks
+                  </label>
+                  <input type="range" id="msmceditor-setting-render-distance"
+                         class="form-control" min="4" max="16" value="8" step="1">
+                  <small class="msmceditor-hint">Higher = more chunks visible, slower performance</small>
+                </div>
+                <div class="form-group">
+                  <label for="msmceditor-setting-fov">
+                    Field of View: <span id="msmceditor-setting-fov-val">75</span>°
+                  </label>
+                  <input type="range" id="msmceditor-setting-fov"
+                         class="form-control" min="40" max="110" value="75" step="1">
+                </div>
+                <div class="form-group">
+                  <label class="msmceditor-checkbox">
+                    <input type="checkbox" id="msmceditor-setting-show-grid" checked>
+                    Show chunk grid
+                  </label>
+                </div>
+                <div class="form-group">
+                  <label class="msmceditor-checkbox">
+                    <input type="checkbox" id="msmceditor-setting-show-helpers" checked>
+                    Show coordinate axes
+                  </label>
+                </div>
+                <button class="btn btn-small" onclick="msmcResetSettings()" style="width:100%">Reset to Defaults</button>
               </div>
             </div>
           </div>
@@ -1938,8 +2001,16 @@
   </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
   <script src="utils.js"></script>
+  <script type="module" src="msmceditor-3d.js"></script>
   <script src="msmceditor.js"></script>
   <script src="app.js"></script>
 

@@ -516,6 +516,12 @@ do_install() {
         cp "$SCRIPT_DIR/db.py" "$INSTALL_DIR/" 2>/dev/null || true
         cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
         cp "$SCRIPT_DIR/version" "$INSTALL_DIR/" 2>/dev/null || true
+
+        # Copy MSMCeditor package (pure-Python world editor)
+        if [ -d "$SCRIPT_DIR/msmceditor" ]; then
+            cp -r "$SCRIPT_DIR/msmceditor" "$INSTALL_DIR/"
+            print_success "Copied: msmceditor/"
+        fi
         
         # Copy directories
         if [ -d "$SCRIPT_DIR/public" ]; then

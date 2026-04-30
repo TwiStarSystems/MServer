@@ -1,121 +1,191 @@
 /**
- * MSMCeditor - World Editor Frontend Controller
- * Handles Leaflet map, block inspection, editing panels, and Socket.IO events.
+ * MSMCeditor — World Editor Frontend Controller (Three.js 3D viewer).
+ *
+ * Wires the MSMCeditor tab UI to:
+ *   - the backend /api/servers/<id>/msmceditor/* endpoints
+ *   - window.MSMC3D (msmceditor-3d.js) for the 3D viewer
+ *
+ * Globals consumed: currentServerId, socket, apiRequest(), showNotification()
  */
 
 // ==================== State ====================
-let _msmcMap = null;
-let _msmcTileLayer = null;
-let _msmcSession = null;  // {platform, version, dimensions, bounds, readOnly}
+let _msmcSession = null;          // {platform, version, dimensions, readOnly}
 let _msmcDimension = 'minecraft:overworld';
 let _msmcInitialized = false;
-let _msmcTasks = {};  // taskId -> {done, total, label}
+let _msmcTasks = {};              // taskId -> {done, total, label}
+let _msmcLastInspect = null;      // {x, y, z, name, properties}
+let _msmcPalette = {};            // block name -> [r,g,b,a]
+let _msmcLoadedChunkKeys = new Set();
+let _msmcSettings = _msmcLoadSettings();
+
+// ==================== Settings ====================
+
+function _msmcDefaultSettings() {
+  return { renderDistance: 8, fov: 75, showGrid: true, showHelpers: true };
+}
+
+function _msmcLoadSettings() {
+  try {
+    const raw = localStorage.getItem('msmceditor.settings');
+    if (raw) return Object.assign(_msmcDefaultSettings(), JSON.parse(raw));
+  } catch (e) { /* ignore */ }
+  return _msmcDefaultSettings();
+}
+
+function _msmcSaveSettings() {
+  try { localStorage.setItem('msmceditor.settings', JSON.stringify(_msmcSettings)); }
+  catch (e) { /* ignore */ }
+}
+
+function msmcResetSettings() {
+  _msmcSettings = _msmcDefaultSettings();
+  _msmcSaveSettings();
+  _msmcApplySettingsToUI();
+  _msmcApplySettingsToViewer();
+}
+
+function _msmcApplySettingsToUI() {
+  const rd = document.getElementById('msmceditor-setting-render-distance');
+  const rdv = document.getElementById('msmceditor-setting-render-distance-val');
+  const fv = document.getElementById('msmceditor-setting-fov');
+  const fvv = document.getElementById('msmceditor-setting-fov-val');
+  const sg = document.getElementById('msmceditor-setting-show-grid');
+  const sh = document.getElementById('msmceditor-setting-show-helpers');
+  if (rd)  { rd.value = _msmcSettings.renderDistance; }
+  if (rdv) { rdv.textContent = _msmcSettings.renderDistance; }
+  if (fv)  { fv.value = _msmcSettings.fov; }
+  if (fvv) { fvv.textContent = _msmcSettings.fov; }
+  if (sg)  { sg.checked = !!_msmcSettings.showGrid; }
+  if (sh)  { sh.checked = !!_msmcSettings.showHelpers; }
+}
+
+function _msmcApplySettingsToViewer() {
+  if (!window.MSMC3D) return;
+  MSMC3D.setRenderDistance(_msmcSettings.renderDistance);
+  MSMC3D.setFov(_msmcSettings.fov);
+  MSMC3D.setShowGrid(_msmcSettings.showGrid);
+  MSMC3D.setShowHelpers(_msmcSettings.showHelpers);
+}
 
 // ==================== Initialization ====================
 
 function initMSMCEditor() {
   if (!currentServerId) return;
-
-  // Load available worlds
   msmcLoadWorlds();
 
-  // Set up dimension tab clicks
   document.querySelectorAll('.msmceditor-dim-btn').forEach(btn => {
-    btn.addEventListener('click', function () {
+    btn.onclick = () => {
       document.querySelectorAll('.msmceditor-dim-btn').forEach(b => b.classList.remove('active'));
-      this.classList.add('active');
-      _msmcDimension = this.dataset.dim;
-      if (_msmcSession) {
-        msmcRefreshMap();
-      }
-    });
+      btn.classList.add('active');
+      _msmcDimension = btn.dataset.dim;
+      msmcRefreshViewer();
+    };
   });
 
-  // Set up panel tab clicks
   document.querySelectorAll('.msmceditor-panel-tab').forEach(btn => {
-    btn.addEventListener('click', function () {
+    btn.onclick = () => {
       document.querySelectorAll('.msmceditor-panel-tab').forEach(b => b.classList.remove('active'));
-      this.classList.add('active');
-      document.querySelectorAll('.msmceditor-panel-content').forEach(p => p.classList.remove('active'));
-      const panel = document.getElementById('msmceditor-panel-' + this.dataset.panel);
-      if (panel) panel.classList.add('active');
-    });
+      document.querySelectorAll('.msmceditor-panel-content').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      const target = document.getElementById('msmceditor-panel-' + btn.dataset.panel);
+      if (target) target.classList.add('active');
+      if (btn.dataset.panel === 'leveldat') msmcLoadLevelDat();
+      if (btn.dataset.panel === 'players')  msmcLoadPlayers();
+    };
   });
 
-  // Initialize map if not done
-  if (!_msmcMap) {
-    _msmcInitMap();
-  }
-
-  // Register Socket.IO listeners (once)
-  if (!_msmcInitialized) {
-    _msmcInitSocketListeners();
+  // Init 3D viewer once
+  const canvas = document.getElementById('msmceditor-canvas');
+  if (canvas && window.MSMC3D && !_msmcInitialized) {
+    MSMC3D.init(canvas);
+    MSMC3D.onPick(_msmcOnBlockPicked);
     _msmcInitialized = true;
+  }
+  _msmcApplySettingsToUI();
+  _msmcApplySettingsToViewer();
+  _msmcWireSettingInputs();
+  _msmcWireKeyboard();
+  _msmcInitSocketListeners();
+}
+
+function _msmcWireSettingInputs() {
+  const rd = document.getElementById('msmceditor-setting-render-distance');
+  const fv = document.getElementById('msmceditor-setting-fov');
+  const sg = document.getElementById('msmceditor-setting-show-grid');
+  const sh = document.getElementById('msmceditor-setting-show-helpers');
+  if (rd && !rd.dataset.wired) {
+    rd.addEventListener('input', () => {
+      _msmcSettings.renderDistance = +rd.value;
+      document.getElementById('msmceditor-setting-render-distance-val').textContent = rd.value;
+    });
+    rd.addEventListener('change', () => {
+      _msmcSaveSettings();
+      _msmcApplySettingsToViewer();
+      msmcRefreshViewer();
+    });
+    rd.dataset.wired = '1';
+  }
+  if (fv && !fv.dataset.wired) {
+    fv.addEventListener('input', () => {
+      _msmcSettings.fov = +fv.value;
+      document.getElementById('msmceditor-setting-fov-val').textContent = fv.value;
+      _msmcApplySettingsToViewer();
+    });
+    fv.addEventListener('change', _msmcSaveSettings);
+    fv.dataset.wired = '1';
+  }
+  if (sg && !sg.dataset.wired) {
+    sg.addEventListener('change', () => {
+      _msmcSettings.showGrid = sg.checked;
+      _msmcSaveSettings();
+      _msmcApplySettingsToViewer();
+    });
+    sg.dataset.wired = '1';
+  }
+  if (sh && !sh.dataset.wired) {
+    sh.addEventListener('change', () => {
+      _msmcSettings.showHelpers = sh.checked;
+      _msmcSaveSettings();
+      _msmcApplySettingsToViewer();
+    });
+    sh.dataset.wired = '1';
   }
 }
 
-function _msmcInitMap() {
-  const container = document.getElementById('msmceditor-map');
-  if (!container || !window.L) return;
-
-  _msmcMap = L.map(container, {
-    crs: L.CRS.Simple,
-    minZoom: -3,
-    maxZoom: 2,
-    zoomControl: true,
-    attributionControl: false,
-  });
-
-  _msmcMap.setView([0, 0], 0);
-
-  // Coordinate display on mousemove
-  _msmcMap.on('mousemove', function (e) {
-    const coordsEl = document.getElementById('msmceditor-coords');
-    if (coordsEl) {
-      // Convert Leaflet coords to MC coords (each tile = 1 chunk = 16 blocks)
-      const mcX = Math.floor(e.latlng.lng * 16);
-      const mcZ = Math.floor(-e.latlng.lat * 16);
-      coordsEl.textContent = `X: ${mcX}  Z: ${mcZ}`;
+function _msmcWireKeyboard() {
+  if (window._msmcKeysWired) return;
+  window._msmcKeysWired = true;
+  document.addEventListener('keydown', (e) => {
+    // Only act when MSMCeditor tab is visible
+    const tab = document.getElementById('msmceditor-tab');
+    if (!tab || !tab.classList.contains('active')) return;
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+      e.preventDefault(); msmcUndo();
+    } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+      e.preventDefault(); msmcRedo();
     }
-  });
-
-  // Click to inspect block
-  _msmcMap.on('click', function (e) {
-    if (!_msmcSession) return;
-    const mcX = Math.floor(e.latlng.lng * 16);
-    const mcZ = Math.floor(-e.latlng.lat * 16);
-    const yInput = document.getElementById('msmceditor-set-block-y');
-    const y = yInput ? parseInt(yInput.value) || 64 : 64;
-    msmcInspectBlock(mcX, y, mcZ);
   });
 }
 
 function _msmcInitSocketListeners() {
-  if (typeof socket === 'undefined') return;
-
-  socket.on('msmceditor:progress', function (data) {
+  if (typeof socket === 'undefined' || !socket) return;
+  if (socket._msmcWired) return;
+  socket._msmcWired = true;
+  socket.on('msmceditor:progress', (data) => {
     _msmcTasks[data.taskId] = data;
     _msmcRenderTasks();
   });
-
-  socket.on('msmceditor:tile-invalidate', function (data) {
-    if (_msmcTileLayer && data.dim === _msmcDimension) {
-      _msmcTileLayer.redraw();
-    }
+  socket.on('msmceditor:chunks-changed', (data) => {
+    if (!_msmcSession || data.dim !== _msmcDimension) return;
+    msmcReloadChunks(data.chunks || []);
   });
-
-  socket.on('msmceditor:session-state', function (data) {
-    if (data.serverId === currentServerId) {
-      _msmcUpdateSessionUI(data);
-    }
-  });
-
-  socket.on('msmceditor:error', function (data) {
+  socket.on('msmceditor:error', (data) => {
     showNotification(data.message || 'Editor error', 'error');
   });
 }
 
-// ==================== World Management ====================
+// ==================== World / session ====================
 
 async function msmcLoadWorlds() {
   if (!currentServerId) return;
@@ -123,23 +193,21 @@ async function msmcLoadWorlds() {
     const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/worlds`);
     const select = document.getElementById('msmceditor-world-select');
     select.innerHTML = '<option value="">— Select World —</option>';
-    if (data.worlds) {
-      data.worlds.forEach(w => {
-        const opt = document.createElement('option');
-        opt.value = w.path;
-        opt.textContent = `${w.name} (${w.platform})`;
-        select.appendChild(opt);
-      });
-    }
-    // If session is already open, update UI
+    (data.worlds || []).forEach(w => {
+      const opt = document.createElement('option');
+      opt.value = w.path;
+      opt.textContent = `${w.name} (${w.platform})`;
+      select.appendChild(opt);
+    });
     if (data.session) {
       _msmcSession = data.session;
       _msmcShowSessionUI(true);
+      await _msmcLoadPalette();
+      msmcRefreshViewer();
     }
   } catch (err) {
-    // Editor deps might not be installed
     if (err && err.message && err.message.includes('not installed')) {
-      showNotification('World Editor dependencies not installed. See docs.', 'error');
+      showNotification('World Editor dependencies not installed', 'error');
     }
   }
 }
@@ -147,30 +215,20 @@ async function msmcLoadWorlds() {
 async function msmcOpenSession() {
   const select = document.getElementById('msmceditor-world-select');
   const worldPath = select.value;
-  if (!worldPath) {
-    showNotification('Select a world first', 'warning');
-    return;
-  }
-
+  if (!worldPath) { showNotification('Select a world first', 'warning'); return; }
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/open`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ worldPath })
     });
-
-    if (data.error) {
-      showNotification(data.error, 'error');
-      return;
-    }
-
+    if (data.error) { showNotification(data.error, 'error'); return; }
     _msmcSession = data;
     _msmcShowSessionUI(true);
-    msmcRefreshMap();
-    showNotification('World opened successfully', 'success');
-  } catch (err) {
-    showNotification('Failed to open world: ' + (err.message || err), 'error');
-  }
+    await _msmcLoadPalette();
+    msmcRefreshViewer();
+    showNotification('World opened', 'success');
+  } catch (err) { showNotification('Open failed: ' + (err.message||err), 'error'); }
 }
 
 async function msmcCloseSession() {
@@ -178,518 +236,455 @@ async function msmcCloseSession() {
   try {
     await apiRequest(`/api/servers/${currentServerId}/msmceditor/close`, { method: 'POST' });
     _msmcSession = null;
+    _msmcLoadedChunkKeys.clear();
+    if (window.MSMC3D) MSMC3D.loadChunks([], _msmcPalette);
     _msmcShowSessionUI(false);
-    if (_msmcTileLayer) {
-      _msmcMap.removeLayer(_msmcTileLayer);
-      _msmcTileLayer = null;
-    }
-    showNotification('Session closed', 'success');
-  } catch (err) {
-    showNotification('Failed to close session: ' + (err.message || err), 'error');
-  }
+  } catch (err) { showNotification('Close failed', 'error'); }
 }
 
 function _msmcShowSessionUI(open) {
-  const openBtn = document.getElementById('msmceditor-open-btn');
   const closeBtn = document.getElementById('msmceditor-close-btn');
-  const statusEl = document.getElementById('msmceditor-session-status');
-  const saveControls = document.querySelector('.msmceditor-save-controls');
-  const readOnlyBanner = document.getElementById('msmceditor-readonly-banner');
-  const blockEdit = document.getElementById('msmceditor-block-edit');
-
+  const openBtn = document.getElementById('msmceditor-open-btn');
+  const status = document.getElementById('msmceditor-session-status');
+  const saveCtl = document.querySelector('.msmceditor-save-controls');
+  const ro = document.getElementById('msmceditor-readonly-banner');
   if (open && _msmcSession) {
-    openBtn.style.display = 'none';
-    closeBtn.style.display = '';
-    statusEl.style.display = '';
-    statusEl.textContent = `${_msmcSession.platform} — ${_msmcSession.readOnly ? 'Read-Only' : 'Editable'}`;
-    statusEl.className = 'msmceditor-status-badge ' + (_msmcSession.readOnly ? 'readonly' : 'editable');
-
-    if (_msmcSession.readOnly) {
-      readOnlyBanner.style.display = '';
-      saveControls.style.display = 'none';
-      if (blockEdit) blockEdit.style.display = 'none';
-    } else {
-      readOnlyBanner.style.display = 'none';
-      saveControls.style.display = '';
-      if (blockEdit) blockEdit.style.display = '';
-    }
+    if (openBtn)  openBtn.style.display = 'none';
+    if (closeBtn) closeBtn.style.display = '';
+    if (status)   { status.style.display = ''; status.textContent =
+      `${_msmcSession.platform} • ${_msmcSession.version || '?'}`; }
+    if (saveCtl)  saveCtl.style.display = '';
+    if (ro)       ro.style.display = _msmcSession.readOnly ? '' : 'none';
+    _msmcUpdateUndoButtons();
   } else {
-    openBtn.style.display = '';
-    closeBtn.style.display = 'none';
-    statusEl.style.display = 'none';
-    saveControls.style.display = 'none';
-    readOnlyBanner.style.display = 'none';
-    if (blockEdit) blockEdit.style.display = 'none';
+    if (openBtn)  openBtn.style.display = '';
+    if (closeBtn) closeBtn.style.display = 'none';
+    if (status)   status.style.display = 'none';
+    if (saveCtl)  saveCtl.style.display = 'none';
+    if (ro)       ro.style.display = 'none';
   }
 }
 
-function _msmcUpdateSessionUI(data) {
-  if (data.open) {
-    _msmcSession = Object.assign(_msmcSession || {}, data);
-    _msmcShowSessionUI(true);
-  }
+// ==================== Viewer ====================
+
+async function _msmcLoadPalette() {
+  try {
+    const data = await apiRequest('/api/msmceditor/palette');
+    if (data && typeof data === 'object') _msmcPalette = data;
+  } catch (e) { _msmcPalette = {}; }
 }
 
-// ==================== Map ====================
-
-function msmcRefreshMap() {
-  if (!_msmcMap || !_msmcSession || !currentServerId) return;
-
-  if (_msmcTileLayer) {
-    _msmcMap.removeLayer(_msmcTileLayer);
-  }
-
-  const dimEncoded = _msmcDimension.replace(':', '_').replace('/', '_');
-  const tileUrl = `/api/servers/${currentServerId}/msmceditor/tile/${dimEncoded}/{y}/{x}.png`;
-
-  _msmcTileLayer = L.tileLayer(tileUrl, {
-    tileSize: 16,
-    noWrap: true,
-    maxNativeZoom: 0,
-    minNativeZoom: 0,
-    errorTileUrl: '',
-  });
-
-  _msmcTileLayer.addTo(_msmcMap);
-  _msmcMap.setView([0, 0], 0);
-}
-
-// ==================== Block Inspector ====================
-
-async function msmcInspectBlock(x, y, z) {
-  if (!_msmcSession || !currentServerId) return;
-
+async function msmcRefreshViewer() {
+  if (!_msmcSession || !currentServerId || !window.MSMC3D) return;
+  const cam = MSMC3D.getCameraChunk();
+  const r = _msmcSettings.renderDistance;
   try {
     const data = await apiRequest(
-      `/api/servers/${currentServerId}/msmceditor/block?dim=${encodeURIComponent(_msmcDimension)}&x=${x}&y=${y}&z=${z}`
+      `/api/servers/${currentServerId}/msmceditor/chunks?dim=${encodeURIComponent(_msmcDimension)}&cx=${cam.cx}&cz=${cam.cz}&radius=${r}`
     );
-
-    const infoEl = document.getElementById('msmceditor-block-info');
-    infoEl.style.display = '';
-
-    document.getElementById('msmceditor-block-coords').textContent = `X:${data.x} Y:${data.y} Z:${data.z}`;
-    document.getElementById('msmceditor-block-id').textContent = data.block || data.error || 'Unknown';
-    document.getElementById('msmceditor-block-props').textContent =
-      data.properties ? JSON.stringify(data.properties, null, 2) : '—';
-    document.getElementById('msmceditor-block-nbt').textContent =
-      data.blockEntity || '—';
-
-    // Pre-fill edit form
-    const editId = document.getElementById('msmceditor-set-block-id');
-    if (editId && data.block) editId.value = data.block;
+    MSMC3D.loadChunks(data.chunks || [], _msmcPalette);
+    _msmcLoadedChunkKeys = new Set((data.chunks || []).map(c => `${c.cx},${c.cz}`));
   } catch (err) {
-    showNotification('Failed to inspect block: ' + (err.message || err), 'error');
+    showNotification('Failed to load chunks: ' + (err.message || err), 'error');
   }
+}
+
+async function msmcReloadChunks(chunkCoords) {
+  if (!_msmcSession || !window.MSMC3D || chunkCoords.length === 0) return;
+  const reloaded = [];
+  for (const [cx, cz] of chunkCoords) {
+    try {
+      const d = await apiRequest(
+        `/api/servers/${currentServerId}/msmceditor/chunk/${encodeURIComponent(_msmcDimension)}/${cx}/${cz}`
+      );
+      if (d && d.cx !== undefined) reloaded.push(d);
+      else MSMC3D.removeChunk(cx, cz);
+    } catch (e) { MSMC3D.removeChunk(cx, cz); }
+  }
+  if (reloaded.length) MSMC3D.updateChunks(reloaded, _msmcPalette);
+}
+
+function _msmcOnBlockPicked(block) {
+  _msmcLastInspect = block;
+  msmcInspectBlock(block.x, block.y, block.z);
+}
+
+// ==================== Block inspector ====================
+
+async function msmcInspectBlock(x, y, z) {
+  if (!_msmcSession) return;
+  try {
+    const info = await apiRequest(
+      `/api/servers/${currentServerId}/msmceditor/block?x=${x}&y=${y}&z=${z}&dim=${encodeURIComponent(_msmcDimension)}`
+    );
+    if (info.error) { showNotification(info.error, 'error'); return; }
+    document.getElementById('msmceditor-block-info').style.display = '';
+    document.getElementById('msmceditor-block-coords').textContent = `X:${x} Y:${y} Z:${z}`;
+    document.getElementById('msmceditor-block-id').textContent = info.block;
+    document.getElementById('msmceditor-block-props').textContent =
+      JSON.stringify(info.properties || {}, null, 2);
+    document.getElementById('msmceditor-block-nbt').textContent = info.blockEntity || '(none)';
+    if (!_msmcSession.readOnly) {
+      document.getElementById('msmceditor-block-edit').style.display = '';
+      document.getElementById('msmceditor-set-block-y').value = y;
+    }
+    _msmcLastInspect = { x, y, z, name: info.block };
+  } catch (err) { showNotification('Inspect failed', 'error'); }
 }
 
 async function msmcSetBlock() {
   if (!_msmcSession || _msmcSession.readOnly) {
-    showNotification('Read-only mode — stop the server to edit', 'warning');
-    return;
+    showNotification('Read-only — stop the server first', 'warning'); return;
   }
-
   const blockId = document.getElementById('msmceditor-set-block-id').value.trim();
-  const y = parseInt(document.getElementById('msmceditor-set-block-y').value) || 64;
-
-  // Get last inspected coords from display
-  const coordsText = document.getElementById('msmceditor-block-coords').textContent;
-  const match = coordsText.match(/X:(-?\d+)\s+Y:(-?\d+)\s+Z:(-?\d+)/);
-  if (!match) {
-    showNotification('Click the map first to select coordinates', 'warning');
-    return;
-  }
-
-  const x = parseInt(match[1]);
-  const z = parseInt(match[3]);
-
-  if (!blockId) {
-    showNotification('Enter a block ID', 'warning');
-    return;
-  }
-
+  if (!blockId) { showNotification('Enter a block ID', 'warning'); return; }
+  if (!_msmcLastInspect) { showNotification('Click a block first', 'warning'); return; }
+  const y = parseInt(document.getElementById('msmceditor-set-block-y').value, 10) || _msmcLastInspect.y;
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/block`, {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/block`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dim: _msmcDimension, x, y, z, block: blockId })
+      body: JSON.stringify({
+        x: _msmcLastInspect.x, y, z: _msmcLastInspect.z,
+        dim: _msmcDimension, block: blockId,
+      })
     });
-
-    if (data.error) {
-      showNotification(data.error, 'error');
-    } else {
-      showNotification(`Block set: ${data.block}`, 'success');
-      if (_msmcTileLayer) _msmcTileLayer.redraw();
-    }
-  } catch (err) {
-    showNotification('Failed to set block: ' + (err.message || err), 'error');
-  }
+    if (r.error) { showNotification(r.error, 'error'); return; }
+    showNotification('Block set', 'success');
+    _msmcUpdateUndoButtons();
+    if (r.chunk) msmcReloadChunks([r.chunk]);
+  } catch (err) { showNotification('Set block failed', 'error'); }
 }
 
 // ==================== Replace ====================
 
 async function msmcReplace() {
   if (!_msmcSession || _msmcSession.readOnly) {
-    showNotification('Read-only mode — stop the server to edit', 'warning');
-    return;
+    showNotification('Read-only — stop the server first', 'warning'); return;
   }
-
   const from = document.getElementById('msmceditor-replace-from').value.trim();
   const to = document.getElementById('msmceditor-replace-to').value.trim();
-  const x1 = parseInt(document.getElementById('msmceditor-replace-x1').value);
-  const y1 = parseInt(document.getElementById('msmceditor-replace-y1').value);
-  const z1 = parseInt(document.getElementById('msmceditor-replace-z1').value);
-  const x2 = parseInt(document.getElementById('msmceditor-replace-x2').value);
-  const y2 = parseInt(document.getElementById('msmceditor-replace-y2').value);
-  const z2 = parseInt(document.getElementById('msmceditor-replace-z2').value);
+  const box = _msmcReadBox('replace');
+  if (!from || !to) { showNotification('Enter both block IDs', 'warning'); return; }
+  if (!box) return;
   const dryRun = document.getElementById('msmceditor-replace-dryrun').checked;
-
-  if (!from || !to) {
-    showNotification('Enter both block IDs', 'warning');
-    return;
-  }
-  if ([x1, y1, z1, x2, y2, z2].some(isNaN)) {
-    showNotification('Enter all bounding box coordinates', 'warning');
-    return;
-  }
-
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/replace`, {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/replace`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        dim: _msmcDimension,
-        box: { x1, y1, z1, x2, y2, z2 },
-        from: from,
-        to: to,
-        dryRun
-      })
+      body: JSON.stringify({ dim: _msmcDimension, box, from, to, dryRun })
     });
+    if (r.error) { showNotification(r.error, 'error'); return; }
+    showNotification('Replace started (taskId: ' + r.taskId + ')', 'info');
+  } catch (err) { showNotification('Replace failed', 'error'); }
+}
 
-    if (data.error) {
-      showNotification(data.error, 'error');
-    } else {
-      showNotification(`Replace task started (${data.taskId})`, 'success');
-    }
-  } catch (err) {
-    showNotification('Failed to start replace: ' + (err.message || err), 'error');
+// ==================== Fill ====================
+
+async function msmcFill() {
+  if (!_msmcSession || _msmcSession.readOnly) {
+    showNotification('Read-only — stop the server first', 'warning'); return;
   }
+  const block = document.getElementById('msmceditor-fill-block').value.trim();
+  const box = _msmcReadBox('fill');
+  if (!block) { showNotification('Enter a block ID', 'warning'); return; }
+  if (!box) return;
+  try {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/fill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dim: _msmcDimension, box, block })
+    });
+    if (r.error) { showNotification(r.error, 'error'); return; }
+    showNotification('Fill started', 'info');
+  } catch (err) { showNotification('Fill failed', 'error'); }
+}
+
+function _msmcReadBox(prefix) {
+  const ids = ['x1','y1','z1','x2','y2','z2'];
+  const out = {};
+  for (const k of ids) {
+    const el = document.getElementById(`msmceditor-${prefix}-${k}`);
+    const v = parseInt(el && el.value, 10);
+    if (Number.isNaN(v)) { showNotification('Fill in all coords', 'warning'); return null; }
+    out[k] = v;
+  }
+  return out;
+}
+
+// ==================== Undo / Redo ====================
+
+async function msmcUndo() {
+  if (!_msmcSession || _msmcSession.readOnly) return;
+  try {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/undo`, { method: 'POST' });
+    if (r.error) { showNotification(r.error, 'warning'); return; }
+    showNotification('Undid: ' + r.label, 'info');
+    _msmcUpdateUndoButtons(r);
+    if (r.chunks && r.chunks.length) msmcReloadChunks(r.chunks);
+  } catch (err) { /* ignore */ }
+}
+
+async function msmcRedo() {
+  if (!_msmcSession || _msmcSession.readOnly) return;
+  try {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/redo`, { method: 'POST' });
+    if (r.error) { showNotification(r.error, 'warning'); return; }
+    showNotification('Redid: ' + r.label, 'info');
+    _msmcUpdateUndoButtons(r);
+    if (r.chunks && r.chunks.length) msmcReloadChunks(r.chunks);
+  } catch (err) { /* ignore */ }
+}
+
+async function _msmcUpdateUndoButtons(hint) {
+  const u = document.getElementById('msmceditor-undo-btn');
+  const r = document.getElementById('msmceditor-redo-btn');
+  if (!u || !r) return;
+  let canU = hint && hint.canUndo !== undefined ? hint.canUndo : null;
+  let canR = hint && hint.canRedo !== undefined ? hint.canRedo : null;
+  if (canU === null && _msmcSession) {
+    try {
+      const h = await apiRequest(`/api/servers/${currentServerId}/msmceditor/history`);
+      canU = (h.undo && h.undo.length > 0);
+      canR = (h.redo && h.redo.length > 0);
+    } catch (e) { canU = false; canR = false; }
+  }
+  u.disabled = !canU;
+  r.disabled = !canR;
 }
 
 // ==================== Level.dat ====================
 
 async function msmcLoadLevelDat() {
-  if (!_msmcSession || !currentServerId) return;
-
+  if (!_msmcSession) return;
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/levelinfo`);
+    const info = await apiRequest(`/api/servers/${currentServerId}/msmceditor/levelinfo`);
+    if (info.error) { showNotification(info.error, 'error'); return; }
     const form = document.getElementById('msmceditor-leveldat-form');
-    if (!data || data.error) {
-      form.innerHTML = '<p class="msmceditor-hint">Could not load level.dat</p>';
-      return;
-    }
-
-    let html = '';
+    form.innerHTML = '';
     const fields = [
-      { key: 'levelName', label: 'Level Name', type: 'text' },
-      { key: 'seed', label: 'Seed', type: 'text' },
-      { key: 'spawnX', label: 'Spawn X', type: 'number' },
-      { key: 'spawnY', label: 'Spawn Y', type: 'number' },
-      { key: 'spawnZ', label: 'Spawn Z', type: 'number' },
-      { key: 'dayTime', label: 'Day Time', type: 'number' },
-      { key: 'difficulty', label: 'Difficulty (0-3)', type: 'number' },
-      { key: 'hardcore', label: 'Hardcore', type: 'checkbox' },
-      { key: 'raining', label: 'Raining', type: 'checkbox' },
-      { key: 'thundering', label: 'Thundering', type: 'checkbox' },
+      ['levelName', 'World Name', 'text'],
+      ['seed', 'Seed', 'number'],
+      ['spawnX', 'Spawn X', 'number'],
+      ['spawnY', 'Spawn Y', 'number'],
+      ['spawnZ', 'Spawn Z', 'number'],
+      ['dayTime', 'Day Time', 'number'],
+      ['difficulty', 'Difficulty (0-3)', 'number'],
+      ['hardcore', 'Hardcore', 'checkbox'],
+      ['raining', 'Raining', 'checkbox'],
+      ['thundering', 'Thundering', 'checkbox'],
     ];
-
-    fields.forEach(f => {
-      const val = data[f.key];
-      if (val === undefined && f.type !== 'checkbox') return;
-      if (f.type === 'checkbox') {
-        html += `<div class="form-group"><label class="msmceditor-checkbox"><input type="checkbox" id="msmceditor-ld-${f.key}" ${val ? 'checked' : ''}> ${f.label}</label></div>`;
+    for (const [k, label, type] of fields) {
+      const v = info[k];
+      const id = `msmceditor-ld-${k}`;
+      const wrap = document.createElement('div');
+      wrap.className = 'form-group';
+      if (type === 'checkbox') {
+        wrap.innerHTML = `<label class="msmceditor-checkbox"><input type="checkbox" id="${id}" ${v?'checked':''}> ${label}</label>`;
       } else {
-        html += `<div class="form-group"><label>${f.label}</label><input type="${f.type}" class="form-control" id="msmceditor-ld-${f.key}" value="${escapeHtml(String(val || ''))}"></div>`;
+        wrap.innerHTML = `<label>${label}</label><input type="${type}" id="${id}" class="form-control" value="${v ?? ''}">`;
       }
-    });
-
-    // Game rules
-    if (data.gameRules) {
-      html += '<h6 style="margin-top:12px;">Game Rules</h6>';
-      Object.entries(data.gameRules).forEach(([k, v]) => {
-        html += `<div class="form-group form-group-inline"><label>${k}</label><input type="text" class="form-control" id="msmceditor-gr-${k}" value="${escapeHtml(v)}"></div>`;
-      });
+      form.appendChild(wrap);
     }
-
-    form.innerHTML = html;
-  } catch (err) {
-    showNotification('Failed to load level.dat: ' + (err.message || err), 'error');
-  }
+    if (info.gameRules) {
+      const grWrap = document.createElement('div');
+      grWrap.className = 'form-group';
+      grWrap.innerHTML = '<label>Game Rules</label>';
+      for (const [k, v] of Object.entries(info.gameRules)) {
+        const r = document.createElement('div');
+        r.className = 'msmceditor-gr-row';
+        r.innerHTML = `<label>${k}</label><input type="text" id="msmceditor-gr-${k}" class="form-control" value="${v}">`;
+        grWrap.appendChild(r);
+      }
+      form.appendChild(grWrap);
+    }
+  } catch (err) { showNotification('Load level.dat failed', 'error'); }
 }
 
 async function msmcSaveLevelDat() {
   if (!_msmcSession || _msmcSession.readOnly) {
-    showNotification('Read-only mode', 'warning');
-    return;
+    showNotification('Read-only', 'warning'); return;
   }
-
   const updates = {};
-  const fields = ['levelName', 'seed', 'spawnX', 'spawnY', 'spawnZ', 'dayTime', 'difficulty', 'hardcore', 'raining', 'thundering'];
-
-  fields.forEach(key => {
-    const el = document.getElementById(`msmceditor-ld-${key}`);
-    if (!el) return;
-    if (el.type === 'checkbox') {
-      updates[key] = el.checked;
-    } else if (el.type === 'number') {
-      updates[key] = parseInt(el.value) || 0;
-    } else {
-      updates[key] = el.value;
-    }
-  });
-
-  // Game rules
+  const fields = ['levelName','seed','spawnX','spawnY','spawnZ','dayTime','difficulty','hardcore','raining','thundering'];
+  for (const k of fields) {
+    const el = document.getElementById('msmceditor-ld-' + k);
+    if (!el) continue;
+    if (el.type === 'checkbox') updates[k] = el.checked;
+    else if (el.type === 'number') updates[k] = parseInt(el.value, 10);
+    else updates[k] = el.value;
+  }
   const grInputs = document.querySelectorAll('[id^="msmceditor-gr-"]');
-  if (grInputs.length > 0) {
+  if (grInputs.length) {
     updates.gameRules = {};
     grInputs.forEach(el => {
-      const ruleKey = el.id.replace('msmceditor-gr-', '');
-      updates.gameRules[ruleKey] = el.value;
+      const k = el.id.replace('msmceditor-gr-', '');
+      updates.gameRules[k] = el.value;
     });
   }
-
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/levelinfo`, {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/levelinfo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
     });
-    if (data.success) {
-      showNotification('Level.dat saved', 'success');
-    } else {
-      showNotification(data.error || 'Failed to save', 'error');
-    }
-  } catch (err) {
-    showNotification('Failed to save level.dat: ' + (err.message || err), 'error');
-  }
+    if (r.success) showNotification('Level.dat saved', 'success');
+    else showNotification(r.error || 'Save failed', 'error');
+  } catch (err) { showNotification('Save failed', 'error'); }
 }
 
 // ==================== Players ====================
 
 async function msmcLoadPlayers() {
-  if (!_msmcSession || !currentServerId) return;
-
+  if (!_msmcSession) return;
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/players`);
-    const listEl = document.getElementById('msmceditor-players-list');
-    if (!data.players || data.players.length === 0) {
-      listEl.innerHTML = '<p class="msmceditor-hint">No player data found</p>';
-      return;
-    }
-
-    let html = '<ul class="msmceditor-player-list">';
-    data.players.forEach(p => {
-      html += `<li><a href="#" onclick="msmcLoadPlayer('${escapeHtml(p.uuid)}'); return false;">${escapeHtml(p.uuid)}</a></li>`;
+    const list = document.getElementById('msmceditor-players-list');
+    list.innerHTML = '';
+    (data.players || []).forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'msmceditor-player-row';
+      div.innerHTML = `<button class="btn btn-small" onclick="msmcLoadPlayer('${p.uuid}')">${p.uuid}</button>`;
+      list.appendChild(div);
     });
-    html += '</ul>';
-    listEl.innerHTML = html;
-  } catch (err) {
-    showNotification('Failed to load players', 'error');
-  }
+  } catch (err) { /* ignore */ }
 }
 
 async function msmcLoadPlayer(uuid) {
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/player/${uuid}`);
-    const detailEl = document.getElementById('msmceditor-player-detail');
-    if (!data || data.error) {
-      detailEl.innerHTML = `<p class="msmceditor-hint">${data.error || 'Not found'}</p>`;
-      detailEl.style.display = '';
-      return;
-    }
-
-    let html = `<h6>${uuid}</h6>`;
-    if (data.position) {
-      html += `<div class="form-group"><label>Position</label><div>X:${data.position.x.toFixed(1)} Y:${data.position.y.toFixed(1)} Z:${data.position.z.toFixed(1)}</div></div>`;
-    }
-    if (data.gamemode !== undefined) {
-      html += `<div class="form-group"><label>Gamemode</label><select id="msmceditor-player-gm" class="form-control"><option value="0" ${data.gamemode === 0 ? 'selected' : ''}>Survival</option><option value="1" ${data.gamemode === 1 ? 'selected' : ''}>Creative</option><option value="2" ${data.gamemode === 2 ? 'selected' : ''}>Adventure</option><option value="3" ${data.gamemode === 3 ? 'selected' : ''}>Spectator</option></select></div>`;
-    }
-    if (data.health !== undefined) {
-      html += `<div class="form-group"><label>Health</label><input type="number" id="msmceditor-player-health" class="form-control" value="${data.health}" step="0.5"></div>`;
-    }
-    if (data.food !== undefined) {
-      html += `<div class="form-group"><label>Food</label><input type="number" id="msmceditor-player-food" class="form-control" value="${data.food}"></div>`;
-    }
-
-    if (!_msmcSession.readOnly) {
-      html += `<button class="btn btn-primary" onclick="msmcSavePlayer('${escapeHtml(uuid)}')" style="width:100%;margin-top:8px;">Save Player</button>`;
-    }
-
-    detailEl.innerHTML = html;
-    detailEl.style.display = '';
-  } catch (err) {
-    showNotification('Failed to load player', 'error');
-  }
+    const info = await apiRequest(`/api/servers/${currentServerId}/msmceditor/player/${uuid}`);
+    if (info.error) { showNotification(info.error, 'error'); return; }
+    const detail = document.getElementById('msmceditor-player-detail');
+    detail.style.display = '';
+    const pos = info.position || {x:0,y:0,z:0};
+    detail.innerHTML = `
+      <h5>${uuid}</h5>
+      <div class="form-group"><label>Position</label>
+        <div>X: ${pos.x.toFixed(1)} Y: ${pos.y.toFixed(1)} Z: ${pos.z.toFixed(1)}</div></div>
+      <div class="form-group"><label>Gamemode</label>
+        <input type="number" id="msmceditor-player-gm" class="form-control" value="${info.gamemode ?? 0}"></div>
+      <div class="form-group"><label>Health</label>
+        <input type="number" step="0.1" id="msmceditor-player-health" class="form-control" value="${info.health ?? 20}"></div>
+      <div class="form-group"><label>Food</label>
+        <input type="number" id="msmceditor-player-food" class="form-control" value="${info.food ?? 20}"></div>
+      <button class="btn btn-primary" onclick="msmcSavePlayer('${uuid}')" style="width:100%">Save Player</button>`;
+  } catch (err) { /* ignore */ }
 }
 
 async function msmcSavePlayer(uuid) {
   if (!_msmcSession || _msmcSession.readOnly) return;
-
-  const updates = {};
-  const gmEl = document.getElementById('msmceditor-player-gm');
-  if (gmEl) updates.gamemode = parseInt(gmEl.value);
-  const healthEl = document.getElementById('msmceditor-player-health');
-  if (healthEl) updates.health = parseFloat(healthEl.value);
-  const foodEl = document.getElementById('msmceditor-player-food');
-  if (foodEl) updates.food = parseInt(foodEl.value);
-
+  const updates = {
+    gamemode: parseInt(document.getElementById('msmceditor-player-gm').value, 10),
+    health: parseFloat(document.getElementById('msmceditor-player-health').value),
+    food: parseInt(document.getElementById('msmceditor-player-food').value, 10),
+  };
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/player/${uuid}`, {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/player/${uuid}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
     });
-    if (data.success) {
-      showNotification('Player saved', 'success');
-    } else {
-      showNotification(data.error || 'Failed', 'error');
-    }
-  } catch (err) {
-    showNotification('Failed to save player', 'error');
-  }
+    if (r.success) showNotification('Player saved', 'success');
+    else showNotification(r.error || 'Save failed', 'error');
+  } catch (err) { /* ignore */ }
 }
 
 // ==================== Chunks ====================
 
 async function msmcDeleteChunks() {
   if (!_msmcSession || _msmcSession.readOnly) {
-    showNotification('Read-only mode', 'warning');
-    return;
+    showNotification('Read-only', 'warning'); return;
   }
-
-  const coords = _msmcGetChunkRange();
-  if (!coords) return;
-
-  if (!confirm(`Delete ${coords.length} chunks? This cannot be undone without the auto-backup.`)) return;
-
+  const range = _msmcReadChunkRange();
+  if (!range) return;
+  const coords = [];
+  for (let cz = range.z1; cz <= range.z2; cz++)
+    for (let cx = range.x1; cx <= range.x2; cx++) coords.push([cx, cz]);
+  if (!confirm(`Delete ${coords.length} chunks? Backup is created on next Save.`)) return;
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/chunk/delete`, {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/chunk/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dim: _msmcDimension, coords })
     });
-    if (data.error) {
-      showNotification(data.error, 'error');
-    } else {
-      showNotification(`Chunk delete task started (${data.taskId})`, 'success');
-    }
-  } catch (err) {
-    showNotification('Failed: ' + (err.message || err), 'error');
-  }
+    if (r.error) showNotification(r.error, 'error');
+    else showNotification('Delete started', 'info');
+  } catch (err) { showNotification('Delete failed', 'error'); }
 }
 
 async function msmcPruneChunks() {
   if (!_msmcSession || _msmcSession.readOnly) {
-    showNotification('Read-only mode', 'warning');
-    return;
+    showNotification('Read-only', 'warning'); return;
   }
-
-  const cx1 = parseInt(document.getElementById('msmceditor-chunk-x1').value);
-  const cz1 = parseInt(document.getElementById('msmceditor-chunk-z1').value);
-  const cx2 = parseInt(document.getElementById('msmceditor-chunk-x2').value);
-  const cz2 = parseInt(document.getElementById('msmceditor-chunk-z2').value);
-
-  if ([cx1, cz1, cx2, cz2].some(isNaN)) {
-    showNotification('Enter chunk coordinates', 'warning');
-    return;
-  }
-
+  const range = _msmcReadChunkRange();
+  if (!range) return;
   if (!confirm('Prune will DELETE all chunks OUTSIDE the selected range. Continue?')) return;
-
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/chunk/prune`, {
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/chunk/prune`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dim: _msmcDimension, keepBox: { x1: cx1, z1: cz1, x2: cx2, z2: cz2 } })
+      body: JSON.stringify({ dim: _msmcDimension, keepBox: { x1: range.x1, z1: range.z1, x2: range.x2, z2: range.z2 } })
     });
-    if (data.error) {
-      showNotification(data.error, 'error');
-    } else {
-      showNotification(`Prune task started (${data.taskId})`, 'success');
-    }
-  } catch (err) {
-    showNotification('Failed: ' + (err.message || err), 'error');
-  }
+    if (r.error) showNotification(r.error, 'error');
+    else showNotification('Prune started', 'info');
+  } catch (err) { showNotification('Prune failed', 'error'); }
 }
 
-function _msmcGetChunkRange() {
-  const cx1 = parseInt(document.getElementById('msmceditor-chunk-x1').value);
-  const cz1 = parseInt(document.getElementById('msmceditor-chunk-z1').value);
-  const cx2 = parseInt(document.getElementById('msmceditor-chunk-x2').value);
-  const cz2 = parseInt(document.getElementById('msmceditor-chunk-z2').value);
-
-  if ([cx1, cz1, cx2, cz2].some(isNaN)) {
-    showNotification('Enter chunk coordinates', 'warning');
-    return null;
+function _msmcReadChunkRange() {
+  const ids = ['x1','z1','x2','z2'];
+  const v = {};
+  for (const k of ids) {
+    const el = document.getElementById('msmceditor-chunk-' + k);
+    const n = parseInt(el && el.value, 10);
+    if (Number.isNaN(n)) { showNotification('Fill in all chunk coords', 'warning'); return null; }
+    v[k] = n;
   }
-
-  const coords = [];
-  for (let cx = Math.min(cx1, cx2); cx <= Math.max(cx1, cx2); cx++) {
-    for (let cz = Math.min(cz1, cz2); cz <= Math.max(cz1, cz2); cz++) {
-      coords.push([cx, cz]);
-    }
-  }
-  return coords;
+  return {
+    x1: Math.min(v.x1, v.x2), x2: Math.max(v.x1, v.x2),
+    z1: Math.min(v.z1, v.z2), z2: Math.max(v.z1, v.z2),
+  };
 }
 
 // ==================== Save ====================
 
 async function msmcSave() {
   if (!_msmcSession || _msmcSession.readOnly) {
-    showNotification('Read-only mode', 'warning');
-    return;
+    showNotification('Read-only', 'warning'); return;
   }
-
+  if (!confirm('Save changes? An auto-backup will be created first.')) return;
   try {
-    const data = await apiRequest(`/api/servers/${currentServerId}/msmceditor/save`, { method: 'POST' });
-    if (data.success) {
-      showNotification(data.message || 'World saved', 'success');
-    } else {
-      showNotification(data.error || 'Save failed', 'error');
-    }
-  } catch (err) {
-    showNotification('Save failed: ' + (err.message || err), 'error');
-  }
+    const r = await apiRequest(`/api/servers/${currentServerId}/msmceditor/save`, { method: 'POST' });
+    if (r.success) showNotification(r.message || 'Saved', 'success');
+    else showNotification(r.error || 'Save failed', 'error');
+  } catch (err) { showNotification('Save failed', 'error'); }
 }
 
 // ==================== Tasks ====================
 
 function _msmcRenderTasks() {
-  const container = document.getElementById('msmceditor-tasks-list');
-  const activeTasks = Object.values(_msmcTasks).filter(t => t.done < t.total);
-
-  if (activeTasks.length === 0) {
-    container.innerHTML = '<p class="msmceditor-hint">No active tasks</p>';
-    return;
+  const list = document.getElementById('msmceditor-tasks-list');
+  if (!list) return;
+  const ids = Object.keys(_msmcTasks);
+  if (ids.length === 0) { list.innerHTML = '<p class="msmceditor-hint">No active tasks</p>'; return; }
+  list.innerHTML = '';
+  for (const id of ids) {
+    const t = _msmcTasks[id];
+    const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
+    const div = document.createElement('div');
+    div.className = 'msmceditor-task';
+    div.innerHTML = `
+      <div>${t.label || 'Task'}</div>
+      <div class="msmceditor-progress"><div class="msmceditor-progress-bar" style="width:${pct}%"></div></div>
+      <div>${t.done}/${t.total} (${pct}%)
+        <button class="btn btn-small" onclick="msmcCancelTask('${id}')">Cancel</button></div>`;
+    list.appendChild(div);
   }
-
-  let html = '';
-  activeTasks.forEach(t => {
-    const pct = t.total > 0 ? Math.round((t.done / t.total) * 100) : 0;
-    html += `<div class="msmceditor-task">
-      <div class="msmceditor-task-label">${escapeHtml(t.label || 'Working...')}</div>
-      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-      <button class="btn btn-small btn-danger" onclick="msmcCancelTask('${t.taskId}')">Cancel</button>
-    </div>`;
-  });
-  container.innerHTML = html;
 }
 
 async function msmcCancelTask(taskId) {
   try {
     await apiRequest(`/api/servers/${currentServerId}/msmceditor/cancel/${taskId}`, { method: 'POST' });
-    showNotification('Task cancelled', 'success');
-  } catch (err) {
-    showNotification('Failed to cancel', 'error');
-  }
+    delete _msmcTasks[taskId];
+    _msmcRenderTasks();
+  } catch (err) { /* ignore */ }
 }

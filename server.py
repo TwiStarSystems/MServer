@@ -10027,25 +10027,73 @@ def msmceditor_close(server_id):
     return jsonify({'success': True})
 
 
-@app.route('/api/servers/<server_id>/msmceditor/tile/<dim>/<int:cz>/<int:cx>.png', methods=['GET'])
+@app.route('/api/servers/<server_id>/msmceditor/chunks', methods=['GET'])
 @server_access_required
-def msmceditor_tile(server_id, dim, cz, cx):
-    """Serve a 16x16 PNG chunk tile."""
+def msmceditor_chunks(server_id):
+    """
+    Return chunk block data for the 3D viewer.
+    Query params: dim, cx, cz, radius (1..16, default 8).
+    Response: {chunks: [{cx, cz, sections: [...]}, ...]}
+    """
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    dim = request.args.get('dim', 'minecraft:overworld').replace('_', ':')
+    try:
+        cx = int(request.args.get('cx', 0))
+        cz = int(request.args.get('cz', 0))
+        radius = max(1, min(int(request.args.get('radius', 8)), 16))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid coordinates'}), 400
+    chunks = []
+    for d_cz in range(cz - radius, cz + radius + 1):
+        for d_cx in range(cx - radius, cx + radius + 1):
+            d = msmceditor.get_chunk_mesh_data(sess.world, d_cx, d_cz, dim)
+            if d is not None:
+                chunks.append(d)
+    return jsonify({'chunks': chunks, 'center': [cx, cz], 'radius': radius})
+
+
+@app.route('/api/servers/<server_id>/msmceditor/chunk/<dim>/<int:cx>/<int:cz>', methods=['GET'])
+@server_access_required
+def msmceditor_chunk_one(server_id, dim, cx, cz):
+    """Return data for one chunk."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    dimension = dim.replace('_', ':')
+    d = msmceditor.get_chunk_mesh_data(sess.world, cx, cz, dimension)
+    if d is None:
+        return jsonify({'error': 'Chunk not found'}), 404
+    return jsonify(d)
+
+
+@app.route('/api/servers/<server_id>/msmceditor/thumbnail/<dim>/<int:cz>/<int:cx>.png', methods=['GET'])
+@server_access_required
+def msmceditor_thumbnail(server_id, dim, cz, cx):
+    """Serve a 16x16 PNG top-down preview of a chunk (optional 2D fallback)."""
     sess = msmceditor.session_manager.get(server_id)
     if not sess:
         return '', 404
     dimension = dim.replace('_', ':')
-    # Check cache
-    cached = msmceditor.get_cached_tile(sess.world_path, dimension, cx, cz)
-    if cached:
-        return send_file(io.BytesIO(cached), mimetype='image/png')
-    # Render
+    from msmceditor.renderer import render_chunk_thumbnail
     palette = msmceditor.get_palette(BASE_DIR)
-    png = msmceditor.render_chunk_tile(sess.level, cx, cz, dimension, palette)
+    png = render_chunk_thumbnail(sess.world, cx, cz, dimension, palette)
     if not png:
         return '', 204
-    msmceditor.save_cached_tile(sess.world_path, dimension, cx, cz, png)
     return send_file(io.BytesIO(png), mimetype='image/png')
+
+
+@app.route('/api/servers/<server_id>/msmceditor/all-chunks', methods=['GET'])
+@server_access_required
+def msmceditor_all_chunks(server_id):
+    """Return the set of all chunk coords in a dimension (for minimap/overview)."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    dim = request.args.get('dim', 'minecraft:overworld').replace('_', ':')
+    coords = sorted(sess.world.all_chunk_coords(dim))
+    return jsonify({'coords': coords})
 
 
 @app.route('/api/servers/<server_id>/msmceditor/block', methods=['GET'])
@@ -10255,6 +10303,98 @@ def msmceditor_save(server_id):
     return jsonify({'error': msg}), 500
 
 
+@app.route('/api/servers/<server_id>/msmceditor/undo', methods=['POST'])
+@server_access_required
+def msmceditor_undo(server_id):
+    """Undo the last block operation."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    op = sess.undo.undo(sess.world)
+    if op is None:
+        return jsonify({'error': 'Nothing to undo'}), 400
+    sess.dirty = True
+    affected = list(op.snapshots.keys())
+    socketio.emit('msmceditor:chunks-changed',
+                  {'dim': op.dimension, 'chunks': affected}, namespace='/')
+    return jsonify({
+        'success': True,
+        'label': op.label,
+        'dim': op.dimension,
+        'chunks': affected,
+        'canUndo': sess.undo.can_undo(),
+        'canRedo': sess.undo.can_redo(),
+    })
+
+
+@app.route('/api/servers/<server_id>/msmceditor/redo', methods=['POST'])
+@server_access_required
+def msmceditor_redo(server_id):
+    """Redo the last undone operation."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    op = sess.undo.redo(sess.world)
+    if op is None:
+        return jsonify({'error': 'Nothing to redo'}), 400
+    sess.dirty = True
+    affected = list(op.snapshots.keys())
+    socketio.emit('msmceditor:chunks-changed',
+                  {'dim': op.dimension, 'chunks': affected}, namespace='/')
+    return jsonify({
+        'success': True,
+        'label': op.label,
+        'dim': op.dimension,
+        'chunks': affected,
+        'canUndo': sess.undo.can_undo(),
+        'canRedo': sess.undo.can_redo(),
+    })
+
+
+@app.route('/api/servers/<server_id>/msmceditor/history', methods=['GET'])
+@server_access_required
+def msmceditor_history(server_id):
+    """Return undo/redo history for the active session."""
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    return jsonify(sess.undo.history())
+
+
+@app.route('/api/servers/<server_id>/msmceditor/fill', methods=['POST'])
+@server_access_required
+def msmceditor_fill(server_id):
+    """Fill a region with a single block (background task)."""
+    if _msmceditor_is_readonly(server_id):
+        return jsonify({'error': 'Server is running — stop it to edit'}), 409
+    sess = msmceditor.session_manager.get(server_id)
+    if not sess:
+        return jsonify({'error': 'No session open'}), 400
+    if msmceditor.get_active_tasks(server_id):
+        return jsonify({'error': 'A task is already running'}), 409
+    data = request.get_json(force=True)
+    dim = data.get('dim', 'minecraft:overworld')
+    box = data['box']
+    block = data['block']
+    task_id = str(uuid.uuid4())
+    task = msmceditor.EditorTask(task_id, server_id, f'Fill {block}')
+    msmceditor.register_task(task)
+
+    def emit_fn(event, payload):
+        socketio.emit(event, payload, namespace='/')
+
+    threading.Thread(
+        target=msmceditor.run_fill,
+        args=(sess, dim, box, block, task, emit_fn),
+        daemon=True,
+    ).start()
+    return jsonify({'taskId': task_id})
+
+
 @app.route('/api/servers/<server_id>/msmceditor/cancel/<task_id>', methods=['POST'])
 @server_access_required
 def msmceditor_cancel(server_id, task_id):
@@ -10280,6 +10420,16 @@ def msmceditor_build_palette():
         return jsonify({'success': True, 'count': len(palette)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/msmceditor/palette', methods=['GET'])
+@login_required
+def msmceditor_get_palette():
+    """Return the current block colour palette JSON (for the 3D viewer)."""
+    try:
+        return jsonify(msmceditor.get_palette(BASE_DIR))
+    except Exception:
+        return jsonify({})
 
 
 def _msmceditor_is_readonly(server_id):
