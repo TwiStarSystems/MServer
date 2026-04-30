@@ -1586,6 +1586,10 @@ function selectCreationType(type) {
     worldFileGroup.style.display = 'none';
     importPropsHint.style.display = 'none';
     if (bedrockOption) bedrockOption.style.display = '';
+    // Show full form immediately
+    document.getElementById('u-server-props').style.display = 'flex';
+    document.getElementById('u-ram-group').style.display = 'block';
+    document.getElementById('u-upload-jar-group').style.display = 'block';
   } else if (type === 'import') {
     // Import existing server: fields can be blank (managed.conf fills them)
     nameInput.removeAttribute('required');
@@ -1595,7 +1599,11 @@ function selectCreationType(type) {
     worldFileGroup.style.display = 'none';
     importPropsHint.style.display = 'block';
     if (bedrockOption) bedrockOption.style.display = '';
-    // For import, show server props immediately (with blank-for-managed.conf hint)
+    // Category/engine/version are optional — managed.conf provides them
+    document.getElementById('u-category').removeAttribute('required');
+    document.getElementById('u-engine').removeAttribute('required');
+    document.getElementById('u-version').removeAttribute('required');
+    // Show full form immediately
     document.getElementById('u-server-props').style.display = 'flex';
     document.getElementById('u-ram-group').style.display = 'block';
     // Clear defaults so blank = use managed.conf
@@ -1611,6 +1619,10 @@ function selectCreationType(type) {
     importPropsHint.style.display = 'none';
     // No bedrock for world import
     if (bedrockOption) bedrockOption.style.display = 'none';
+    // Show full form immediately
+    document.getElementById('u-server-props').style.display = 'flex';
+    document.getElementById('u-ram-group').style.display = 'block';
+    document.getElementById('u-upload-jar-group').style.display = 'block';
   }
 }
 
@@ -1631,32 +1643,7 @@ function backToCreationType() {
 // ==================== Unified Form Dynamic Logic ====================
 
 function checkUnifiedFormReady() {
-  // Check if required fields are filled to show server properties panel
-  const name = document.getElementById('u-name').value.trim();
-  const category = document.getElementById('u-category').value;
-  const isBedrock = category === 'bedrock';
-  const isModded = category === 'modded';
-  const engine = isModded ? document.getElementById('u-engine').value : 'n/a';
-  const version = isBedrock ? 'latest' : document.getElementById('u-version').value;
-  
-  // For import mode, show props immediately (already handled in selectCreationType)
-  if (currentCreationType === 'import') return;
-  
-  const propsPanel = document.getElementById('u-server-props');
-  const ramGroup = document.getElementById('u-ram-group');
-  const uploadJarGroup = document.getElementById('u-upload-jar-group');
-  
-  // Check if all required fields are filled
-  const nameOk = name.length > 0;
-  const categoryOk = category !== '';
-  const engineOk = !isModded || engine !== '';
-  const versionOk = isBedrock || version !== '';
-  
-  if (nameOk && categoryOk && engineOk && versionOk) {
-    if (propsPanel) propsPanel.style.display = 'flex';
-    if (ramGroup && !isBedrock) ramGroup.style.display = 'block';
-    if (uploadJarGroup && !isBedrock) uploadJarGroup.style.display = 'block';
-  }
+  // Form sections are shown immediately on type selection — no dynamic gating
 }
 
 function onUnifiedCategoryChange() {
@@ -1676,9 +1663,8 @@ function onUnifiedCategoryChange() {
   if (!category) {
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'none';
-    ramGroup.style.display = 'none';
+    if (currentCreationType !== 'bedrock') ramGroup.style.display = 'none';
     uploadJarGroup.style.display = 'none';
-    if (propsPanel && currentCreationType !== 'import') propsPanel.style.display = 'none';
     categoryDesc.textContent = 'Choose whether you want a Java or Bedrock server';
     return;
   }
@@ -1692,7 +1678,9 @@ function onUnifiedCategoryChange() {
   if (category === 'unmodded') {
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'block';
-    versionSelect.setAttribute('required', '');
+    if (currentCreationType !== 'import') versionSelect.setAttribute('required', '');
+    ramGroup.style.display = 'block';
+    uploadJarGroup.style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
     if (pvpOption) pvpOption.style.display = '';
     if (hardcoreOption) hardcoreOption.style.display = '';
@@ -1702,9 +1690,11 @@ function onUnifiedCategoryChange() {
     loadUnifiedVersionsForEngine('vanilla');
   } else if (category === 'modded') {
     engineGroup.style.display = 'block';
-    engineSelect.setAttribute('required', '');
+    if (currentCreationType !== 'import') engineSelect.setAttribute('required', '');
     versionGroup.style.display = 'none';
     versionSelect.removeAttribute('required');
+    ramGroup.style.display = 'block';
+    uploadJarGroup.style.display = 'block';
     categoryDesc.textContent = 'Java Edition server with plugin/mod support';
     if (pvpOption) pvpOption.style.display = '';
     if (hardcoreOption) hardcoreOption.style.display = '';
@@ -1713,12 +1703,6 @@ function onUnifiedCategoryChange() {
     engineSelect.value = '';
     versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
     versionSelect.disabled = true;
-    // Hide optional fields until engine+version selected
-    if (currentCreationType !== 'import') {
-      ramGroup.style.display = 'none';
-      uploadJarGroup.style.display = 'none';
-      propsPanel.style.display = 'none';
-    }
   } else if (category === 'bedrock') {
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'none';
@@ -1755,11 +1739,6 @@ function onUnifiedEngineChange() {
     versionSelect.disabled = true;
     versionGroup.style.display = 'none';
     engineDesc.textContent = '';
-    if (currentCreationType !== 'import') {
-      document.getElementById('u-ram-group').style.display = 'none';
-      document.getElementById('u-upload-jar-group').style.display = 'none';
-      document.getElementById('u-server-props').style.display = 'none';
-    }
     return;
   }
   
