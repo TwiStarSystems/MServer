@@ -1742,7 +1742,7 @@ async function loadUnifiedEngines() {
   try {
     const result = await apiRequest('/api/jar-bucket/all-types');
     const allTypes = result.types || [];
-    const moddedEngines = allTypes.filter(t => t.id !== 'vanilla' && (t.category === 'java_servers' || t.category === 'modded'));
+    const moddedEngines = allTypes.filter(t => t.id !== 'vanilla' && (t.category === 'java' || t.category === 'modded'));
     
     const engineSelect = document.getElementById('u-engine');
     
@@ -4635,8 +4635,6 @@ function switchTab(tabName) {
     loadCannedCommands();
   } else if (tabName === 'terminal') {
     loadCannedCommands();
-  } else if (tabName === 'msmceditor') {
-    initMSMCEditor();
   }
 }
 

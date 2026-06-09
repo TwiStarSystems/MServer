@@ -1188,8 +1188,8 @@ function refreshJarBucketTypes() {
 function renderJarBucketTypes() {
   // Render Java servers category
   const serversContainer = document.getElementById('jar-bucket-servers');
-  if (serversContainer && jarBucketTypes.java_servers) {
-    serversContainer.innerHTML = jarBucketTypes.java_servers.map(type => `
+  if (serversContainer && jarBucketTypes.java) {
+    serversContainer.innerHTML = jarBucketTypes.java.map(type => `
       <div class="server-type-card" onclick="selectServerType('${type.id}', ${JSON.stringify(type).replace(/"/g, '&quot;')})">
         <span class="type-icon">${type.icon || '📦'}</span>
         <span class="type-name">${escapeHtml(type.name)}</span>

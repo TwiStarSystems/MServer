@@ -151,6 +151,28 @@ prompt_env_config() {
     fi
     echo ""
 
+    # Nginx reverse proxy setup
+    SETUP_NGINX="false"
+    if [[ "$https_choice" =~ ^[Yy]$ ]]; then
+        read -p "Install and configure Nginx as reverse proxy with SSL (Let's Encrypt)? [y/N]: " nginx_choice
+        if [[ "$nginx_choice" =~ ^[Yy]$ ]]; then
+            SETUP_NGINX="true"
+            read -p "Enter the domain name (e.g. panel.example.com): " NGINX_DOMAIN
+            if [ -z "$NGINX_DOMAIN" ]; then
+                print_warning "No domain provided, skipping Nginx setup."
+                SETUP_NGINX="false"
+            fi
+        fi
+    else
+        read -p "Install Nginx as HTTP reverse proxy? [y/N]: " nginx_choice
+        if [[ "$nginx_choice" =~ ^[Yy]$ ]]; then
+            SETUP_NGINX="true"
+            read -p "Enter the domain name or server IP (e.g. panel.example.com or _): " NGINX_DOMAIN
+            NGINX_DOMAIN="${NGINX_DOMAIN:-_}"
+        fi
+    fi
+    echo ""
+
     # CORS origins
     read -p "Allowed WebSocket/CORS origins (comma-separated, e.g. https://panel.example.com) [default: *]: " cors_input
     CORS_ORIGINS="${cors_input:-*}"
@@ -362,6 +384,8 @@ create_directories() {
     mkdir -p "$INSTALL_DIR/backups"
     mkdir -p "$INSTALL_DIR/uploads"
     mkdir -p "$INSTALL_DIR/tools"
+    mkdir -p "$INSTALL_DIR/configs"
+    mkdir -p "$INSTALL_DIR/public/resourcepacks"
     mkdir -p "$INSTALL_DIR/serverexecutables"/{vanilla,paper,purpur,spigot,fabric,folia,forge,neoforge,bedrock}
     print_success "Directories created"
 }
@@ -371,7 +395,143 @@ set_permissions() {
     print_info "Setting permissions..."
     chown -R www-data:www-data "$INSTALL_DIR"
     chmod -R 755 "$INSTALL_DIR"
+    # Secure sensitive files
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        chmod 600 "$INSTALL_DIR/.env"
+    fi
     print_success "Permissions configured"
+}
+
+# Setup Nginx reverse proxy
+setup_nginx() {
+    if [ "$SETUP_NGINX" != "true" ]; then
+        return
+    fi
+
+    print_info "Installing Nginx..."
+    apt-get install -y nginx
+
+    local service_port="${SERVER_PORT:-3000}"
+    local nginx_conf="/etc/nginx/sites-available/mservercontroller"
+
+    if [[ "$https_choice" =~ ^[Yy]$ ]]; then
+        # HTTPS with Let's Encrypt
+        print_info "Installing Certbot for Let's Encrypt SSL..."
+        apt-get install -y certbot python3-certbot-nginx
+
+        # Create HTTP config first (certbot needs this)
+        cat > "$nginx_conf" <<NGINXEOF
+server {
+    listen 80;
+    server_name ${NGINX_DOMAIN};
+
+    client_max_body_size 25G;
+
+    # Security headers
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location / {
+        proxy_pass http://127.0.0.1:${service_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_buffering off;
+    }
+
+    location /socket.io {
+        proxy_pass http://127.0.0.1:${service_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+NGINXEOF
+        # Enable site
+        ln -sf "$nginx_conf" /etc/nginx/sites-enabled/mservercontroller
+        rm -f /etc/nginx/sites-enabled/default
+
+        # Test and reload nginx
+        nginx -t && systemctl reload nginx
+
+        # Obtain SSL certificate
+        print_info "Obtaining SSL certificate for ${NGINX_DOMAIN}..."
+        certbot --nginx -d "${NGINX_DOMAIN}" --non-interactive --agree-tos --email "admin@${NGINX_DOMAIN}" --redirect || {
+            print_warning "Certbot failed. You can run it manually later:"
+            echo "  sudo certbot --nginx -d ${NGINX_DOMAIN}"
+        }
+
+        print_success "Nginx configured with HTTPS for ${NGINX_DOMAIN}"
+    else
+        # HTTP-only reverse proxy
+        cat > "$nginx_conf" <<NGINXEOF
+server {
+    listen 80;
+    server_name ${NGINX_DOMAIN};
+
+    client_max_body_size 25G;
+
+    # Security headers
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location / {
+        proxy_pass http://127.0.0.1:${service_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_buffering off;
+    }
+
+    location /socket.io {
+        proxy_pass http://127.0.0.1:${service_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}
+NGINXEOF
+        # Enable site
+        ln -sf "$nginx_conf" /etc/nginx/sites-enabled/mservercontroller
+        rm -f /etc/nginx/sites-enabled/default
+
+        # Test and reload nginx
+        nginx -t && systemctl reload nginx
+
+        print_success "Nginx configured as HTTP reverse proxy"
+    fi
+
+    systemctl enable nginx
 }
 
 
@@ -453,14 +613,23 @@ show_completion() {
     echo ""
     
     # Show configuration
-    echo "Configuration:"
-    echo "  Transport: HTTP on port ${SERVER_PORT:-3000}"
-    echo ""
-
-    echo "Access the web interface at:"
-    echo "  http://$(hostname -I | awk '{print $1}'):3000"
-    echo "  or"
-    echo "  http://localhost:3000"
+    if [ "$SETUP_NGINX" = "true" ] && [ -n "$NGINX_DOMAIN" ] && [ "$NGINX_DOMAIN" != "_" ]; then
+        if [[ "$https_choice" =~ ^[Yy]$ ]]; then
+            echo "Access the web interface at:"
+            echo "  https://${NGINX_DOMAIN}"
+        else
+            echo "Access the web interface at:"
+            echo "  http://${NGINX_DOMAIN}"
+        fi
+    else
+        echo "Configuration:"
+        echo "  Transport: HTTP on port ${SERVER_PORT:-3000}"
+        echo ""
+        echo "Access the web interface at:"
+        echo "  http://$(hostname -I | awk '{print $1}'):${SERVER_PORT:-3000}"
+        echo "  or"
+        echo "  http://localhost:${SERVER_PORT:-3000}"
+    fi
     echo ""
     
     echo "Service management commands:"
@@ -511,17 +680,10 @@ do_install() {
         
         # Copy all application files
         cp "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
-        cp "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null || true
-        cp "$SCRIPT_DIR/db.py" "$INSTALL_DIR/" 2>/dev/null || true
+        cp "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/"
+        cp "$SCRIPT_DIR/db.py" "$INSTALL_DIR/"
         cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
         cp "$SCRIPT_DIR/version" "$INSTALL_DIR/" 2>/dev/null || true
-
-        # Copy MSMCeditor package (pure-Python world editor)
-        if [ -d "$SCRIPT_DIR/msmceditor" ]; then
-            cp -r "$SCRIPT_DIR/msmceditor" "$INSTALL_DIR/"
-            print_success "Copied: msmceditor/"
-        fi
         
         # Copy directories
         if [ -d "$SCRIPT_DIR/public" ]; then
@@ -554,6 +716,7 @@ do_install() {
     setup_python_env
     create_directories
     set_permissions
+    setup_nginx
     create_service
     
     if start_services; then
@@ -628,9 +791,12 @@ do_update() {
         cp -f "$SCRIPT_DIR/server.py" "$INSTALL_DIR/"
         print_success "  Updated: server.py"
         
-        cp -f "$SCRIPT_DIR/server_core.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: server_core.py" || true
-        cp -f "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: api_manager.py" || true
-        cp -f "$SCRIPT_DIR/db.py" "$INSTALL_DIR/" 2>/dev/null && print_success "  Updated: db.py" || true
+        cp -f "$SCRIPT_DIR/api_manager.py" "$INSTALL_DIR/"
+        print_success "  Updated: api_manager.py"
+        
+        cp -f "$SCRIPT_DIR/db.py" "$INSTALL_DIR/"
+        print_success "  Updated: db.py"
+        
         cp -f "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/"
         print_success "  Updated: requirements.txt"
         

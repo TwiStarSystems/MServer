@@ -31,24 +31,11 @@ qrcode[pil]>=7.4.2
 # Task scheduling for automated backups and tasks
 APScheduler>=3.10.0
 
-# WSGI server for production
+# WSGI server for production (optional - built-in server works for most deployments)
 gunicorn>=21.2.0
-eventlet>=0.33.3
 
-# System monitoring (CPU, RAM, disk - used by central and client modes)
+# System monitoring (CPU, RAM, disk)
 psutil>=5.9.0
-
-# Encryption for secure Master-Slave communication
-cryptography>=41.0.0
-
-# World Editor (MSMCeditor) — pure-Python NBT + Anvil region I/O.
-# No amulet/cmake needed. Pillow is used for chunk thumbnails and JAR palette extraction.
-Pillow>=10.0.0
-numpy>=1.24.0
-# Optional: only needed for chunk LZ4 compression (MC 1.20.5+ servers can opt-in).
-lz4>=4.0.0
-# Optional: Bedrock world LevelDB support (requires libleveldb-dev system package)
-# plyvel>=1.5.0
 
 # Optional: S3 external backup storage support
 # Uncomment or install separately if you want to use S3/S3-compatible external backup destinations:

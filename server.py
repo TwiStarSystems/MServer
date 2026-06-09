@@ -29,7 +29,6 @@ import qrcode
 import argparse
 import sys
 import smtplib
-import msmceditor
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from enum import Enum
@@ -40,7 +39,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
-from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for, make_response
+from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, make_response
 from flask_socketio import SocketIO, emit
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -98,6 +97,11 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # Initialize CSRF Protection
 csrf = CSRFProtect(app)
 
+# Pre-authentication routes (login, register, MFA verify, logout, csrf-token) are
+# exempted via @csrf.exempt decorators. They rely on rate limiting for protection.
+# CSRF tokens are session-bound and cannot be reliably issued before a session exists
+# (e.g. first visit via raw IP without prior cookie).
+
 @app.errorhandler(CSRFError)
 def handle_csrf_error(e):
     """Return JSON instead of HTML for CSRF failures so the frontend can parse the error"""
@@ -141,7 +145,6 @@ RESOURCEPACKS_DIR = BASE_DIR / 'public' / 'resourcepacks'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
 DB_PATH = BASE_DIR / 'msc.db'
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
-API_URLS_PATH = BASE_DIR / 'configs' / 'apiurls.json'
 TOOLS_DIR = BASE_DIR / 'tools'
 VERSION_FILE = BASE_DIR / 'version'
 
@@ -585,20 +588,6 @@ class SettingsManager:
 
 class EmailService:
     """Handles email sending via SMTP"""
-
-    _HTML_STYLE = (
-        'font-family: Arial, sans-serif; background-color: #1a1a2e; '
-        'color: #e0e0e0; padding: 20px;'
-    )
-    _CARD_STYLE = (
-        'max-width: 600px; margin: 0 auto; background-color: #16213e; '
-        'border-radius: 8px; padding: 30px;'
-    )
-    _FOOTER = (
-        '<hr style="border: 1px solid #333; margin: 20px 0;">'
-        '<p style="color: #888; font-size: 12px;">'
-        'This is an automated notification from {{ site_title }}.</p>'
-    )
 
     DEFAULT_TEMPLATES = {
         'backup_complete': {
@@ -1947,8 +1936,7 @@ class UserManager:
                     conn.commit()
                     # Fall through to password check below
                 else:
-                    mins = max(1, int((1800 - elapsed) / 60))
-                    return None, f"Account temporarily locked. Try again in {mins} minute{'s' if mins != 1 else ''}."
+                    return None, "Account temporarily locked due to too many failed attempts. Try again later."
             else:
                 return None, "Account has been disabled. Please contact an administrator."
 
@@ -1971,15 +1959,14 @@ class UserManager:
                 )
                 conn.commit()
                 self._check_and_create_anti_lockout()
-                return None, "Account has been disabled due to multiple failed login attempts."
+                return None, "Account temporarily locked due to too many failed attempts. Try again later."
 
             conn.execute(
                 'UPDATE users SET failed_login_attempts=? WHERE id=?',
                 (new_attempts, user_id)
             )
             conn.commit()
-            remaining = 5 - new_attempts
-            return None, f"Invalid password. {remaining} attempts remaining before account is disabled."
+            return None, "Invalid username or password"
 
     # ── Registration / Creation ───────────────────────────────────────────────
 
@@ -4270,6 +4257,7 @@ def is_safe_path(base_path, requested_path):
 # ==================== CSRF Token Endpoint ====================
 
 @app.route('/api/csrf-token', methods=['GET'])
+@csrf.exempt
 def get_csrf_token():
     """Get CSRF token for authenticated sessions"""
     token = generate_csrf()
@@ -4337,6 +4325,7 @@ def static_files(path):
 # ==================== Authentication API ====================
 
 @app.route('/api/auth/login', methods=['POST'])
+@csrf.exempt
 @limiter.limit("10 per minute")
 def api_login():
     """Authenticate user"""
@@ -4395,12 +4384,14 @@ def api_login():
     })
 
 @app.route('/api/auth/logout', methods=['POST'])
+@csrf.exempt
 def api_logout():
     """Log out user"""
     session.clear()
     return jsonify({'success': True})
 
 @app.route('/api/auth/register', methods=['POST'])
+@csrf.exempt
 @limiter.limit("5 per hour")
 def api_register():
     """Register new user"""
@@ -4613,6 +4604,7 @@ def api_mfa_disable():
     return jsonify({'success': True, 'message': message})
 
 @app.route('/api/auth/mfa/verify-login', methods=['POST'])
+@csrf.exempt
 @limiter.limit("10 per minute")
 def api_mfa_verify_login():
     """Verify MFA code during login"""
@@ -8788,7 +8780,7 @@ class JarBucketManager:
         'vanilla': {
             'name': 'Vanilla',
             'description': 'Official Minecraft Java Edition server',
-            'category': 'java_servers',
+            'category': 'java',
             'api_url': 'https://launchermeta.mojang.com/mc/game/version_manifest.json',
             'icon': '🎮'
         },
@@ -8802,28 +8794,28 @@ class JarBucketManager:
         'paper': {
             'name': 'Paper',
             'description': 'High-performance Spigot fork with optimizations',
-            'category': 'java_servers',
+            'category': 'modded',
             'api_url': 'https://api.papermc.io/v2/',
             'icon': '📄'
         },
         'purpur': {
             'name': 'Purpur',
             'description': 'Paper fork with extra features and configuration',
-            'category': 'java_servers',
+            'category': 'modded',
             'api_url': 'https://api.purpurmc.org/v2/purpur/',
             'icon': '💜'
         },
         'folia': {
             'name': 'Folia',
             'description': 'Paper fork for multi-threaded regions',
-            'category': 'java_servers',
+            'category': 'modded',
             'api_url': 'https://api.papermc.io/v2/',
             'icon': '🌿'
         },
         'spigot': {
             'name': 'Spigot',
             'description': 'Modified Minecraft server with Bukkit plugin support',
-            'category': 'java_servers',
+            'category': 'modded',
             'api_url': 'https://hub.spigotmc.org/versions/',
             'icon': '🔧'
         },
@@ -8831,7 +8823,7 @@ class JarBucketManager:
             'name': 'Fabric',
             'description': 'Lightweight mod loader for Minecraft',
             'category': 'modded',
-            'api_url': 'https://meta.fabricmc.net/v2/versions',
+            'api_url': 'https://meta.fabricmc.net/v2/versions/',
             'icon': '🧵'
         },
         'forge': {
@@ -8892,10 +8884,10 @@ class JarBucketManager:
     
     def get_server_types(self):
         """Get list of available server types with metadata"""
-        types_by_category = {'java_servers': [], 'bedrock': [], 'modded': []}
+        types_by_category = {'java': [], 'bedrock': [], 'modded': []}
 
         for type_id, info in self.SERVER_TYPES.items():
-            category = info.get('category', 'java_servers')
+            category = info.get('category', 'java')
             if category == 'proxies':
                 continue
             types_by_category.setdefault(category, []).append({
@@ -9968,475 +9960,6 @@ def delete_downloaded_jar_legacy():
     except Exception as e:
         return jsonify({'error': f'Failed to delete: {str(e)}'}), 500
 
-# ==================== MSMCeditor (World Editor) API ====================
-
-@app.route('/api/servers/<server_id>/msmceditor/worlds', methods=['GET'])
-@server_access_required
-def msmceditor_worlds(server_id):
-    """List editable worlds for a server and return active session info."""
-    if not msmceditor.AMULET_AVAILABLE:
-        return jsonify({'error': 'World Editor dependencies not installed (amulet-core)'}), 503
-    server_path = server_manager.get_server_path(server_id)
-    worlds = msmceditor.discover_worlds(server_path)
-    session_info = None
-    existing = msmceditor.session_manager.get(server_id)
-    if existing:
-        session_info = {
-            'platform': existing.platform,
-            'dimensions': existing.dimensions,
-            'readOnly': _msmceditor_is_readonly(server_id),
-        }
-    return jsonify({'worlds': worlds, 'session': session_info})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/open', methods=['POST'])
-@server_access_required
-def msmceditor_open(server_id):
-    """Open a world session."""
-    if not msmceditor.AMULET_AVAILABLE:
-        return jsonify({'error': 'World Editor dependencies not installed'}), 503
-    data = request.get_json(force=True)
-    world_path = data.get('worldPath')
-    if not world_path:
-        return jsonify({'error': 'worldPath required'}), 400
-    # Security: ensure path is within the server directory
-    server_path = server_manager.get_server_path(server_id)
-    try:
-        resolved = Path(world_path).resolve()
-        if not str(resolved).startswith(str(Path(server_path).resolve())):
-            return jsonify({'error': 'Invalid world path'}), 403
-    except Exception:
-        return jsonify({'error': 'Invalid path'}), 400
-    try:
-        sess = msmceditor.session_manager.open(server_id, world_path)
-        return jsonify({
-            'platform': sess.platform,
-            'dimensions': sess.dimensions,
-            'readOnly': _msmceditor_is_readonly(server_id),
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/servers/<server_id>/msmceditor/close', methods=['POST'])
-@server_access_required
-def msmceditor_close(server_id):
-    """Close the world session."""
-    msmceditor.session_manager.close(server_id)
-    return jsonify({'success': True})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/chunks', methods=['GET'])
-@server_access_required
-def msmceditor_chunks(server_id):
-    """
-    Return chunk block data for the 3D viewer.
-    Query params: dim, cx, cz, radius (1..16, default 8).
-    Response: {chunks: [{cx, cz, sections: [...]}, ...]}
-    """
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    dim = request.args.get('dim', 'minecraft:overworld').replace('_', ':')
-    try:
-        cx = int(request.args.get('cx', 0))
-        cz = int(request.args.get('cz', 0))
-        radius = max(1, min(int(request.args.get('radius', 8)), 16))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Invalid coordinates'}), 400
-    chunks = []
-    for d_cz in range(cz - radius, cz + radius + 1):
-        for d_cx in range(cx - radius, cx + radius + 1):
-            d = msmceditor.get_chunk_mesh_data(sess.world, d_cx, d_cz, dim)
-            if d is not None:
-                chunks.append(d)
-    return jsonify({'chunks': chunks, 'center': [cx, cz], 'radius': radius})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/chunk/<dim>/<int:cx>/<int:cz>', methods=['GET'])
-@server_access_required
-def msmceditor_chunk_one(server_id, dim, cx, cz):
-    """Return data for one chunk."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    dimension = dim.replace('_', ':')
-    d = msmceditor.get_chunk_mesh_data(sess.world, cx, cz, dimension)
-    if d is None:
-        return jsonify({'error': 'Chunk not found'}), 404
-    return jsonify(d)
-
-
-@app.route('/api/servers/<server_id>/msmceditor/thumbnail/<dim>/<int:cz>/<int:cx>.png', methods=['GET'])
-@server_access_required
-def msmceditor_thumbnail(server_id, dim, cz, cx):
-    """Serve a 16x16 PNG top-down preview of a chunk (optional 2D fallback)."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return '', 404
-    dimension = dim.replace('_', ':')
-    from msmceditor.renderer import render_chunk_thumbnail
-    palette = msmceditor.get_palette(BASE_DIR)
-    png = render_chunk_thumbnail(sess.world, cx, cz, dimension, palette)
-    if not png:
-        return '', 204
-    return send_file(io.BytesIO(png), mimetype='image/png')
-
-
-@app.route('/api/servers/<server_id>/msmceditor/all-chunks', methods=['GET'])
-@server_access_required
-def msmceditor_all_chunks(server_id):
-    """Return the set of all chunk coords in a dimension (for minimap/overview)."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    dim = request.args.get('dim', 'minecraft:overworld').replace('_', ':')
-    coords = sorted(sess.world.all_chunk_coords(dim))
-    return jsonify({'coords': coords})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/block', methods=['GET'])
-@server_access_required
-def msmceditor_get_block(server_id):
-    """Inspect a block at coordinates."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    x = int(request.args.get('x', 0))
-    y = int(request.args.get('y', 64))
-    z = int(request.args.get('z', 0))
-    dim = request.args.get('dim', 'minecraft:overworld')
-    info = msmceditor.get_block_info(sess, x, y, z, dim)
-    return jsonify(info)
-
-
-@app.route('/api/servers/<server_id>/msmceditor/block', methods=['POST'])
-@server_access_required
-def msmceditor_set_block(server_id):
-    """Set a block at coordinates."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    data = request.get_json(force=True)
-    dim = data.get('dim', 'minecraft:overworld')
-    x, y, z = int(data['x']), int(data['y']), int(data['z'])
-    block = data.get('block', '')
-    result = msmceditor.set_block(sess, x, y, z, dim, block)
-    return jsonify(result)
-
-
-@app.route('/api/servers/<server_id>/msmceditor/replace', methods=['POST'])
-@server_access_required
-def msmceditor_replace(server_id):
-    """Start a block replace task."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    # Only 1 task at a time per server
-    if msmceditor.get_active_tasks(server_id):
-        return jsonify({'error': 'A task is already running'}), 409
-    data = request.get_json(force=True)
-    dim = data.get('dim', 'minecraft:overworld')
-    box = data['box']
-    from_block = data['from']
-    to_block = data['to']
-    dry_run = data.get('dryRun', False)
-    task_id = str(uuid.uuid4())
-    task = msmceditor.EditorTask(task_id, server_id, f'Replace {from_block} → {to_block}')
-    msmceditor.register_task(task)
-
-    def emit_fn(event, payload):
-        socketio.emit(event, payload, namespace='/')
-
-    thread = threading.Thread(
-        target=msmceditor.run_replace,
-        args=(sess, dim, box, from_block, to_block, dry_run, task, emit_fn),
-        daemon=True
-    )
-    thread.start()
-    return jsonify({'taskId': task_id})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/levelinfo', methods=['GET'])
-@server_access_required
-def msmceditor_get_levelinfo(server_id):
-    """Read level.dat info."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    info = msmceditor.read_level_info(sess)
-    if info is None:
-        return jsonify({'error': 'Could not read level.dat'}), 500
-    return jsonify(info)
-
-
-@app.route('/api/servers/<server_id>/msmceditor/levelinfo', methods=['POST'])
-@server_access_required
-def msmceditor_set_levelinfo(server_id):
-    """Write level.dat updates."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    updates = request.get_json(force=True)
-    ok = msmceditor.write_level_info(sess, updates)
-    return jsonify({'success': ok})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/players', methods=['GET'])
-@server_access_required
-def msmceditor_players(server_id):
-    """List players in the world."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    players = msmceditor.list_players(sess)
-    return jsonify({'players': players})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/player/<player_uuid>', methods=['GET'])
-@server_access_required
-def msmceditor_get_player(server_id, player_uuid):
-    """Read a player's data."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    info = msmceditor.read_player(sess, player_uuid)
-    if info is None:
-        return jsonify({'error': 'Player not found'}), 404
-    return jsonify(info)
-
-
-@app.route('/api/servers/<server_id>/msmceditor/player/<player_uuid>', methods=['POST'])
-@server_access_required
-def msmceditor_set_player(server_id, player_uuid):
-    """Update a player's data."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    updates = request.get_json(force=True)
-    ok = msmceditor.write_player(sess, player_uuid, updates)
-    return jsonify({'success': ok})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/chunk/delete', methods=['POST'])
-@server_access_required
-def msmceditor_chunk_delete(server_id):
-    """Delete specified chunks."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    if msmceditor.get_active_tasks(server_id):
-        return jsonify({'error': 'A task is already running'}), 409
-    data = request.get_json(force=True)
-    dim = data.get('dim', 'minecraft:overworld')
-    coords = data.get('coords', [])
-    task_id = str(uuid.uuid4())
-    task = msmceditor.EditorTask(task_id, server_id, f'Delete {len(coords)} chunks')
-    msmceditor.register_task(task)
-
-    def emit_fn(event, payload):
-        socketio.emit(event, payload, namespace='/')
-
-    thread = threading.Thread(
-        target=msmceditor.delete_chunks,
-        args=(sess, dim, coords, task, emit_fn),
-        daemon=True
-    )
-    thread.start()
-    return jsonify({'taskId': task_id})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/chunk/prune', methods=['POST'])
-@server_access_required
-def msmceditor_chunk_prune(server_id):
-    """Prune chunks outside a keep box."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    if msmceditor.get_active_tasks(server_id):
-        return jsonify({'error': 'A task is already running'}), 409
-    data = request.get_json(force=True)
-    dim = data.get('dim', 'minecraft:overworld')
-    keep_box = data.get('keepBox', {})
-    task_id = str(uuid.uuid4())
-    task = msmceditor.EditorTask(task_id, server_id, f'Prune chunks')
-    msmceditor.register_task(task)
-
-    def emit_fn(event, payload):
-        socketio.emit(event, payload, namespace='/')
-
-    thread = threading.Thread(
-        target=msmceditor.prune_chunks,
-        args=(sess, dim, keep_box, task, emit_fn),
-        daemon=True
-    )
-    thread.start()
-    return jsonify({'taskId': task_id})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/save', methods=['POST'])
-@server_access_required
-def msmceditor_save(server_id):
-    """Save the world with auto-backup."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    backup_dir = BACKUPS_DIR / server_id
-    success, msg = msmceditor.save_world(sess, backup_dir)
-    if success:
-        return jsonify({'success': True, 'message': msg})
-    return jsonify({'error': msg}), 500
-
-
-@app.route('/api/servers/<server_id>/msmceditor/undo', methods=['POST'])
-@server_access_required
-def msmceditor_undo(server_id):
-    """Undo the last block operation."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    op = sess.undo.undo(sess.world)
-    if op is None:
-        return jsonify({'error': 'Nothing to undo'}), 400
-    sess.dirty = True
-    affected = list(op.snapshots.keys())
-    socketio.emit('msmceditor:chunks-changed',
-                  {'dim': op.dimension, 'chunks': affected}, namespace='/')
-    return jsonify({
-        'success': True,
-        'label': op.label,
-        'dim': op.dimension,
-        'chunks': affected,
-        'canUndo': sess.undo.can_undo(),
-        'canRedo': sess.undo.can_redo(),
-    })
-
-
-@app.route('/api/servers/<server_id>/msmceditor/redo', methods=['POST'])
-@server_access_required
-def msmceditor_redo(server_id):
-    """Redo the last undone operation."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    op = sess.undo.redo(sess.world)
-    if op is None:
-        return jsonify({'error': 'Nothing to redo'}), 400
-    sess.dirty = True
-    affected = list(op.snapshots.keys())
-    socketio.emit('msmceditor:chunks-changed',
-                  {'dim': op.dimension, 'chunks': affected}, namespace='/')
-    return jsonify({
-        'success': True,
-        'label': op.label,
-        'dim': op.dimension,
-        'chunks': affected,
-        'canUndo': sess.undo.can_undo(),
-        'canRedo': sess.undo.can_redo(),
-    })
-
-
-@app.route('/api/servers/<server_id>/msmceditor/history', methods=['GET'])
-@server_access_required
-def msmceditor_history(server_id):
-    """Return undo/redo history for the active session."""
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    return jsonify(sess.undo.history())
-
-
-@app.route('/api/servers/<server_id>/msmceditor/fill', methods=['POST'])
-@server_access_required
-def msmceditor_fill(server_id):
-    """Fill a region with a single block (background task)."""
-    if _msmceditor_is_readonly(server_id):
-        return jsonify({'error': 'Server is running — stop it to edit'}), 409
-    sess = msmceditor.session_manager.get(server_id)
-    if not sess:
-        return jsonify({'error': 'No session open'}), 400
-    if msmceditor.get_active_tasks(server_id):
-        return jsonify({'error': 'A task is already running'}), 409
-    data = request.get_json(force=True)
-    dim = data.get('dim', 'minecraft:overworld')
-    box = data['box']
-    block = data['block']
-    task_id = str(uuid.uuid4())
-    task = msmceditor.EditorTask(task_id, server_id, f'Fill {block}')
-    msmceditor.register_task(task)
-
-    def emit_fn(event, payload):
-        socketio.emit(event, payload, namespace='/')
-
-    threading.Thread(
-        target=msmceditor.run_fill,
-        args=(sess, dim, box, block, task, emit_fn),
-        daemon=True,
-    ).start()
-    return jsonify({'taskId': task_id})
-
-
-@app.route('/api/servers/<server_id>/msmceditor/cancel/<task_id>', methods=['POST'])
-@server_access_required
-def msmceditor_cancel(server_id, task_id):
-    """Cancel an active task."""
-    task = msmceditor.get_task(task_id)
-    if not task or task.server_id != server_id:
-        return jsonify({'error': 'Task not found'}), 404
-    task.cancel()
-    return jsonify({'success': True})
-
-
-@app.route('/api/msmceditor/build-palette', methods=['POST'])
-@admin_required
-def msmceditor_build_palette():
-    """Build a color palette from a Minecraft client JAR."""
-    data = request.get_json(force=True)
-    jar_path = data.get('jarPath')
-    if not jar_path or not Path(jar_path).exists():
-        return jsonify({'error': 'Valid jarPath required'}), 400
-    output_path = BASE_DIR / 'configs' / 'msmceditor' / 'palette.json'
-    try:
-        palette = msmceditor.build_palette_from_jar(jar_path, output_path)
-        return jsonify({'success': True, 'count': len(palette)})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/msmceditor/palette', methods=['GET'])
-@login_required
-def msmceditor_get_palette():
-    """Return the current block colour palette JSON (for the 3D viewer)."""
-    try:
-        return jsonify(msmceditor.get_palette(BASE_DIR))
-    except Exception:
-        return jsonify({})
-
-
-def _msmceditor_is_readonly(server_id):
-    """Server is read-only if the MC server process is running."""
-    instance = server_manager.servers.get(server_id)
-    return instance is not None and instance.is_running()
-
-
 # ==================== Tools API ====================
 
 @app.route('/api/tools', methods=['GET'])
@@ -10848,9 +10371,9 @@ def run_server(host='0.0.0.0', port=3000):
     print('            Change immediately after first login!')
     if not _is_dev:
         print()
-        print('  ℹ️  Production mode: for best results run via gunicorn instead of')
-        print('     the built-in Werkzeug server:')
-        print('       gunicorn -k eventlet -w 1 "server:app"')
+        print('  ℹ️  The built-in server is suitable for production with moderate')
+        print('     concurrent users. For higher loads, consider using gunicorn:')
+        print('       gunicorn -w 1 --threads 100 -b 0.0.0.0:3000 "server:app"')
     print('=' * 60)
 
     # allow_unsafe_werkzeug=True is required when running under Werkzeug's dev
