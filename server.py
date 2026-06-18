@@ -5286,7 +5286,6 @@ def download_server_jar(server_id):
     data = request.get_json()
     server_type = data.get('serverType')
     version = data.get('version')
-    create_bk = data.get('createBackup', False)
     executable = 'server.jar'  # Always use server.jar for Java server JARs
 
     if not server_type or not version:
@@ -5301,37 +5300,34 @@ def download_server_jar(server_id):
 
     # --- Era compatibility guard ---
     current_version = server_config.get('version', '')
-    if current_version and current_version not in ('Unknown', ''):
+    has_existing_world = bool(current_version) and current_version not in ('Unknown', '')
+    if has_existing_world:
         cur_modern = mc_version_is_modern(current_version)
         new_mod = mc_version_is_modern(version)
-        new_leg = mc_version_is_legacy(version)
 
+        # Modern -> Legacy: blocked (the modern world format is one-way).
         if cur_modern and not new_mod:
             return jsonify({
                 'error': (
-                    f'Cannot assign legacy JAR ({version}) to a 1.26+ server ({current_version}). '
+                    f'Cannot assign a legacy JAR ({version}) to a modern (1.26+) server '
+                    f'({current_version}). The new world storage format is not backwards-compatible. '
                     f'Create a new server if you need a legacy version.'
                 )
             }), 400
 
-        if mc_version_is_legacy(current_version) and not new_leg:
+        # Legacy -> Legacy: cap within the legacy tier. Crossing to a modern version is
+        # allowed (Minecraft auto-converts the world on next start, one-way).
+        if not cur_modern and not new_mod and compare_mc_versions(version, MC_LEGACY_MAX) > 0:
             return jsonify({
                 'error': (
-                    f'Cannot assign a 1.26+ JAR ({version}) to a legacy server ({current_version}). '
-                    f'Create a new server to run Minecraft 1.26 or higher.'
+                    f'Legacy servers cannot exceed {MC_LEGACY_MAX} within the legacy tier. '
+                    f'Select a modern (1.26+) version to migrate to the new world format.'
                 )
             }), 400
 
-        if mc_version_is_legacy(current_version) and compare_mc_versions(version, MC_LEGACY_MAX) > 0:
-            return jsonify({
-                'error': (
-                    f'Legacy servers cannot exceed {MC_LEGACY_MAX}. '
-                    f'Create a new server to run Minecraft 1.26 or higher.'
-                )
-            }), 400
-
-    # Automatic backup before JAR update if requested
-    if create_bk:
+    # Always create a mandatory safety backup before swapping the JAR when there is an
+    # existing world to protect (skipped only for a fresh server with no version yet).
+    if has_existing_world:
         try:
             backup_dir = BACKUPS_DIR / server_id
             backup_dir.mkdir(parents=True, exist_ok=True)
@@ -5361,7 +5357,7 @@ def download_server_jar(server_id):
                 'success': True
             })
         except Exception as e:
-            return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
+            return jsonify({'error': f'Failed to create mandatory pre-change backup: {str(e)}'}), 500
 
     # Copy from local serverexecutables directory
     success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
@@ -5550,7 +5546,6 @@ def change_server_version(server_id):
         return jsonify({'error': 'No data provided'}), 400
 
     new_version = data.get('version')
-    create_backup = data.get('createBackup', False)
 
     if not new_version:
         return jsonify({'error': 'Version is required'}), 400
@@ -5564,46 +5559,47 @@ def change_server_version(server_id):
     current_version = managed_conf.get('Version', server_config.get('version', ''))
 
     current_modern = mc_version_is_modern(current_version)
-    current_legacy = mc_version_is_legacy(current_version)
     new_modern = mc_version_is_modern(new_version)
-    new_legacy = mc_version_is_legacy(new_version)
 
-    # --- Cross-era blocks ---
+    # --- Modern -> Legacy: blocked (the new world storage format is one-way) ---
     if current_modern and not new_modern:
         return jsonify({
             'error': (
-                f'Cannot downgrade a 1.26+ server to legacy version {new_version}. '
-                f'The new world storage format is incompatible with older versions. '
+                f'Cannot downgrade a modern (1.26+) server to legacy version {new_version}. '
+                f'The new world storage format is not backwards-compatible. '
                 f'Create a new server if you need a legacy version.'
             )
         }), 400
 
-    if current_legacy and not new_legacy:
+    # --- Legacy -> Legacy: cap upgrades at the legacy tier max ---
+    # (Crossing to a modern version is allowed below and is NOT subject to this cap.)
+    if not current_modern and not new_modern and compare_mc_versions(new_version, MC_LEGACY_MAX) > 0:
         return jsonify({
             'error': (
-                f'Cannot upgrade legacy server from {current_version} to {new_version}. '
-                f'Minecraft 1.26 introduced incompatible world storage changes. '
-                f'The maximum upgrade path for this server is {MC_LEGACY_MAX}. '
-                f'Create a new server to run Minecraft 1.26 or higher.'
+                f'Legacy servers cannot be upgraded beyond {MC_LEGACY_MAX} within the legacy tier. '
+                f'Select a modern (1.26+) version to migrate to the new world format.'
             )
         }), 400
 
-    # --- Legacy: cap at MC_LEGACY_MAX ---
-    if current_legacy and compare_mc_versions(new_version, MC_LEGACY_MAX) > 0:
-        return jsonify({
-            'error': (
-                f'Legacy servers cannot be upgraded beyond {MC_LEGACY_MAX}. '
-                f'Create a new server to run Minecraft 1.26 or higher.'
-            )
-        }), 400
-
-    # --- Legacy downgrade: allowed with warning ---
+    # --- Determine warnings (informational only; these do NOT block the change) ---
+    # world_conversion_warning: ONLY a Legacy -> Modern crossing triggers the one-way
+    #   world-storage conversion. Same-generation changes never show it.
+    # downgrade_warning: a same-generation downgrade (legacy->legacy or modern->modern)
+    #   warns about feature differences / possible world corruption.
+    world_conversion_warning = None
     downgrade_warning = None
-    if current_legacy and compare_mc_versions(new_version, current_version) < 0:
+    if not current_modern and new_modern:
+        world_conversion_warning = (
+            f'Minecraft {new_version} uses a new world storage format. Upgrading from '
+            f'{current_version} will automatically convert your world the next time the '
+            f'server starts, but this conversion is one-way and cannot be undone. '
+            f'A backup has been created automatically.'
+        )
+    elif compare_mc_versions(new_version, current_version) < 0:
         downgrade_warning = (
-            f'Downgrading from {current_version} to {new_version}: '
-            f'Minecraft world data is generally not backwards-compatible. '
-            f'Ensure you have a backup before starting the server.'
+            f'Downgrading from {current_version} to {new_version}: newer world data and '
+            f'features may be incompatible with the older version and can cause feature '
+            f'loss or world corruption. A backup has been created automatically.'
         )
 
     # Check if server is running
@@ -5611,45 +5607,46 @@ def change_server_version(server_id):
     if instance and instance.is_running():
         return jsonify({'error': 'Server must be stopped before changing version'}), 400
     
-    # Create backup if requested
-    if create_backup:
-        try:
-            # Create backup directory for this server
-            backup_dir = BACKUPS_DIR / server_id
-            backup_dir.mkdir(parents=True, exist_ok=True)
+    # Always create a safety backup before changing versions. World conversions
+    # (Legacy -> Modern) are one-way and downgrades can corrupt data, so a backup
+    # is mandatory — if it fails, abort the version change.
+    try:
+        # Create backup directory for this server
+        backup_dir = BACKUPS_DIR / server_id
+        backup_dir.mkdir(parents=True, exist_ok=True)
 
-            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            backup_name = f'pre-version-change-{timestamp}.zip'
-            backup_path = backup_dir / backup_name
+        timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+        backup_name = f'pre-version-change-{timestamp}.zip'
+        backup_path = backup_dir / backup_name
 
-            # Create the backup
-            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
-                                 compresslevel=6) as zipf:
-                file_count = 0
-                for root, dirs, files in os.walk(server_dir):
-                    for file in files:
-                        file_path = Path(root) / file
-                        arcname = file_path.relative_to(server_dir)
-                        zipf.write(file_path, arcname)
-                        file_count += 1
-                zipf.writestr('backup_manifest.json', json.dumps({
-                    'type': 'full', 'created': timestamp, 'file_count': file_count
-                }))
+        # Create the backup
+        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
+                             compresslevel=6) as zipf:
+            file_count = 0
+            for root, dirs, files in os.walk(server_dir):
+                for file in files:
+                    file_path = Path(root) / file
+                    arcname = file_path.relative_to(server_dir)
+                    zipf.write(file_path, arcname)
+                    file_count += 1
+            zipf.writestr('backup_manifest.json', json.dumps({
+                'type': 'full', 'created': timestamp, 'file_count': file_count
+            }))
 
-            bk_size = backup_path.stat().st_size
-            ok, checksum, _ = verify_backup_file(backup_path)
-            backup_scheduler._log_backup_event(server_id, {
-                'type': 'pre-version-change',
-                'backup_name': backup_name,
-                'size': bk_size,
-                'is_incremental': False,
-                'compression_level': 6,
-                'verified': ok,
-                'checksum': checksum,
-                'success': True
-            })
-        except Exception as e:
-            return jsonify({'error': f'Failed to create backup: {str(e)}'}), 500
+        bk_size = backup_path.stat().st_size
+        ok, checksum, _ = verify_backup_file(backup_path)
+        backup_scheduler._log_backup_event(server_id, {
+            'type': 'pre-version-change',
+            'backup_name': backup_name,
+            'size': bk_size,
+            'is_incremental': False,
+            'compression_level': 6,
+            'verified': ok,
+            'checksum': checksum,
+            'success': True
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to create mandatory pre-change backup: {str(e)}'}), 500
     
     # Copy the new version JAR into the server directory (download first if needed)
     engine = managed_conf.get('Engine', server_config.get('serverType', 'vanilla'))
@@ -5686,8 +5683,12 @@ def change_server_version(server_id):
         'message': f'Version updated from {current_version} to {new_version}',
         'oldVersion': current_version,
         'newVersion': new_version,
+        'backupCreated': True,
     }
-    if downgrade_warning:
+    # Surface at most one warning: the one-way conversion notice takes precedence.
+    if world_conversion_warning:
+        response['warning'] = world_conversion_warning
+    elif downgrade_warning:
         response['warning'] = downgrade_warning
     return jsonify(response)
 
@@ -7524,9 +7525,13 @@ def list_backups(server_id):
     if not backup_dir.exists():
         return jsonify({'backups': []})
 
+    # Auto-detect every backup by scanning the folder for .zip files. All backups
+    # (manual, scheduled, pre-version-change, pre-jar-update, imported, or files
+    # copied in by hand) are .zip, so a case-insensitive suffix match surfaces them
+    # all without relying on any index or naming convention.
     backups = []
     for item in backup_dir.iterdir():
-        if item.suffix == '.zip':
+        if item.is_file() and item.suffix.lower() == '.zip':
             stat = item.stat()
             entry = {
                 'name': item.name,

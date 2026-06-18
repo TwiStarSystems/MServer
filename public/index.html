@@ -1016,14 +1016,10 @@
               <!-- Warning will be inserted here -->
             </div>
             
-            <div id="vc-backup-option" class="form-group" style="display: none;">
-              <label>
-                <input type="checkbox" id="vc-create-backup" checked>
-                Create backup before updating
-              </label>
-              <small>Recommended: Creates a backup before changing the version</small>
-            </div>
-            
+            <!-- Backups are mandatory and created automatically before any version
+                 change; this element is kept (hidden) so existing JS references stay valid. -->
+            <div id="vc-backup-option" class="form-group" style="display: none;"></div>
+
             <div class="modal-footer">
               <button type="button" class="btn" onclick="closeVersionChangeModal()">Cancel</button>
               <button type="submit" class="btn btn-success" id="vc-submit-btn" disabled>Change Version</button>

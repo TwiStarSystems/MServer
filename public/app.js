@@ -2830,77 +2830,61 @@ function onVersionChangeSelection() {
   
   const current = versionChangeData.currentVersion;
   
-  // Check if current version is below 1.26
-  if (isVersionBelow126(current)) {
+  // Era classification: legacy (<=1.21.x) vs modern (1.26+ / new world format).
+  const currentModern = !isVersionBelow126(current);
+  const newModern = !isVersionBelow126(newVersion);
+  const cmp = compareVersions(newVersion, current);
+
+  // Modern -> Legacy is not possible: the modern world format is one-way.
+  if (currentModern && !newModern) {
     warningDiv.className = 'version-warning downgrade';
     warningDiv.innerHTML = `
-      <strong>⚠️ Version Change Not Supported</strong>
-      <p>Your current version (${current}) is below Minecraft 1.26.</p>
-      <p><strong>Technical Limitation:</strong> Due to Minecraft's new version numbering system and world storage changes introduced in 1.26, version updates from pre-1.26 servers are not supported through this feature.</p>
-      <p>To update this server, you will need to manually migrate the world data.</p>
+      <strong>⚠️ Downgrade to a Legacy Version Not Possible</strong>
+      <p>You cannot move ${current} back to ${newVersion}.</p>
+      <p><strong>Reason:</strong> Minecraft's modern (1.26+) world storage format is not backwards-compatible. Downgrading to a legacy version is not supported and would corrupt the world. Create a new server if you need a legacy version.</p>
     `;
     warningDiv.style.display = 'block';
     backupOption.style.display = 'none';
     submitBtn.disabled = true;
     return;
   }
-  
-  // Check if trying to downgrade below 1.26
-  if (isVersionBelow126(newVersion)) {
-    warningDiv.className = 'version-warning downgrade';
-    warningDiv.innerHTML = `
-      <strong>⚠️ Downgrade to Pre-1.26 Not Supported</strong>
-      <p>You cannot downgrade from ${current} to ${newVersion}.</p>
-      <p><strong>Reason:</strong> Minecraft 1.26 introduced significant changes to world storage and version numbering. Downgrading to versions below 1.26 is not supported and may cause severe world corruption.</p>
-      <p>If you need an older version, create a new server instead.</p>
+
+  let warningHtml = '';
+  if (!currentModern && newModern) {
+    // Legacy -> Modern: the ONLY case that shows the one-way conversion notice.
+    warningDiv.className = 'version-warning upgrade';
+    warningHtml = `
+      <strong>⬆️ Upgrading to a Modern Version</strong>
+      <p>You are upgrading from ${current} to ${newVersion}.</p>
+      <p><strong>📦 World Storage Changes:</strong> Minecraft 1.26+ uses a new world storage format. Your world will be automatically converted, but this process is one-way and cannot be undone.</p>
     `;
-    warningDiv.style.display = 'block';
-    backupOption.style.display = 'none';
-    submitBtn.disabled = true;
-    return;
-  }
-  
-  // Compare versions to determine if upgrade or downgrade
-  const isUpgrade = compareVersions(newVersion, current) > 0;
-  const isDowngrade = compareVersions(newVersion, current) < 0;
-  
-  // Check for 1.26.1+ world storage changes
-  const is126OrHigher = !isVersionBelow126(current);
-  const newIs126OrHigher = !isVersionBelow126(newVersion);
-  
-  if (isUpgrade) {
-    let warningHtml = `
+  } else if (cmp > 0) {
+    // Same-generation upgrade: no conversion notice needed.
+    warningDiv.className = 'version-warning upgrade';
+    warningHtml = `
       <strong>⬆️ Upgrading Version</strong>
       <p>You are upgrading from ${current} to ${newVersion}.</p>
     `;
-    
-    // Add world storage warning for 1.26+ versions
-    if (is126OrHigher && newIs126OrHigher) {
-      warningHtml += `
-        <p><strong>📦 World Storage Changes:</strong> Minecraft 1.26+ uses a new world storage format. Your world will be automatically converted, but this process is one-way.</p>
-      `;
-    }
-    
-    warningHtml += `<p>It's recommended to create a backup before upgrading.</p>`;
-    
-    warningDiv.className = 'version-warning upgrade';
-    warningDiv.innerHTML = warningHtml;
-    warningDiv.style.display = 'block';
-    backupOption.style.display = 'block';
-    document.getElementById('vc-create-backup').checked = true;
-  } else if (isDowngrade) {
+  } else if (cmp < 0) {
+    // Same-generation downgrade: warn about feature differences / corruption.
     warningDiv.className = 'version-warning downgrade';
-    warningDiv.innerHTML = `
+    warningHtml = `
       <strong>⚠️ Downgrading Version</strong>
       <p>You are downgrading from ${current} to ${newVersion}.</p>
-      <p><strong>Warning:</strong> Downgrading is not recommended and may cause issues with your world data. Use with caution!</p>
-      <p>A backup is strongly recommended before proceeding.</p>
+      <p><strong>Warning:</strong> Newer world data and features may be incompatible with the older version and can cause feature loss or world corruption. Proceed with caution.</p>
     `;
-    warningDiv.style.display = 'block';
-    backupOption.style.display = 'block';
-    document.getElementById('vc-create-backup').checked = true;
+  } else {
+    // Same version selected.
+    warningDiv.className = 'version-warning';
+    warningHtml = `<p>This is the version your server is already running.</p>`;
   }
-  
+
+  // A backup is ALWAYS taken automatically before the change (enforced server-side).
+  warningHtml += `<p>🛟 A backup will be created automatically before the version is changed.</p>`;
+  warningDiv.innerHTML = warningHtml;
+  warningDiv.style.display = 'block';
+  backupOption.style.display = 'none';
+
   submitBtn.disabled = false;
 }
 
@@ -2960,8 +2944,7 @@ async function submitVersionChange(e) {
   e.preventDefault();
   
   const newVersion = document.getElementById('vc-new-version').value;
-  const createBackup = document.getElementById('vc-create-backup').checked;
-  
+
   if (!newVersion) {
     showNotification('Please select a version', 'error');
     return;
@@ -2976,13 +2959,16 @@ async function submitVersionChange(e) {
     const result = await apiRequest(`/api/servers/${currentServerId}/change-version`, {
       method: 'POST',
       body: JSON.stringify({
-        version: newVersion,
-        createBackup: createBackup
+        version: newVersion
       })
     });
-    
+
     if (result.success) {
       showNotification(`Version changed successfully from ${result.oldVersion} to ${result.newVersion}`, 'success');
+      // Surface the one-way conversion / downgrade warning returned by the server.
+      if (result.warning) {
+        showNotification(result.warning, 'warning');
+      }
       closeVersionChangeModal();
       
       // Refresh server info to show new version
