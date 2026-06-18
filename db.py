@@ -190,6 +190,29 @@ CREATE TABLE IF NOT EXISTS api_requests_by_endpoint (
     endpoint TEXT PRIMARY KEY,
     count    INTEGER NOT NULL DEFAULT 0
 );
+
+-- ── Background Job Queue ──────────────────────────────────────────────────────
+-- Tracks long-running operations (backups, restores, deletes, JAR swaps, zips)
+-- run by the JobManager. No FK on server_id: a delete_server job must outlive
+-- the server row it removes.
+CREATE TABLE IF NOT EXISTS jobs (
+    id         TEXT PRIMARY KEY,
+    type       TEXT NOT NULL,                  -- backup|restore|delete_server|swap_jar|zip_download
+    server_id  TEXT,                           -- nullable, no FK (jobs outlive servers)
+    title      TEXT NOT NULL,                  -- human label, e.g. "Backup: SurvivalSMP"
+    status     TEXT NOT NULL DEFAULT 'queued', -- queued|running|completed|failed|cancelled
+    progress   INTEGER NOT NULL DEFAULT 0,     -- 0-100
+    message    TEXT,                           -- current step text
+    params     TEXT,                           -- JSON input args
+    result     TEXT,                           -- JSON output (e.g. {"download": true})
+    error      TEXT,
+    created_by TEXT,                           -- user_id
+    created    TEXT NOT NULL,
+    started    TEXT,
+    finished   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_server ON jobs(server_id, created DESC);
 """
 
 
@@ -201,4 +224,22 @@ def init_db():
     """
     conn = get_db()
     conn.executescript(_SCHEMA)
+    conn.commit()
+    recover_interrupted_jobs()
+
+
+def recover_interrupted_jobs():
+    """
+    Mark any jobs left in 'queued' or 'running' from a previous run as 'failed'.
+    Background jobs do not survive a process restart, so a row still flagged as
+    active on boot was interrupted. Safe to call once at startup after init_db().
+    """
+    conn = get_db()
+    conn.execute(
+        '''UPDATE jobs
+           SET status='failed',
+               error=COALESCE(error, 'Interrupted by panel restart'),
+               finished=datetime('now')
+           WHERE status IN ('queued', 'running')'''
+    )
     conn.commit()

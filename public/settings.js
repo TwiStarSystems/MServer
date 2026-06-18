@@ -1943,8 +1943,10 @@ async function loadUsers() {
                 <td>${new Date(u.created).toLocaleDateString()}</td>
                 <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
                 <td class="user-mgmt-actions">
-                  <button class="btn btn-small btn-primary" onclick="openEditUserModal('${u.id}')">✏️ Edit</button>
-                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">🗑️</button>
+                  ${u.isAntiLockout
+                    ? '<span class="text-muted" title="Built-in emergency admin. Managed by the system and cannot be edited or deleted.">🔒 System account</span>'
+                    : `<button class="btn btn-small btn-primary" onclick="openEditUserModal('${u.id}')">✏️ Edit</button>
+                  <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">🗑️</button>`}
                 </td>
               </tr>
             `).join('')}

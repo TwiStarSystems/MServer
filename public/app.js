@@ -655,6 +655,8 @@ function connectWebSocket() {
     if (currentServerId) {
       socket.emit('subscribe', { serverId: currentServerId });
     }
+    // Resync the task list in case job events were missed while disconnected.
+    loadJobs();
   });
   
   socket.on('message', (data) => {
@@ -707,31 +709,175 @@ function connectWebSocket() {
     }
   });
 
-  // Manual backup async events
-  socket.on('backup_manual_completed', (data) => {
-    if (data.serverId === currentServerId) {
-      loadBackups();
-    }
+  // Unified background-job events (backups, restores, deletes, JAR swaps, zips).
+  ['job_queued', 'job_started', 'job_progress'].forEach(evt => {
+    socket.on(evt, (data) => { if (data && data.job) upsertJob(data.job); });
   });
+  socket.on('job_completed', (data) => { if (data && data.job) onJobFinished(data.job); });
+  socket.on('job_failed', (data) => { if (data && data.job) onJobFinished(data.job); });
+  socket.on('job_cancelled', (data) => { if (data && data.job) onJobFinished(data.job); });
+}
 
-  socket.on('backup_manual_failed', (data) => {
-    if (data.serverId === currentServerId) {
-      showNotification(`❌ Backup failed: ${data.error}`, 'error');
-    }
-  });
+// ==================== Background Tasks Panel ====================
 
-  // Restore async events
-  socket.on('restore_completed', (data) => {
-    if (data.serverId === currentServerId) {
-      showNotification(`✅ Restore complete: ${data.backup}`, 'success');
-    }
-  });
+// In-memory mirror of the jobs the server knows about, keyed by id.
+let jobsCache = {};
 
-  socket.on('restore_failed', (data) => {
-    if (data.serverId === currentServerId) {
-      showNotification(`❌ Restore failed: ${data.error}`, 'error');
+const JOB_ACTIVE = ['queued', 'running'];
+
+async function loadJobs() {
+  try {
+    const data = await apiRequest('/api/jobs');
+    jobsCache = {};
+    (data.jobs || []).forEach(j => { jobsCache[j.id] = j; });
+    renderJobs();
+    updateJobsBadge();
+  } catch (error) {
+    console.error('Failed to load jobs:', error);
+  }
+}
+
+function upsertJob(job) {
+  jobsCache[job.id] = job;
+  renderJobs();
+  updateJobsBadge();
+}
+
+// Called for job_completed / job_failed / job_cancelled — update the cache,
+// surface a notification, and refresh any affected views.
+function onJobFinished(job) {
+  upsertJob(job);
+
+  const name = job.title || 'Task';
+  if (job.status === 'completed') {
+    showNotification(`✅ ${name} — done`, 'success');
+  } else if (job.status === 'failed') {
+    showNotification(`❌ ${name} failed: ${job.error || 'unknown error'}`, 'error');
+  } else if (job.status === 'cancelled') {
+    showNotification(`⚪ ${name} cancelled`, 'info');
+  }
+
+  // Refresh affected views.
+  if ((job.type === 'backup' || job.type === 'restore') &&
+      job.status === 'completed' && job.serverId === currentServerId) {
+    if (typeof loadBackups === 'function') loadBackups();
+  }
+  if (job.type === 'delete_server' && job.status === 'completed') {
+    loadServers();
+  }
+  if (job.type === 'swap_jar' && job.status === 'completed' &&
+      job.serverId === currentServerId) {
+    loadServers();
+  }
+}
+
+function updateJobsBadge() {
+  const badge = document.getElementById('tasks-badge');
+  if (!badge) return;
+  const active = Object.values(jobsCache).filter(j => JOB_ACTIVE.includes(j.status)).length;
+  if (active > 0) {
+    badge.textContent = active;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderJobs() {
+  const list = document.getElementById('jobs-list');
+  if (!list) return;
+
+  const jobs = Object.values(jobsCache)
+    .sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+
+  if (jobs.length === 0) {
+    list.innerHTML = '<div class="jobs-empty">No tasks yet.</div>';
+    return;
+  }
+
+  list.innerHTML = jobs.map(job => {
+    const active = JOB_ACTIVE.includes(job.status);
+    const pct = Math.max(0, Math.min(100, job.progress || 0));
+    const canDownload = job.type === 'zip_download' && job.status === 'completed';
+
+    let actions = '';
+    if (active) {
+      actions += `<button class="btn btn-small btn-danger" onclick="cancelJob('${job.id}')">Cancel</button>`;
+    } else {
+      if (canDownload) {
+        actions += `<button class="btn btn-small btn-success" onclick="downloadJobArtifact('${job.id}')">⬇ Download</button>`;
+      }
+      actions += `<button class="btn btn-small" onclick="dismissJob('${job.id}')">Dismiss</button>`;
     }
-  });
+
+    const detail = job.status === 'failed'
+      ? `<div class="job-error">${escapeHtml(job.error || 'Failed')}</div>`
+      : (job.message ? `<div class="job-message">${escapeHtml(job.message)}</div>` : '');
+
+    return `
+      <div class="job-item" data-job-id="${job.id}">
+        <div class="job-item-top">
+          <span class="job-title">${escapeHtml(job.title || job.type)}</span>
+          <span class="job-status-chip ${job.status}">${escapeHtml(job.status)}</span>
+        </div>
+        ${detail}
+        ${active ? `<div class="job-progress"><div class="job-progress-fill" style="width:${pct}%"></div></div>` : ''}
+        <div class="job-actions">${actions}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function openJobsPanel() {
+  const panel = document.getElementById('jobs-panel');
+  const overlay = document.getElementById('jobs-overlay');
+  if (!panel) return;
+  panel.classList.add('open');
+  panel.setAttribute('aria-hidden', 'false');
+  if (overlay) overlay.classList.add('open');
+  loadJobs();
+}
+
+function closeJobsPanel() {
+  const panel = document.getElementById('jobs-panel');
+  const overlay = document.getElementById('jobs-overlay');
+  if (panel) {
+    panel.classList.remove('open');
+    panel.setAttribute('aria-hidden', 'true');
+  }
+  if (overlay) overlay.classList.remove('open');
+}
+
+function toggleJobsPanel() {
+  const panel = document.getElementById('jobs-panel');
+  if (panel && panel.classList.contains('open')) {
+    closeJobsPanel();
+  } else {
+    openJobsPanel();
+  }
+}
+
+async function cancelJob(jobId) {
+  try {
+    await apiRequest(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+  } catch (error) {
+    showNotification('Failed to cancel task: ' + error.message, 'error');
+  }
+}
+
+async function dismissJob(jobId) {
+  try {
+    await apiRequest(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    delete jobsCache[jobId];
+    renderJobs();
+    updateJobsBadge();
+  } catch (error) {
+    showNotification('Failed to dismiss task: ' + error.message, 'error');
+  }
+}
+
+function downloadJobArtifact(jobId) {
+  window.location.href = `/api/jobs/${jobId}/download`;
 }
 
 // ==================== API Functions ====================
@@ -3131,19 +3277,22 @@ async function confirmDeleteServer(deleteFiles) {
       : `/api/servers/${currentServerId}`;
     
     await apiRequest(url, { method: 'DELETE' });
-    
+
     closeDeleteServerModal();
-    
-    if (deleteFiles) {
-      showNotification('Server and all files deleted permanently', 'success');
-    } else {
-      showNotification('Server removed from management. Files preserved.', 'success');
-    }
-    
+
+    showNotification(
+      deleteFiles
+        ? 'Deletion started — see Tasks for progress'
+        : 'Removing from management — see Tasks for progress',
+      'info'
+    );
+
+    // Deletion now runs as a background job; navigate away and let the job's
+    // completion event refresh the server list (onJobFinished -> loadServers).
     currentServerId = null;
     document.getElementById('no-server-view').style.display = 'flex';
     document.getElementById('server-view').style.display = 'none';
-    
+
     await loadServers();
   } catch (error) {
     console.error('Failed to delete server:', error);
@@ -3885,9 +4034,20 @@ function downloadFile(filePath) {
   window.location.href = `/api/servers/${currentServerId}/files/download?path=${encodeURIComponent(filePath)}`;
 }
 
-function downloadFolderAsZip(folderPath) {
+async function downloadFolderAsZip(folderPath) {
   if (!currentServerId) return;
-  window.location.href = `/api/servers/${currentServerId}/files/zip?path=${encodeURIComponent(folderPath)}`;
+  // The zip is built in the background; the Tasks panel shows progress and, when
+  // ready, a Download button (GET /api/jobs/<id>/download).
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/files/zip`, {
+      method: 'POST',
+      body: JSON.stringify({ path: folderPath })
+    });
+    showNotification('Preparing ZIP — see Tasks for progress and download', 'info');
+    openJobsPanel();
+  } catch (error) {
+    showNotification('Failed to start ZIP: ' + error.message, 'error');
+  }
 }
 
 async function uploadFile(file) {
@@ -3992,7 +4152,9 @@ async function createBackup() {
       method: 'POST',
       body: JSON.stringify({ compressionLevel, backupType: 'manual' })
     });
-    // Backup runs in the background; the list will refresh via the backup_manual_completed socket event
+    // Backup runs as a background job; the Tasks panel shows progress and the
+    // backup list refreshes via onJobFinished when the job completes.
+    openJobsPanel();
   } catch (error) {
     console.error('Failed to start backup:', error);
     showNotification('Failed to start backup', 'error');
@@ -4028,6 +4190,7 @@ async function confirmRestore() {
       method: 'POST',
       body: JSON.stringify({ name })
     });
+    openJobsPanel();
   } catch (error) {
     console.error('Failed to start restore:', error);
     showNotification('Failed to start restore', 'error');

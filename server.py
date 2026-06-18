@@ -35,12 +35,13 @@ from enum import Enum
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, make_response
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
@@ -141,6 +142,7 @@ BASE_DIR = Path(__file__).parent.absolute()
 SERVERS_DIR = BASE_DIR / 'servers'
 BACKUPS_DIR = BASE_DIR / 'backups'
 UPLOADS_DIR = BASE_DIR / 'uploads'
+JOBS_TMP_DIR = UPLOADS_DIR / 'jobs'   # prepared zip-download artifacts produced by JobManager
 RESOURCEPACKS_DIR = BASE_DIR / 'public' / 'resourcepacks'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
 DB_PATH = BASE_DIR / 'msc.db'
@@ -149,7 +151,7 @@ TOOLS_DIR = BASE_DIR / 'tools'
 VERSION_FILE = BASE_DIR / 'version'
 
 # Ensure directories exist
-for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, TOOLS_DIR, RESOURCEPACKS_DIR]:
+for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, JOBS_TMP_DIR, TOOLS_DIR, RESOURCEPACKS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -1749,6 +1751,15 @@ class UserManager:
         'admin': 2     # Full access
     }
 
+    # The permanent hidden anti-lockout admin. Exactly one row carries
+    # is_anti_lockout=1. It normally stays disabled and hidden from the user list;
+    # it is activated (enabled + a fresh password logged to the server log) only
+    # when no real admin can log in. Its identifying fields are fixed and cannot
+    # be edited or deleted through the UI/API.
+    ANTI_LOCKOUT_USERNAME = 'admin'
+    ANTI_LOCKOUT_NAME = 'Admin'
+    ANTI_LOCKOUT_EMAIL = 'Admin@local'
+
     _DEFAULT_NOTIF_PREFS = {
         'backupComplete': False,
         'backupFailure': False,
@@ -1760,7 +1771,7 @@ class UserManager:
     }
 
     def __init__(self):
-        self._ensure_admin_exists()
+        self._ensure_anti_lockout_admin_exists()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -1793,28 +1804,63 @@ class UserManager:
             'notificationPrefs':    prefs,
         }
 
-    def _ensure_admin_exists(self):
-        """Create default admin account if the users table is empty."""
+    def _ensure_anti_lockout_admin_exists(self):
+        """Ensure the permanent hidden anti-lockout 'admin' account exists.
+
+        Created once (disabled, hidden) with a random placeholder password that is
+        never revealed. A real, logged password is only set when the account is
+        activated by _activate_anti_lockout_admin(). This replaces the old
+        auto-created default admin: a clean install has no usable admin and is
+        steered to the first-run setup flow instead.
+        """
         conn = get_db()
-        count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-        if count == 0:
-            admin_id = str(uuid.uuid4())[:8]
-            # Generate a random one-time password instead of a well-known default.
-            default_pw = secrets.token_urlsafe(12)
-            conn.execute(
-                '''INSERT INTO users
-                   (id, username, password, role, name, email, approved, created, is_anti_lockout,
-                    notification_prefs)
-                   VALUES (?, ?, ?, 'admin', '', 'admin@example.com', 1, ?, 0, '{}')''',
-                (admin_id, 'admin', generate_password_hash(default_pw), datetime.now().isoformat())
-            )
-            conn.commit()
-            print("=" * 60)
-            print("Default admin account created")
-            print(f"  Username: admin")
-            print(f"  Password: {default_pw}")
-            print("This password is shown ONLY ONCE. Log in and change it now.")
-            print("=" * 60)
+        row = conn.execute('SELECT id FROM users WHERE is_anti_lockout=1').fetchone()
+        if row:
+            return
+        # Don't collide with a pre-existing real account named 'admin' (legacy DBs).
+        existing = conn.execute(
+            'SELECT id FROM users WHERE username=? COLLATE NOCASE',
+            (self.ANTI_LOCKOUT_USERNAME,)
+        ).fetchone()
+        if existing:
+            return
+        user_id = str(uuid.uuid4())[:8]
+        placeholder = secrets.token_urlsafe(24)  # never logged; account starts disabled
+        conn.execute(
+            '''INSERT INTO users
+               (id, username, password, role, name, email, mfa_enabled, approved, created,
+                failed_login_attempts, account_disabled, disabled_at, is_anti_lockout, notification_prefs)
+               VALUES (?, ?, ?, 'admin', ?, ?, 0, 1, ?, 0, 1, NULL, 1, '{}')''',
+            (user_id, self.ANTI_LOCKOUT_USERNAME, generate_password_hash(placeholder),
+             self.ANTI_LOCKOUT_NAME, self.ANTI_LOCKOUT_EMAIL, datetime.now().isoformat())
+        )
+        conn.commit()
+
+    def needs_setup(self):
+        """True on a clean install: no real (non-anti-lockout) admin has ever been
+        created. Used to gate the first-run setup flow. Note this is False during a
+        lockout (real admins exist but are disabled) — that case uses the hidden
+        admin for recovery, NOT the unauthenticated setup endpoint."""
+        return self._count_real_admins() == 0
+
+    def _count_real_admins(self):
+        """Count admin accounts that are not the hidden anti-lockout account, in any
+        state (enabled or disabled, approved or not)."""
+        row = get_db().execute(
+            "SELECT COUNT(*) FROM users WHERE role='admin' AND is_anti_lockout=0"
+        ).fetchone()
+        return row[0]
+
+    def _get_anti_lockout_id(self):
+        row = get_db().execute('SELECT id FROM users WHERE is_anti_lockout=1').fetchone()
+        return row['id'] if row else None
+
+    def _is_anti_lockout(self, user_id):
+        """True if the given user id is the permanent hidden anti-lockout account."""
+        row = get_db().execute(
+            'SELECT is_anti_lockout FROM users WHERE id=?', (user_id,)
+        ).fetchone()
+        return bool(row and row['is_anti_lockout'])
 
     # ── Authentication ────────────────────────────────────────────────────────
 
@@ -1866,7 +1912,7 @@ class UserManager:
                     (new_attempts, datetime.now().isoformat(), user_id)
                 )
                 conn.commit()
-                self._check_and_create_anti_lockout()
+                self._check_anti_lockout()
                 return None, "Account temporarily locked due to too many failed attempts. Try again later."
 
             conn.execute(
@@ -1884,6 +1930,8 @@ class UserManager:
             return None, "Username must be 3-32 characters"
         if not username.replace('_', '').replace('-', '').isalnum():
             return None, "Username can only contain letters, numbers, underscores, and hyphens"
+        if username.lower() == self.ANTI_LOCKOUT_USERNAME:
+            return None, "That username is reserved"
         if len(password) < 12:
             return None, "Password must be at least 12 characters"
         if not any(c.isupper() for c in password):
@@ -1924,6 +1972,8 @@ class UserManager:
             return None, "Username must be 3-32 characters"
         if not username.replace('_', '').replace('-', '').isalnum():
             return None, "Username can only contain letters, numbers, underscores, and hyphens"
+        if username.lower() == self.ANTI_LOCKOUT_USERNAME:
+            return None, "That username is reserved"
         if len(password) < 6:
             return None, "Password must be at least 6 characters"
         if role not in self.ROLES:
@@ -1948,7 +1998,56 @@ class UserManager:
                 return None, "Username already exists"
             raise
 
+        # If this created a usable admin, the hidden admin can stand down.
+        if role == 'admin':
+            self._deactivate_anti_lockout_admin()
+
         return user_id, "User created successfully"
+
+    def create_first_admin(self, username, password, name='', email=''):
+        """Create the first real admin during first-run setup. Only allowed on a
+        clean install (no real admin yet); enforced here as defence in depth in
+        addition to the route guard."""
+        if not self.needs_setup():
+            return None, "Setup has already been completed"
+        username = (username or '').strip()
+        if username.lower() == self.ANTI_LOCKOUT_USERNAME:
+            return None, "That username is reserved"
+        if len(username) < 3 or len(username) > 32:
+            return None, "Username must be 3-32 characters"
+        if not username.replace('_', '').replace('-', '').isalnum():
+            return None, "Username can only contain letters, numbers, underscores, and hyphens"
+        if len(password) < 12:
+            return None, "Password must be at least 12 characters"
+        if not any(c.isupper() for c in password):
+            return None, "Password must contain at least one uppercase letter"
+        if not any(c.islower() for c in password):
+            return None, "Password must contain at least one lowercase letter"
+        if not any(c.isdigit() for c in password):
+            return None, "Password must contain at least one number"
+
+        user_id = str(uuid.uuid4())[:8]
+        default_prefs = json.dumps({k: False for k in self._DEFAULT_NOTIF_PREFS})
+        conn = get_db()
+        try:
+            conn.execute(
+                '''INSERT INTO users
+                   (id, username, password, role, name, email, approved, created,
+                    failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
+                   VALUES (?, ?, ?, 'admin', ?, ?, 1, ?, 0, 0, 0, ?)''',
+                (user_id, username, generate_password_hash(password),
+                 (name or '').strip(), (email or '').strip(),
+                 datetime.now().isoformat(), default_prefs)
+            )
+            conn.commit()
+        except Exception as e:
+            if 'UNIQUE' in str(e).upper():
+                return None, "Username already exists"
+            raise
+
+        # A real admin now exists; make sure the hidden admin is disabled/hidden.
+        self._deactivate_anti_lockout_admin()
+        return user_id, "Admin account created"
 
     # ── Lookups ───────────────────────────────────────────────────────────────
 
@@ -1974,9 +2073,17 @@ class UserManager:
             'lastLogin': row['last_login'],
         }
 
-    def get_all_users(self):
-        """Get all users as safe dicts (for admin panel)."""
-        rows = get_db().execute('SELECT * FROM users ORDER BY created').fetchall()
+    def get_all_users(self, include_anti_lockout=False):
+        """Get all users as safe dicts (for admin panel).
+
+        The permanent hidden anti-lockout account is excluded unless
+        include_anti_lockout is True (only when the requester IS that account)."""
+        if include_anti_lockout:
+            rows = get_db().execute('SELECT * FROM users ORDER BY created').fetchall()
+        else:
+            rows = get_db().execute(
+                'SELECT * FROM users WHERE is_anti_lockout=0 ORDER BY created'
+            ).fetchall()
         return [
             {
                 'id':        r['id'],
@@ -1988,6 +2095,7 @@ class UserManager:
                 'approved':  bool(r['approved']),
                 'created':   r['created'],
                 'lastLogin': r['last_login'],
+                'isAntiLockout': bool(r['is_anti_lockout']),
             }
             for r in rows
         ]
@@ -2005,7 +2113,7 @@ class UserManager:
             return False
         row = conn.execute('SELECT role FROM users WHERE id=?', (user_id,)).fetchone()
         if row and row['role'] == 'admin' and self._has_active_admin():
-            self._remove_anti_lockout_accounts()
+            self._deactivate_anti_lockout_admin()
         return True
 
     def _has_active_admin(self):
@@ -2016,57 +2124,81 @@ class UserManager:
         ).fetchone()
         return row[0] > 0
 
-    def _check_and_create_anti_lockout(self):
-        """Create emergency anti-lockout admin if no active admins remain."""
-        if self._has_active_admin():
-            return None, None
+    def _check_anti_lockout(self):
+        """If no real admin can currently log in, activate the hidden admin.
 
-        self._remove_anti_lockout_accounts()
+        Skipped when a real admin is active, and skipped on a clean install (no
+        real admin ever created — the setup flow handles that and we must not
+        expose the hidden admin to an unconfigured panel)."""
+        if self._has_active_admin():
+            return
+        if self.needs_setup():
+            return
+        self._activate_anti_lockout_admin()
+
+    def _activate_anti_lockout_admin(self):
+        """Enable the hidden admin with a fresh 16-character password and log it to
+        the server log. Resets the account to its fixed identity and disables MFA.
+        Returns the plaintext password (also printed), or None if unavailable."""
+        conn = get_db()
+        user_id = self._get_anti_lockout_id()
+        if not user_id:
+            self._ensure_anti_lockout_admin_exists()
+            user_id = self._get_anti_lockout_id()
+            if not user_id:
+                return None
 
         import string
-        username = 'emergency_admin_' + ''.join(secrets.choice(string.digits) for _ in range(4))
-        password = ''.join(secrets.choice(string.ascii_letters + string.digits + string.punctuation) for _ in range(16))
+        alphabet = string.ascii_letters + string.digits
+        password = ''.join(secrets.choice(alphabet) for _ in range(16))
 
-        user_id = str(uuid.uuid4())[:8]
-        conn = get_db()
         conn.execute(
-            '''INSERT INTO users
-               (id, username, password, role, name, approved, created,
-                failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
-               VALUES (?, ?, ?, 'admin', 'Emergency Anti-Lockout Account', 1, ?, 0, 0, 1, '{}')''',
-            (user_id, username, generate_password_hash(password), datetime.now().isoformat())
+            '''UPDATE users
+               SET password=?, role='admin', name=?, email=?, approved=1,
+                   mfa_enabled=0, mfa_secret=NULL, mfa_recovery_code=NULL,
+                   account_disabled=0, failed_login_attempts=0, disabled_at=NULL
+               WHERE id=?''',
+            (generate_password_hash(password), self.ANTI_LOCKOUT_NAME,
+             self.ANTI_LOCKOUT_EMAIL, user_id)
         )
         conn.commit()
 
         print(f"""
 {'='*80}
-⚠️  ANTI-LOCKOUT ACCOUNT CREATED ⚠️
+⚠️  ANTI-LOCKOUT ADMIN ACTIVATED ⚠️
 {'='*80}
-All admin accounts have been disabled due to failed login attempts.
-An emergency admin account has been created:
+No active administrator account could be found, so the built-in emergency
+admin account has been ENABLED:
 
-  USERNAME: {username}
+  USERNAME: {self.ANTI_LOCKOUT_USERNAME}
   PASSWORD: {password}
 
 ⚠️  IMPORTANT:
-  1. Use these credentials to log in immediately
-  2. Re-enable or create a permanent admin account
-  3. This account will be automatically removed when a regular admin is active
-  4. Store these credentials securely - they will not be shown again
+  1. Log in with these credentials immediately.
+  2. Re-enable or create a permanent admin account.
+  3. This account is hidden and will be disabled again automatically once a
+     normal admin is active. MFA is never required for it.
+  4. This password is shown ONLY in this log line.
 {'='*80}
-""")
-        return username, password
+""", flush=True)
+        return password
 
-    def _remove_anti_lockout_accounts(self):
-        """Remove all anti-lockout accounts."""
+    def _deactivate_anti_lockout_admin(self):
+        """Re-hide (disable) the permanent hidden admin once a real admin is active.
+        Never deletes it. Only acts when a real active admin exists, so it can never
+        lock the operator out."""
+        if not self._has_active_admin():
+            return
         conn = get_db()
-        result = conn.execute('DELETE FROM users WHERE is_anti_lockout=1')
+        conn.execute(
+            'UPDATE users SET account_disabled=1, disabled_at=NULL WHERE is_anti_lockout=1'
+        )
         conn.commit()
-        if result.rowcount:
-            print(f"Removed {result.rowcount} anti-lockout account(s)")
 
     def enable_account(self, user_id):
         """Enable a disabled user account and reset failed attempts."""
+        if self._is_anti_lockout(user_id):
+            return False, "This account is managed by the system"
         conn = get_db()
         result = conn.execute(
             'UPDATE users SET account_disabled=0, failed_login_attempts=0, disabled_at=NULL WHERE id=?',
@@ -2076,11 +2208,13 @@ An emergency admin account has been created:
         if result.rowcount == 0:
             return False, "User not found"
         if self._has_active_admin():
-            self._remove_anti_lockout_accounts()
+            self._deactivate_anti_lockout_admin()
         return True, "Account enabled successfully"
 
     def update_user_role(self, user_id, role):
         """Update user role."""
+        if self._is_anti_lockout(user_id):
+            return False
         if role not in self.ROLES:
             return False
         conn = get_db()
@@ -2088,21 +2222,32 @@ An emergency admin account has been created:
         conn.commit()
         if result.rowcount == 0:
             return False
-        if role == 'admin' and self._has_active_admin():
-            self._remove_anti_lockout_accounts()
+        if role == 'admin':
+            self._deactivate_anti_lockout_admin()
+        else:
+            # Demotion may have removed the last active admin — fail over if so.
+            self._check_anti_lockout()
         return True
 
     def delete_user(self, user_id):
         """Delete a user."""
+        if self._is_anti_lockout(user_id):
+            return False
         conn = get_db()
         result = conn.execute('DELETE FROM users WHERE id=?', (user_id,))
         conn.commit()
-        return result.rowcount > 0
+        if result.rowcount == 0:
+            return False
+        # Deleting the last active admin should fail over to the hidden admin.
+        self._check_anti_lockout()
+        return True
 
     # ── Password management ───────────────────────────────────────────────────
 
     def change_password(self, user_id, old_password, new_password):
         """Change user password (requires current password)."""
+        if self._is_anti_lockout(user_id):
+            return False, "This account is managed by the system"
         row = get_db().execute('SELECT password FROM users WHERE id=?', (user_id,)).fetchone()
         if row is None:
             return False, "User not found"
@@ -2124,6 +2269,7 @@ An emergency admin account has been created:
 
     def reset_password(self, user_id, new_password):
         """Admin reset user password (no old password required)."""
+        if self._is_anti_lockout(user_id): return False
         if len(new_password) < 12: return False
         if not any(c.isupper() for c in new_password): return False
         if not any(c.islower() for c in new_password): return False
@@ -2138,6 +2284,10 @@ An emergency admin account has been created:
 
     def update_username(self, user_id, new_username):
         """Update user's username."""
+        if self._is_anti_lockout(user_id):
+            return False, "This account is managed by the system"
+        if new_username.lower() == self.ANTI_LOCKOUT_USERNAME:
+            return False, "That username is reserved"
         if len(new_username) < 3 or len(new_username) > 32:
             return False, "Username must be 3-32 characters"
         if not new_username.replace('_', '').replace('-', '').isalnum():
@@ -2156,6 +2306,8 @@ An emergency admin account has been created:
 
     def update_name(self, user_id, name):
         """Update user's display name."""
+        if self._is_anti_lockout(user_id):
+            return False, "This account is managed by the system"
         if len(name) > 100:
             return False, "Name must be 100 characters or less"
         conn = get_db()
@@ -2165,6 +2317,8 @@ An emergency admin account has been created:
 
     def update_email(self, user_id, email):
         """Update user's email address."""
+        if self._is_anti_lockout(user_id):
+            return False, "This account is managed by the system"
         if email and len(email) > 254:
             return False, "Email must be 254 characters or less"
         if email and '@' not in email:
@@ -2240,6 +2394,8 @@ An emergency admin account has been created:
 
     def enable_mfa(self, user_id, secret, recovery_code):
         """Enable MFA for user with hashed recovery code."""
+        if self._is_anti_lockout(user_id):
+            return False, "MFA cannot be enabled for this account"
         row = get_db().execute('SELECT id FROM users WHERE id=?', (user_id,)).fetchone()
         if row is None:
             return False, "User not found"
@@ -4017,6 +4173,567 @@ backup_scheduler = BackupScheduler()
 # Initialize task scheduler
 task_scheduler = TaskScheduler(server_manager, socketio)
 
+
+# ==================== Background Job Queue ====================
+
+class JobCancelled(Exception):
+    """Raised by a job handler (or its progress callback) when a job is cancelled."""
+    pass
+
+
+class JobManager:
+    """Unified background task queue for long-running operations.
+
+    Heavy operations (backups, restores, server deletion, JAR swaps, zip
+    downloads) submit a job here instead of blocking the HTTP request thread.
+    Jobs are persisted in the `jobs` table (so the task list and
+    history survive a restart), run in a bounded thread pool, and report live
+    progress over Socket.IO (push) plus the GET /api/jobs/<id> poll endpoint.
+
+    Concurrency model: a global ThreadPoolExecutor runs several jobs at once
+    across DIFFERENT servers, but a per-server lock serializes jobs that touch
+    the SAME server (so e.g. a backup and a delete can never overlap).
+    """
+
+    # Statuses considered "still active" (used for recovery + UI filtering)
+    ACTIVE_STATUSES = ('queued', 'running')
+
+    def __init__(self, socketio, server_manager, max_workers=4):
+        self.socketio = socketio
+        self.server_manager = server_manager
+        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='job')
+        self.handlers = {}                 # type -> handler(job_id, params, progress_cb, cancel_evt)
+        self._guard = threading.Lock()      # protects the dicts below
+        self._server_locks = {}             # server_id -> threading.Lock
+        self._cancel_flags = {}             # job_id -> threading.Event
+        self._futures = {}                  # job_id -> Future
+        self._last_pct = {}                 # job_id -> last emitted progress int (throttle)
+        # init_db() already flips interrupted rows to 'failed' on boot.
+
+    # ---- registration ----
+    def register(self, job_type, handler):
+        """Register a handler for a job type. handler(job_id, params, progress_cb, cancel_evt)."""
+        self.handlers[job_type] = handler
+
+    # ---- helpers ----
+    def _server_lock(self, server_id):
+        with self._guard:
+            lock = self._server_locks.get(server_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._server_locks[server_id] = lock
+            return lock
+
+    @staticmethod
+    def _row_to_dict(row):
+        if row is None:
+            return None
+        d = dict(row)
+        # camelCase + JSON-decode for the frontend
+        for key in ('params', 'result'):
+            if d.get(key):
+                try:
+                    d[key] = json.loads(d[key])
+                except (ValueError, TypeError):
+                    d[key] = None
+        return {
+            'id': d['id'],
+            'type': d['type'],
+            'serverId': d.get('server_id'),
+            'title': d['title'],
+            'status': d['status'],
+            'progress': d.get('progress', 0),
+            'message': d.get('message'),
+            'params': d.get('params'),
+            'result': d.get('result'),
+            'error': d.get('error'),
+            'createdBy': d.get('created_by'),
+            'created': d.get('created'),
+            'started': d.get('started'),
+            'finished': d.get('finished'),
+        }
+
+    def _emit(self, event, job):
+        """Emit a job event to the owner's user room and the admins room."""
+        try:
+            owner = job.get('createdBy')
+            if owner:
+                self.socketio.emit(event, {'job': job}, to=f'user_{owner}')
+            self.socketio.emit(event, {'job': job}, to='admins')
+        except Exception as e:
+            print(f"[JobManager] emit failed for {event}: {e}")
+
+    # ---- public read API ----
+    def get_job(self, job_id):
+        row = get_db().execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+        return self._row_to_dict(row)
+
+    def list_jobs(self, *, is_admin, user_id, owned_server_ids=None, limit=100):
+        """List jobs visible to a user. Admins see all; users see their own jobs
+        plus jobs for servers they own."""
+        if is_admin:
+            rows = get_db().execute(
+                'SELECT * FROM jobs ORDER BY created DESC LIMIT ?', (limit,)
+            ).fetchall()
+        else:
+            owned = list(owned_server_ids or [])
+            placeholders = ','.join('?' * len(owned)) if owned else ''
+            clause = 'created_by=?'
+            params = [user_id]
+            if owned:
+                clause += f' OR server_id IN ({placeholders})'
+                params.extend(owned)
+            rows = get_db().execute(
+                f'SELECT * FROM jobs WHERE {clause} ORDER BY created DESC LIMIT ?',
+                (*params, limit)
+            ).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    # ---- submission ----
+    def submit(self, job_type, title, params=None, created_by=None, server_id=None):
+        if job_type not in self.handlers:
+            raise ValueError(f'Unknown job type: {job_type}')
+        job_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO jobs
+               (id, type, server_id, title, status, progress, message, params,
+                result, error, created_by, created, started, finished)
+               VALUES (?, ?, ?, ?, 'queued', 0, ?, ?, NULL, NULL, ?, ?, NULL, NULL)''',
+            (job_id, job_type, server_id, title, 'Queued',
+             json.dumps(params or {}), created_by, now)
+        )
+        conn.commit()
+        with self._guard:
+            self._cancel_flags[job_id] = threading.Event()
+            self._last_pct[job_id] = 0
+        self._emit('job_queued', self.get_job(job_id))
+        future = self.executor.submit(self._run, job_id)
+        with self._guard:
+            self._futures[job_id] = future
+        return job_id
+
+    def cancel(self, job_id):
+        """Request cancellation. Returns True if the job was active."""
+        job = self.get_job(job_id)
+        if not job or job['status'] not in self.ACTIVE_STATUSES:
+            return False
+        with self._guard:
+            evt = self._cancel_flags.get(job_id)
+            future = self._futures.get(job_id)
+        if evt:
+            evt.set()
+        # If still queued (not yet started), try to cancel the future outright.
+        if future and future.cancel():
+            self._finish(job_id, 'cancelled', error='Cancelled before starting')
+        return True
+
+    # ---- internal lifecycle ----
+    def _set_running(self, job_id):
+        conn = get_db()
+        conn.execute(
+            "UPDATE jobs SET status='running', started=?, message=? WHERE id=?",
+            (datetime.now().isoformat(), 'Starting…', job_id)
+        )
+        conn.commit()
+        self._emit('job_started', self.get_job(job_id))
+
+    def progress(self, job_id, pct, message=None):
+        """Progress callback handed to handlers. Throttled to whole-percent steps.
+        Raises JobCancelled if cancellation was requested."""
+        with self._guard:
+            evt = self._cancel_flags.get(job_id)
+        if evt and evt.is_set():
+            raise JobCancelled()
+        pct = max(0, min(100, int(pct)))
+        with self._guard:
+            last = self._last_pct.get(job_id, -1)
+            changed = (pct != last)
+            self._last_pct[job_id] = pct
+        # Skip redundant writes when neither percent nor message advanced.
+        if not changed and message is None:
+            return
+        conn = get_db()
+        if message is not None:
+            conn.execute('UPDATE jobs SET progress=?, message=? WHERE id=?', (pct, message, job_id))
+        else:
+            conn.execute('UPDATE jobs SET progress=? WHERE id=?', (pct, job_id))
+        conn.commit()
+        self._emit('job_progress', self.get_job(job_id))
+
+    def _finish(self, job_id, status, *, result=None, error=None):
+        conn = get_db()
+        if status == 'completed':
+            final_pct = 100
+        else:
+            current = self.get_job(job_id)
+            final_pct = current.get('progress', 0) if current else 0
+        conn.execute(
+            'UPDATE jobs SET status=?, progress=?, result=?, error=?, finished=? WHERE id=?',
+            (status,
+             final_pct,
+             json.dumps(result) if result is not None else None,
+             error,
+             datetime.now().isoformat(),
+             job_id)
+        )
+        conn.commit()
+        event = {'completed': 'job_completed', 'failed': 'job_failed',
+                 'cancelled': 'job_cancelled'}.get(status, 'job_completed')
+        self._emit(event, self.get_job(job_id))
+        # Drop in-memory tracking for this job.
+        with self._guard:
+            self._cancel_flags.pop(job_id, None)
+            self._futures.pop(job_id, None)
+            self._last_pct.pop(job_id, None)
+
+    def _run(self, job_id):
+        job = self.get_job(job_id)
+        if not job:
+            return
+        with self._guard:
+            evt = self._cancel_flags.get(job_id)
+        # Cancelled while still queued.
+        if evt and evt.is_set():
+            self._finish(job_id, 'cancelled', error='Cancelled before starting')
+            return
+        handler = self.handlers.get(job['type'])
+        if handler is None:
+            self._finish(job_id, 'failed', error=f"No handler for job type '{job['type']}'")
+            return
+        server_id = job.get('serverId')
+        lock = self._server_lock(server_id) if server_id else None
+        if lock:
+            lock.acquire()
+        try:
+            # Re-check cancellation after possibly waiting on the server lock.
+            if evt and evt.is_set():
+                self._finish(job_id, 'cancelled', error='Cancelled before starting')
+                return
+            self._set_running(job_id)
+            params = job.get('params') or {}
+            progress_cb = lambda pct, message=None: self.progress(job_id, pct, message)
+            result = handler(job_id, params, progress_cb, evt)
+            self.progress(job_id, 100)
+            self._finish(job_id, 'completed', result=result if isinstance(result, dict) else None)
+        except JobCancelled:
+            self._finish(job_id, 'cancelled', error='Cancelled')
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self._finish(job_id, 'failed', error=str(e))
+        finally:
+            if lock:
+                lock.release()
+
+
+# Initialize job manager (handlers are registered below, after their functions
+# are defined). Singletons it depends on (socketio, server_manager) already exist.
+job_manager = JobManager(socketio, server_manager)
+
+
+# ---- Job handlers --------------------------------------------------------------
+# Each handler runs in a background worker thread with signature
+#   handler(job_id, params, progress, cancel) -> dict | None
+# `progress(pct, message=None)` reports progress and raises JobCancelled if the
+# job was cancelled; `cancel` is the threading.Event for cooperative checks inside
+# tight loops. Input validation lives in the routes (so the user gets an immediate
+# error); these handlers assume params are already validated. Globals they use
+# (verify_backup_file, safe_extractall, jar_manager, etc.) are resolved at call
+# time, so registering before those are defined is fine.
+
+def _job_backup(job_id, params, progress, cancel):
+    server_id = params['server_id']
+    compression_level = max(0, min(9, int(params.get('compression_level', 6))))
+    backup_type = str(params.get('backup_type', 'manual'))
+    server_path = server_manager.get_server_path(server_id)
+    if not server_path.exists():
+        raise Exception('Server path not found')
+
+    timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+    backup_dir = BACKUPS_DIR / server_id
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    instance = server_manager.servers.get(server_id)
+    was_running = instance is not None and instance.is_running()
+    if was_running:
+        progress(2, 'Stopping server…')
+        server_manager.send_command(server_id, "say [Backup] Server is being stopped for a backup...")
+        time.sleep(2)
+        server_manager.stop_server(server_id)
+        for _ in range(60):
+            time.sleep(1)
+            inst = server_manager.servers.get(server_id)
+            if inst is None or not inst.is_running():
+                break
+
+    backup_name = f'backup-{timestamp}.zip'
+    backup_path = backup_dir / backup_name
+    try:
+        all_files = [Path(root) / f for root, _, files in os.walk(server_path) for f in files]
+        total = len(all_files) or 1
+        progress(5, 'Archiving files…')
+        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
+                             compresslevel=compression_level) as zipf:
+            for i, fp in enumerate(all_files):
+                if cancel and cancel.is_set():
+                    raise JobCancelled()
+                zipf.write(fp, fp.relative_to(server_path))
+                if i % 50 == 0:
+                    progress(5 + int((i / total) * 80))  # 5–85%
+            zipf.writestr('backup_manifest.json',
+                          json.dumps({'type': 'full', 'created': timestamp,
+                                      'file_count': len(all_files)}, indent=2))
+
+        progress(88, 'Verifying…')
+        size = backup_path.stat().st_size
+        ok, checksum, _verify_err = verify_backup_file(backup_path)
+
+        ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
+        if not ext_ok:
+            print(f"[Backup] External upload warning: {ext_msg}")
+
+        backup_scheduler._log_backup_event(server_id, {
+            'type': backup_type, 'backup_name': backup_name, 'size': size,
+            'compression_level': compression_level, 'verified': ok,
+            'checksum': checksum, 'uploaded_to_external': ext_ok, 'success': True
+        })
+
+        if settings_manager.get_app_settings().get('autoDeleteExpiredBackups', False):
+            backup_scheduler._cleanup_old_backups(server_id)
+
+        if was_running:
+            progress(95, 'Restarting server…')
+            server_manager.start_server(server_id)
+
+        return {'backup': backup_name, 'size': size, 'verified': ok, 'checksum': checksum}
+
+    except JobCancelled:
+        try:
+            if backup_path.exists():
+                backup_path.unlink()
+        except Exception:
+            pass
+        if was_running:
+            try:
+                server_manager.start_server(server_id)
+            except Exception:
+                pass
+        raise
+    except Exception as e:
+        backup_scheduler._log_backup_event(server_id, {
+            'type': backup_type, 'backup_name': backup_name, 'success': False, 'error': str(e)
+        })
+        if was_running:
+            try:
+                server_manager.start_server(server_id)
+            except Exception:
+                pass
+        raise
+
+
+def _job_restore(job_id, params, progress, cancel):
+    server_id = params['server_id']
+    backup_name = params['backup_name']  # already sanitized in the route
+    backup_path = BACKUPS_DIR / server_id / backup_name
+    server_path = server_manager.get_server_path(server_id)
+
+    instance = server_manager.servers.get(server_id)
+    was_running = instance is not None and instance.is_running()
+    if was_running:
+        progress(5, 'Stopping server…')
+        server_manager.send_command(server_id, "say [Restore] Server is being stopped to restore a backup...")
+        time.sleep(2)
+        server_manager.stop_server(server_id)
+        for _ in range(60):
+            time.sleep(1)
+            inst = server_manager.servers.get(server_id)
+            if inst is None or not inst.is_running():
+                break
+
+    try:
+        progress(20, 'Clearing server directory…')
+        for item in server_path.iterdir():
+            if cancel and cancel.is_set():
+                raise JobCancelled()
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+
+        progress(45, 'Extracting backup…')
+        with zipfile.ZipFile(backup_path, 'r') as zipf:
+            safe_extractall(zipf, server_path)
+
+        if was_running:
+            progress(90, 'Restarting server…')
+            server_manager.start_server(server_id)
+
+        return {'backup': backup_name}
+    except Exception:
+        if was_running:
+            try:
+                server_manager.start_server(server_id)
+            except Exception:
+                pass
+        raise
+
+
+def _job_delete_server(job_id, params, progress, cancel):
+    server_id = params['server_id']
+    delete_files = bool(params.get('delete_files', False))
+    progress(10, 'Stopping server…')
+    # delete_server() stops the server, removes files (if requested), and the DB row.
+    # rmtree is not interruptible mid-call, so this job is best-effort cancellable.
+    progress(40, 'Removing files…' if delete_files else 'Removing configuration…')
+    ok = server_manager.delete_server(server_id, delete_files=delete_files)
+    if not ok:
+        raise Exception('Server not found')
+    return {'deleted': True}
+
+
+def _job_swap_jar(job_id, params, progress, cancel):
+    server_id = params['server_id']
+    server_type = params['server_type']
+    version = params['version']
+    has_existing_world = bool(params.get('has_existing_world', False))
+    executable = 'server.jar'
+
+    server_config = server_manager.get_server_config(server_id)
+    if not server_config:
+        raise Exception('Server not found')
+    server_path = Path(server_config['serverPath'])
+    jar_path = server_path / executable
+
+    # Mandatory safety backup before swapping the JAR when there is a world to protect.
+    if has_existing_world:
+        try:
+            progress(5, 'Creating safety backup…')
+            backup_dir = BACKUPS_DIR / server_id
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+            bk_name = f'pre-jar-update-{timestamp}.zip'
+            bk_path = backup_dir / bk_name
+            all_files = [Path(root) / f for root, _, files in os.walk(server_path) for f in files]
+            total = len(all_files) or 1
+            with zipfile.ZipFile(bk_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+                for i, fp in enumerate(all_files):
+                    if cancel and cancel.is_set():
+                        raise JobCancelled()
+                    zipf.write(fp, fp.relative_to(server_path))
+                    if i % 50 == 0:
+                        progress(5 + int((i / total) * 75))  # 5–80%
+                zipf.writestr('backup_manifest.json', json.dumps({
+                    'type': 'full', 'created': timestamp, 'file_count': len(all_files)
+                }))
+            bk_size = bk_path.stat().st_size
+            ok, checksum, _ = verify_backup_file(bk_path)
+            backup_scheduler._log_backup_event(server_id, {
+                'type': 'pre-jar-update', 'backup_name': bk_name, 'size': bk_size,
+                'is_incremental': False, 'compression_level': 6, 'verified': ok,
+                'checksum': checksum, 'success': True
+            })
+        except JobCancelled:
+            try:
+                if bk_path.exists():
+                    bk_path.unlink()
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            raise Exception(f'Failed to create mandatory pre-change backup: {str(e)}')
+
+    progress(85, 'Installing JAR…')
+    success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
+    if not success:
+        raise Exception(result)
+    server_manager.update_server(server_id, executable=executable,
+                                 serverType=server_type, version=version)
+    return {'path': result}
+
+
+def _job_zip_download(job_id, params, progress, cancel):
+    server_id = params['server_id']
+    requested_path = params.get('requested_path', '')
+    server_path = server_manager.get_server_path(server_id)
+    full_path = server_path / requested_path
+    if not full_path.exists() or not full_path.is_dir():
+        raise Exception('Path not found or not a directory')
+
+    folder_name = full_path.name or 'server'
+    download_name = f'{folder_name}.zip'
+    out_path = JOBS_TMP_DIR / f'{job_id}.zip'
+
+    all_files = [p for p in full_path.rglob('*') if p.is_file()]
+    total = len(all_files) or 1
+    progress(2, 'Archiving files…')
+    try:
+        with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for i, fp in enumerate(all_files):
+                if cancel and cancel.is_set():
+                    raise JobCancelled()
+                zf.write(str(fp), str(fp.relative_to(full_path)))
+                if i % 25 == 0:
+                    progress(2 + int((i / total) * 96))  # 2–98%
+    except JobCancelled:
+        try:
+            if out_path.exists():
+                out_path.unlink()
+        except Exception:
+            pass
+        raise
+
+    size = out_path.stat().st_size
+    return {'download': True, 'filename': download_name, 'size': size}
+
+
+job_manager.register('backup', _job_backup)
+job_manager.register('restore', _job_restore)
+job_manager.register('delete_server', _job_delete_server)
+job_manager.register('swap_jar', _job_swap_jar)
+job_manager.register('zip_download', _job_zip_download)
+
+
+def _cleanup_job_artifacts(max_age_hours=24):
+    """Remove prepared zip-download artifacts that are stale or orphaned.
+
+    A completed artifact is kept until it ages out (so the user has time to
+    download it); artifacts whose job no longer exists or failed/was cancelled
+    are removed immediately. In-progress (queued/running) artifacts are left
+    alone since they may be mid-write.
+    """
+    try:
+        now = time.time()
+        for f in JOBS_TMP_DIR.glob('*.zip'):
+            try:
+                job = job_manager.get_job(f.stem)
+                stale = (now - f.stat().st_mtime) > max_age_hours * 3600
+                if job is None:
+                    remove = True
+                elif job['status'] in ('failed', 'cancelled'):
+                    remove = True
+                elif job['status'] == 'completed':
+                    remove = stale
+                else:
+                    remove = False  # queued/running — leave it
+                if remove:
+                    f.unlink()
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[JobManager] artifact cleanup error: {e}")
+
+
+# Sweep prepared zip artifacts periodically, reusing the backup scheduler's
+# APScheduler instance. The first run fires shortly after boot to clear anything
+# left behind by a previous process.
+backup_scheduler.scheduler.add_job(
+    _cleanup_job_artifacts, 'interval', hours=6,
+    id='job_artifact_cleanup', replace_existing=True,
+    next_run_time=datetime.now() + timedelta(seconds=30)
+)
+
 # Initialize API Manager
 from api_manager import init_api_manager, api_v1
 init_api_manager(app)
@@ -4087,7 +4804,9 @@ def get_csrf_token():
 
 @app.route('/')
 def index():
-    """Serve main page - redirects to login if not authenticated"""
+    """Serve main page - redirects to first-run setup or login as needed."""
+    if user_manager.needs_setup():
+        return redirect('/setup')
     user_id, user = get_current_user()
     if not user:
         return redirect('/login.html')
@@ -4096,12 +4815,55 @@ def index():
 @app.route('/login.html')
 def login_page():
     """Serve login page"""
+    if user_manager.needs_setup():
+        return redirect('/setup')
     return send_from_directory('public', 'login.html')
+
+@app.route('/setup')
+@app.route('/setup.html')
+def setup_page():
+    """Serve the first-run setup page (create the initial admin account).
+
+    Only reachable on a clean install. Once an admin exists it redirects away so
+    the create-admin form can never be reached on a configured panel."""
+    if not user_manager.needs_setup():
+        return redirect('/')
+    return send_from_directory('public', 'setup.html')
 
 @app.route('/public.html')
 def public_page():
     """Serve public status page (no auth required)"""
     return send_from_directory('public', 'public.html')
+
+
+# ==================== First-Run Setup API ====================
+
+@app.route('/api/setup/status', methods=['GET'])
+@csrf.exempt
+def api_setup_status():
+    """Whether the panel still needs its first admin account created."""
+    return jsonify({'needsSetup': user_manager.needs_setup()})
+
+@app.route('/api/setup/admin', methods=['POST'])
+@csrf.exempt
+@limiter.limit("10 per hour")
+def api_setup_create_admin():
+    """Create the first admin account on a clean install. Hard-gated by
+    needs_setup() so it is inert once any real admin exists (and during a lockout,
+    where the hidden admin is the recovery path instead)."""
+    if not user_manager.needs_setup():
+        return jsonify({'error': 'Setup has already been completed'}), 403
+    data = request.get_json(silent=True) or {}
+    username = data.get('username', '')
+    password = data.get('password', '')
+    name = data.get('name', '')
+    email = data.get('email', '')
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    user_id, message = user_manager.create_first_admin(username, password, name, email)
+    if not user_id:
+        return jsonify({'error': message}), 400
+    return jsonify({'success': True, 'message': message})
 
 @app.route('/settings.html')
 @login_required
@@ -4174,12 +4936,13 @@ def api_login():
             'message': 'MFA verification required'
         })
     
-    # Check MFA policies
+    # Check MFA policies. The hidden anti-lockout admin is never subject to MFA
+    # enforcement — it is the recovery path and must always be usable.
     mfa_settings = settings_manager.get_settings().get('mfa', {})
     require_all = mfa_settings.get('requireMfaForAllUsers', False)
     require_admin = mfa_settings.get('requireMfaForAdmins', False)
-    
-    if require_all or (require_admin and result['role'] == 'admin'):
+
+    if not result.get('isAntiLockout', False) and (require_all or (require_admin and result['role'] == 'admin')):
         if not result.get('mfaEnabled', False):
             return jsonify({
                 'error': 'MFA is required for your account. Please contact an administrator.',
@@ -4499,8 +5262,11 @@ def api_mfa_verify_login():
 @app.route('/api/admin/users', methods=['GET'])
 @admin_required
 def api_get_users():
-    """Get all users (admin only)"""
-    return jsonify({'users': user_manager.get_all_users()})
+    """Get all users (admin only). The hidden anti-lockout admin is only included
+    when the requester IS that account."""
+    _uid, _user = get_current_user()
+    include_hidden = bool(_user and _user.get('isAntiLockout'))
+    return jsonify({'users': user_manager.get_all_users(include_anti_lockout=include_hidden)})
 
 @app.route('/api/admin/users', methods=['POST'])
 @admin_required
@@ -4850,7 +5616,9 @@ def create_server():
                     'error': f'Port {new_port} is already in use by server: {other_server_name}'
                 }), 400
     
-    # Create server locally
+    # Create server locally. This is fast (DB row + a local JAR copy + a couple of
+    # config files) and is invoked from several frontend wizards that expect a
+    # synchronous {serverId}, so it stays inline rather than going on the job queue.
     server_id = server_manager.create_server(
         name=name,
         server_path=server_path,
@@ -4863,11 +5631,11 @@ def create_server():
         category=category,
         port=server_properties.get('server-port')
     )
-    
+
     # Get server directory for creating files
     server_config = server_manager.get_server_config(server_id)
     server_dir = Path(server_config['serverPath'])
-    
+
     # Handle Bedrock server setup
     if category == 'bedrock':
         # server.properties is written by setup-bedrock after ZIP extraction
@@ -4875,37 +5643,37 @@ def create_server():
         if not approved:
             response['pendingApproval'] = True
             response['message'] = 'Server created and pending admin approval'
-        
+
         return jsonify(response)
-    
+
     # Copy JAR from serverexecutables if requested (Java servers only)
     if download_jar and server_type and version:
         jar_path = server_dir / executable
-        
+
         # Copy the local JAR file to the server directory
         success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
         if not success:
             return jsonify({
-                'success': True, 
+                'success': True,
                 'serverId': server_id,
                 'warning': f'Server created but JAR copy failed: {result}'
             })
-    
+
     # Create eula.txt for convenience
     eula_path = server_dir / 'eula.txt'
     eula_path.write_text('# By setting this to TRUE, you agree to the Minecraft EULA\neula=false\n')
-    
+
     # Create server.properties with the provided settings
     if server_properties:
         properties_path = server_dir / 'server.properties'
         properties_content = _generate_server_properties(server_properties, name)
         properties_path.write_text(properties_content, encoding='utf-8')
-    
+
     response = {'success': True, 'serverId': server_id}
     if not approved:
         response['pendingApproval'] = True
         response['message'] = 'Server created and pending admin approval'
-    
+
     return jsonify(response)
 
 
@@ -5325,48 +6093,18 @@ def download_server_jar(server_id):
                 )
             }), 400
 
-    # Always create a mandatory safety backup before swapping the JAR when there is an
-    # existing world to protect (skipped only for a fresh server with no version yet).
-    if has_existing_world:
-        try:
-            backup_dir = BACKUPS_DIR / server_id
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            bk_name = f'pre-jar-update-{timestamp}.zip'
-            bk_path = backup_dir / bk_name
-            with zipfile.ZipFile(bk_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
-                fc = 0
-                for root, dirs, files in os.walk(server_path):
-                    for file in files:
-                        fp = Path(root) / file
-                        zipf.write(fp, fp.relative_to(server_path))
-                        fc += 1
-                zipf.writestr('backup_manifest.json', json.dumps({
-                    'type': 'full', 'created': timestamp, 'file_count': fc
-                }))
-            bk_size = bk_path.stat().st_size
-            ok, checksum, _ = verify_backup_file(bk_path)
-            backup_scheduler._log_backup_event(server_id, {
-                'type': 'pre-jar-update',
-                'backup_name': bk_name,
-                'size': bk_size,
-                'is_incremental': False,
-                'compression_level': 6,
-                'verified': ok,
-                'checksum': checksum,
-                'success': True
-            })
-        except Exception as e:
-            return jsonify({'error': f'Failed to create mandatory pre-change backup: {str(e)}'}), 500
-
-    # Copy from local serverexecutables directory
-    success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
-
-    if success:
-        server_manager.update_server(server_id, executable=executable, serverType=server_type, version=version)
-        return jsonify({'success': True, 'path': result})
-    else:
-        return jsonify({'error': result}), 400
+    # The mandatory pre-change backup (when there is a world to protect) and the
+    # JAR copy run on the job queue so the request doesn't block on zipping a
+    # potentially multi-GB world.
+    server_name = server_config.get('name', server_id)
+    job_id = job_manager.submit(
+        'swap_jar', f'Install {server_type} {version}: {server_name}',
+        params={'server_id': server_id, 'server_type': server_type,
+                'version': version, 'has_existing_world': has_existing_world},
+        created_by=get_current_user()[0],
+        server_id=server_id
+    )
+    return jsonify({'started': True, 'jobId': job_id}), 202
 
 @app.route('/api/servers/<server_id>', methods=['GET'])
 @server_access_required
@@ -5416,13 +6154,21 @@ def update_server(server_id):
 @app.route('/api/servers/<server_id>', methods=['DELETE'])
 @server_access_required
 def delete_server(server_id):
-    """Delete a server configuration"""
+    """Queue server deletion on the unified job queue (rmtree can be slow)."""
     # Check if we should delete files too
     delete_files = request.args.get('deleteFiles', 'false').lower() == 'true'
-    
-    if server_manager.delete_server(server_id, delete_files=delete_files):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Server not found'}), 404
+
+    cfg = server_manager.get_server_config(server_id)
+    if not cfg:
+        return jsonify({'error': 'Server not found'}), 404
+    server_name = cfg.get('name', server_id)
+    job_id = job_manager.submit(
+        'delete_server', f'Delete: {server_name}',
+        params={'server_id': server_id, 'delete_files': delete_files},
+        created_by=get_current_user()[0],
+        server_id=server_id
+    )
+    return jsonify({'started': True, 'jobId': job_id}), 202
 
 @app.route('/api/servers/<server_id>/managed', methods=['GET'])
 @server_access_required
@@ -6742,11 +7488,13 @@ def download_server_file(server_id):
     return send_file(full_path, as_attachment=True)
 
 
-@app.route('/api/servers/<server_id>/files/zip', methods=['GET'])
+@app.route('/api/servers/<server_id>/files/zip', methods=['POST'])
 @server_access_required
 def zip_server_folder(server_id):
-    """Download a folder as a ZIP archive"""
-    requested_path = request.args.get('path', '')
+    """Queue a folder-archive job. The zip is built in the background; when the
+    job completes, download it from GET /api/jobs/<job_id>/download."""
+    data = request.get_json(silent=True) or {}
+    requested_path = data.get('path', request.args.get('path', ''))
     server_path = server_manager.get_server_path(server_id)
 
     if not is_safe_path(server_path, requested_path):
@@ -6761,22 +7509,15 @@ def zip_server_folder(server_id):
         return jsonify({'error': 'Path is not a directory'}), 400
 
     folder_name = full_path.name or 'server'
-    zip_filename = f"{folder_name}.zip"
-
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for file_path in full_path.rglob('*'):
-            if file_path.is_file():
-                arcname = file_path.relative_to(full_path)
-                zf.write(str(file_path), str(arcname))
-    zip_buffer.seek(0)
-
-    return send_file(
-        zip_buffer,
-        as_attachment=True,
-        download_name=zip_filename,
-        mimetype='application/zip'
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+    job_id = job_manager.submit(
+        'zip_download', f'Zip {folder_name}: {server_name}',
+        params={'server_id': server_id, 'requested_path': requested_path},
+        created_by=get_current_user()[0],
+        server_id=server_id
     )
+    return jsonify({'started': True, 'jobId': job_id}), 202
 
 @app.route('/api/servers/<server_id>/files/upload', methods=['POST'])
 @limiter.limit("10 per 15 minutes")
@@ -7555,11 +8296,11 @@ def list_backups(server_id):
 @limiter.limit("5 per 15 minutes")
 @server_access_required
 def create_backup(server_id):
-    """Start an async manual backup.
+    """Queue a manual backup on the unified job queue.
 
     Stops the server if running, creates the backup, then restarts the server.
-    Returns 202 immediately; completion is pushed via socket events:
-      backup_manual_completed / backup_manual_failed
+    Returns 202 with the job id; progress/completion are pushed via the job_*
+    socket events and visible in the Tasks panel.
     """
     server_path = server_manager.get_server_path(server_id)
 
@@ -7570,98 +8311,16 @@ def create_backup(server_id):
     compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
     backup_type = str(data.get('backupType', 'manual'))
 
-    def run_backup():
-        timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-        backup_dir = BACKUPS_DIR / server_id
-        backup_dir.mkdir(parents=True, exist_ok=True)
-
-        # Stop server if running
-        instance = server_manager.servers.get(server_id)
-        was_running = instance is not None and instance.is_running()
-        if was_running:
-            server_manager.send_command(server_id, "say [Backup] Server is being stopped for a manual backup...")
-            time.sleep(2)
-            server_manager.stop_server(server_id)
-            for _ in range(60):
-                time.sleep(1)
-                inst = server_manager.servers.get(server_id)
-                if inst is None or not inst.is_running():
-                    break
-
-        is_incremental = False
-        backup_name = f'backup-{timestamp}.zip'
-        backup_path = backup_dir / backup_name
-
-        try:
-            with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED,
-                                 compresslevel=compression_level) as zipf:
-                file_count = 0
-                for root, dirs, files in os.walk(server_path):
-                    for file in files:
-                        file_path = Path(root) / file
-                        arcname = file_path.relative_to(server_path)
-                        zipf.write(file_path, arcname)
-                        file_count += 1
-
-                manifest = {
-                    'type': 'full',
-                    'created': timestamp,
-                    'file_count': file_count
-                }
-                zipf.writestr('backup_manifest.json', json.dumps(manifest, indent=2))
-
-            size = backup_path.stat().st_size
-            ok, checksum, verify_err = verify_backup_file(backup_path)
-
-            ext_ok, ext_msg = upload_backup_to_external(backup_path, server_id, backup_name)
-            if not ext_ok:
-                print(f"[Backup] External upload warning: {ext_msg}")
-
-            backup_scheduler._log_backup_event(server_id, {
-                'type': backup_type,
-                'backup_name': backup_name,
-                'size': size,
-                'compression_level': compression_level,
-                'verified': ok,
-                'checksum': checksum,
-                'uploaded_to_external': ext_ok,
-                'success': True
-            })
-
-            # Apply global backup retention if auto-delete is enabled
-            if settings_manager.get_app_settings().get('autoDeleteExpiredBackups', False):
-                backup_scheduler._cleanup_old_backups(server_id)
-
-            if was_running:
-                server_manager.start_server(server_id)
-
-            socketio.emit('backup_manual_completed', {
-                'serverId': server_id,
-                'backup': backup_name,
-                'size': size,
-                'verified': ok,
-                'checksum': checksum
-            })
-
-        except Exception as e:
-            backup_scheduler._log_backup_event(server_id, {
-                'type': backup_type,
-                'backup_name': backup_name,
-                'success': False,
-                'error': str(e)
-            })
-            if was_running:
-                try:
-                    server_manager.start_server(server_id)
-                except Exception:
-                    pass
-            socketio.emit('backup_manual_failed', {
-                'serverId': server_id,
-                'error': str(e)
-            })
-
-    socketio.start_background_task(run_backup)
-    return jsonify({'started': True}), 202
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+    job_id = job_manager.submit(
+        'backup', f'Backup: {server_name}',
+        params={'server_id': server_id, 'compression_level': compression_level,
+                'backup_type': backup_type},
+        created_by=get_current_user()[0],
+        server_id=server_id
+    )
+    return jsonify({'started': True, 'jobId': job_id}), 202
 
 @app.route('/api/servers/<server_id>/backups/download', methods=['GET'])
 @server_access_required
@@ -7749,54 +8408,15 @@ def restore_backup(server_id):
     if not backup_path.exists():
         return jsonify({'error': 'Backup not found'}), 404
 
-    server_path = server_manager.get_server_path(server_id)
-
-    def run_restore():
-        instance = server_manager.servers.get(server_id)
-        was_running = instance is not None and instance.is_running()
-        if was_running:
-            server_manager.send_command(server_id, "say [Restore] Server is being stopped to restore a backup...")
-            time.sleep(2)
-            server_manager.stop_server(server_id)
-            for _ in range(60):
-                time.sleep(1)
-                inst = server_manager.servers.get(server_id)
-                if inst is None or not inst.is_running():
-                    break
-
-        try:
-            # Clear server directory
-            for item in server_path.iterdir():
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
-
-            # Extract backup (reject traversal/symlink members)
-            with zipfile.ZipFile(backup_path, 'r') as zipf:
-                safe_extractall(zipf, server_path)
-
-            if was_running:
-                server_manager.start_server(server_id)
-
-            socketio.emit('restore_completed', {
-                'serverId': server_id,
-                'backup': backup_name
-            })
-
-        except Exception as e:
-            if was_running:
-                try:
-                    server_manager.start_server(server_id)
-                except Exception:
-                    pass
-            socketio.emit('restore_failed', {
-                'serverId': server_id,
-                'error': str(e)
-            })
-
-    socketio.start_background_task(run_restore)
-    return jsonify({'started': True}), 202
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+    job_id = job_manager.submit(
+        'restore', f'Restore: {server_name}',
+        params={'server_id': server_id, 'backup_name': backup_name},
+        created_by=get_current_user()[0],
+        server_id=server_id
+    )
+    return jsonify({'started': True, 'jobId': job_id}), 202
 
 
 @app.route('/api/servers/<server_id>/backups/import', methods=['POST'])
@@ -10007,12 +10627,124 @@ def add_security_headers(response):
 
 # ==================== WebSocket Events ====================
 
+# ==================== Background Job Queue API ====================
+
+def can_access_job(job):
+    """A user may see a job if they are admin, created it, or own its server."""
+    user_id, user = get_current_user()
+    if not user:
+        return False
+    if user.get('role') == 'admin':
+        return True
+    if job.get('createdBy') == user_id:
+        return True
+    sid = job.get('serverId')
+    if sid and can_access_server(sid):
+        return True
+    return False
+
+
+@app.route('/api/jobs', methods=['GET'])
+@login_required
+def list_jobs_route():
+    """List background jobs visible to the current user (admins see all)."""
+    user_id, user = get_current_user()
+    is_admin = user.get('role') == 'admin'
+    owned_server_ids = []
+    if not is_admin:
+        owned_server_ids = [
+            r['id'] for r in get_db().execute(
+                'SELECT id FROM servers WHERE owner=?', (user_id,)
+            ).fetchall()
+        ]
+    jobs = job_manager.list_jobs(is_admin=is_admin, user_id=user_id,
+                                 owned_server_ids=owned_server_ids)
+    return jsonify({'jobs': jobs})
+
+
+@app.route('/api/jobs/<job_id>', methods=['GET'])
+@login_required
+def get_job_route(job_id):
+    """Poll a single job's status (Socket.IO is the primary push channel)."""
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if not can_access_job(job):
+        return jsonify({'error': 'Access denied'}), 403
+    return jsonify({'job': job})
+
+
+@app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
+@login_required
+def cancel_job_route(job_id):
+    """Request cooperative cancellation of an active job."""
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if not can_access_job(job):
+        return jsonify({'error': 'Access denied'}), 403
+    cancelled = job_manager.cancel(job_id)
+    if not cancelled:
+        return jsonify({'error': 'Job is not active'}), 400
+    return jsonify({'success': True})
+
+
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+@login_required
+def dismiss_job_route(job_id):
+    """Remove a finished job from the list (and delete its temp artifact)."""
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if not can_access_job(job):
+        return jsonify({'error': 'Access denied'}), 403
+    if job['status'] in JobManager.ACTIVE_STATUSES:
+        return jsonify({'error': 'Cannot dismiss an active job; cancel it first'}), 400
+    # Clean up any prepared zip artifact.
+    tmp = JOBS_TMP_DIR / f'{job_id}.zip'
+    try:
+        if tmp.exists():
+            tmp.unlink()
+    except Exception:
+        pass
+    conn = get_db()
+    conn.execute('DELETE FROM jobs WHERE id=?', (job_id,))
+    conn.commit()
+    return jsonify({'success': True})
+
+
+@app.route('/api/jobs/<job_id>/download', methods=['GET'])
+@login_required
+def download_job_route(job_id):
+    """Download the artifact produced by a completed zip_download job."""
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    if not can_access_job(job):
+        return jsonify({'error': 'Access denied'}), 403
+    if job['type'] != 'zip_download' or job['status'] != 'completed':
+        return jsonify({'error': 'No downloadable artifact for this job'}), 400
+    tmp = JOBS_TMP_DIR / f'{job_id}.zip'
+    if not tmp.exists():
+        return jsonify({'error': 'Artifact no longer available'}), 404
+    download_name = (job.get('result') or {}).get('filename', 'download.zip')
+    return send_file(tmp, as_attachment=True, download_name=download_name,
+                     mimetype='application/zip')
+
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
     # Check if user is authenticated
     if 'user_id' not in session:
         return False  # Reject connection
+    # Join per-user (and, for admins, an 'admins') room so background job events
+    # can be pushed only to the relevant clients.
+    user_id = session['user_id']
+    join_room(f'user_{user_id}')
+    user = user_manager.get_user(user_id)
+    if user and user.get('role') == 'admin':
+        join_room('admins')
     print(f'Client connected to WebSocket (user: {session.get("username", "unknown")})')
 
 @socketio.on('disconnect')
@@ -10196,8 +10928,9 @@ def run_server(host='0.0.0.0', port=3000):
         print('  ⚠️  CORS is open to all origins. Set CORS_ORIGINS in .env for production.')
     if not _cookie_secure:
         print('  ⚠️  SESSION_COOKIE_SECURE is False. Set SESSION_COOKIE_SECURE=true in .env when using HTTPS.')
-    print('⚠️  WARNING: Default admin credentials are admin/admin')
-    print('            Change immediately after first login!')
+    if user_manager.needs_setup():
+        print('ℹ️  No admin account configured yet.')
+        print('    Open the panel in a browser to create the first admin (first-run setup).')
     if not _is_dev:
         print()
         print('  ℹ️  The built-in server is suitable for production with moderate')

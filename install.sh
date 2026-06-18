@@ -631,7 +631,12 @@ show_completion() {
         echo "  http://localhost:${SERVER_PORT:-3000}"
     fi
     echo ""
-    
+
+    echo "First-run setup:"
+    echo "  Open the web interface in a browser — you'll be prompted to create"
+    echo "  the administrator account. No default password is created."
+    echo ""
+
     echo "Service management commands:"
     echo "  Start:   sudo systemctl start mservercontroller"
     echo "  Stop:    sudo systemctl stop mservercontroller"
