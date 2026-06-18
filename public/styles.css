@@ -30,8 +30,9 @@
   flex-direction: column;
 }
 
-/* When right panel is hidden, left expands */
-.unified-form-columns:has(.unified-form-right[style*="display: none"]) .unified-form-left {
+/* Single-column mode (no visible Server Properties panel — import, manual,
+   edit) lets the form column expand so all such forms size fields identically. */
+.unified-form-columns:not(:has(.unified-form-right:not([style*="display: none"]))) .unified-form-left {
   max-width: 600px;
 }
 

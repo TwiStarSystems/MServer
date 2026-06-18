@@ -755,6 +755,9 @@
                   <input type="text" id="u-import-executable" class="form-control" placeholder="e.g. paper-1.21.4.jar — leave blank to auto-detect" autocomplete="off">
                   <small>The JAR file name inside the ZIP to use as the server. It will be renamed to <code>server.jar</code>.</small>
                 </div>
+                <div class="import-props-hint">
+                  <small>💡 Server settings (port, game rules, etc.) are read from the imported server's <code>managed.conf</code> when present, or default and can be changed after import. Set the <strong>Category</strong> if the import has no <code>managed.conf</code> (e.g. a manual or Bedrock server).</small>
+                </div>
               </div>
 
               <!-- Import World field -->
@@ -891,13 +894,16 @@
           </div>
 
           <div class="modal-footer">
-            <button type="button" class="btn" onclick="backToCreationType()">← Back</button>
+            <button type="button" class="btn back-btn" onclick="backToCreationType()">← Back</button>
             <button type="submit" class="btn btn-success" id="u-submit-btn">Create Server</button>
+            <button type="button" class="btn" onclick="closeServerModal()">Cancel</button>
           </div>
         </form>
 
         <!-- Manual Configuration Form (Edit mode uses this too) -->
-        <form id="manual-server-form" class="server-form" style="display: none;" onsubmit="saveServer(event)">
+        <form id="manual-server-form" class="server-form unified-server-form" style="display: none;" onsubmit="saveServer(event)">
+          <div class="unified-form-columns">
+            <div class="unified-form-left">
           <div class="form-group">
             <label for="input-name">Server Name:</label>
             <input type="text" id="input-name" class="form-control" placeholder="My Minecraft Server" required autocomplete="off">
@@ -977,7 +983,9 @@
             </label>
             <small>Automatically start this server 15 seconds after MServerController starts (e.g. after a host reboot)</small>
           </div>
-          
+            </div>
+          </div>
+
           <div class="modal-footer">
             <button type="button" class="btn back-btn" onclick="backToCreationType()">← Back</button>
             <button type="submit" class="btn btn-success">Save</button>

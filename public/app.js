@@ -1726,26 +1726,26 @@ function selectCreationType(type) {
     document.getElementById('u-ram-group').style.display = 'block';
     document.getElementById('u-upload-jar-group').style.display = 'block';
   } else if (type === 'import') {
-    // Import existing server: fields can be blank (managed.conf fills them)
+    // Import existing server: managed.conf supplies most settings, so the form
+    // is trimmed to the essentials (ZIP, executable, category, memory).
     nameInput.removeAttribute('required');
     nameInput.placeholder = 'Leave blank to use from managed.conf';
     submitBtn.textContent = 'Import Server';
     importFields.style.display = 'block';
     worldFileGroup.style.display = 'none';
-    importPropsHint.style.display = 'block';
+    importPropsHint.style.display = 'none';
     if (bedrockOption) bedrockOption.style.display = '';
     // Category/engine/version are optional — managed.conf provides them
     document.getElementById('u-category').removeAttribute('required');
     document.getElementById('u-engine').removeAttribute('required');
     document.getElementById('u-version').removeAttribute('required');
-    // Show full form immediately
-    document.getElementById('u-server-props').style.display = 'flex';
+    // Server properties, the version picker and "upload your own JAR" are not
+    // used on import (settings come from managed.conf / the ZIP, and are
+    // editable post-import) — hide them to keep the import form minimal.
+    document.getElementById('u-server-props').style.display = 'none';
+    document.getElementById('u-version-group').style.display = 'none';
+    document.getElementById('u-upload-jar-group').style.display = 'none';
     document.getElementById('u-ram-group').style.display = 'block';
-    // Clear defaults so blank = use managed.conf
-    document.getElementById('u-server-port').value = '';
-    document.getElementById('u-server-port').placeholder = 'From managed.conf';
-    document.getElementById('u-max-players').value = '';
-    document.getElementById('u-max-players').placeholder = 'From managed.conf';
   } else if (type === 'import-world') {
     nameInput.setAttribute('required', '');
     submitBtn.textContent = 'Create Server & Import World';
@@ -1791,7 +1791,8 @@ function onUnifiedCategoryChange() {
   const versionSelect = document.getElementById('u-version');
   const categoryDesc = document.getElementById('u-category-desc');
   const propsPanel = document.getElementById('u-server-props');
-  
+  const isImport = currentCreationType === 'import';
+
   uVersionAvailability = {};
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
@@ -1812,32 +1813,45 @@ function onUnifiedCategoryChange() {
 
   if (category === 'unmodded') {
     engineGroup.style.display = 'none';
-    versionGroup.style.display = 'block';
-    if (currentCreationType !== 'import') versionSelect.setAttribute('required', '');
     ramGroup.style.display = 'block';
-    uploadJarGroup.style.display = 'block';
     categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
-    if (pvpOption) pvpOption.style.display = '';
-    if (hardcoreOption) hardcoreOption.style.display = '';
     if (bedrockStatus) bedrockStatus.style.display = 'none';
-    if (jarStatus) jarStatus.style.display = '';
-    document.getElementById('u-server-port').value = document.getElementById('u-server-port').value || '25565';
-    loadUnifiedVersionsForEngine('vanilla');
+    if (isImport) {
+      // Import has its JAR in the ZIP — no version download / JAR upload needed.
+      versionGroup.style.display = 'none';
+      versionSelect.removeAttribute('required');
+      uploadJarGroup.style.display = 'none';
+    } else {
+      versionGroup.style.display = 'block';
+      versionSelect.setAttribute('required', '');
+      uploadJarGroup.style.display = 'block';
+      if (pvpOption) pvpOption.style.display = '';
+      if (hardcoreOption) hardcoreOption.style.display = '';
+      if (jarStatus) jarStatus.style.display = '';
+      document.getElementById('u-server-port').value = document.getElementById('u-server-port').value || '25565';
+      loadUnifiedVersionsForEngine('vanilla');
+    }
   } else if (category === 'modded') {
     engineGroup.style.display = 'block';
-    if (currentCreationType !== 'import') engineSelect.setAttribute('required', '');
     versionGroup.style.display = 'none';
     versionSelect.removeAttribute('required');
     ramGroup.style.display = 'block';
-    uploadJarGroup.style.display = 'block';
     categoryDesc.textContent = 'Java Edition server with plugin/mod support';
-    if (pvpOption) pvpOption.style.display = '';
-    if (hardcoreOption) hardcoreOption.style.display = '';
     if (bedrockStatus) bedrockStatus.style.display = 'none';
-    if (jarStatus) jarStatus.style.display = '';
-    engineSelect.value = '';
-    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
-    versionSelect.disabled = true;
+    if (isImport) {
+      // Engine is still used to label the import; version/JAR come from the ZIP.
+      engineSelect.removeAttribute('required');
+      uploadJarGroup.style.display = 'none';
+    } else {
+      engineSelect.setAttribute('required', '');
+      uploadJarGroup.style.display = 'block';
+      if (pvpOption) pvpOption.style.display = '';
+      if (hardcoreOption) hardcoreOption.style.display = '';
+      if (jarStatus) jarStatus.style.display = '';
+      engineSelect.value = '';
+      versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
+      versionSelect.disabled = true;
+    }
   } else if (category === 'bedrock') {
     engineGroup.style.display = 'none';
     versionGroup.style.display = 'none';
@@ -1851,8 +1865,8 @@ function onUnifiedCategoryChange() {
     uploadJarGroup.style.display = 'none';
     document.getElementById('u-server-port').value = '19132';
     document.getElementById('u-max-players').value = document.getElementById('u-max-players').value || '10';
-    // Show props for bedrock since no version step
-    propsPanel.style.display = 'flex';
+    // Show props for bedrock since no version step (import reads them from managed.conf)
+    if (!isImport) propsPanel.style.display = 'flex';
   }
   
   checkUnifiedFormReady();
@@ -2554,17 +2568,10 @@ async function importServer(e) {
     if (category) formData.append('category', category);
     if (engine) formData.append('engine', engine);
     if (port) formData.append('port', port);
-    
-    // Pass optional server property overrides
-    const maxPlayers = document.getElementById('u-max-players').value.trim();
-    const gamemode = document.getElementById('u-gamemode').value;
-    const difficulty = document.getElementById('u-difficulty').value;
-    const levelSeed = document.getElementById('u-level-seed').value.trim();
-    if (maxPlayers) formData.append('maxPlayers', maxPlayers);
-    if (gamemode) formData.append('gamemode', gamemode);
-    if (difficulty) formData.append('difficulty', difficulty);
-    if (levelSeed) formData.append('levelSeed', levelSeed);
-    
+    // Note: maxPlayers/gamemode/difficulty/seed/pvp/etc. are intentionally not
+    // sent on import — the import route ignores them; settings come from the
+    // server's managed.conf / server.properties and are edited post-import.
+
     const response = await fetch('/api/servers/import', {
       method: 'POST',
       headers: window.csrfToken ? { 'X-CSRF-Token': window.csrfToken } : {},
