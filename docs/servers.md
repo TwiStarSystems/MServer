@@ -1,10 +1,14 @@
-# App Server:
+# Deploy/Debuging Servers info
+
+*connection methods* SSH (Secure Shell) is used for remote access to the servers. You can use an SSH client like PuTTY (for Windows) or the terminal (for Linux/Mac) to connect to the servers using the provided credentials.
+
+## App Server:
 host: 172.16.5.2
 port: 22
 username: root
-password: (PASSWORD provided when prompted)
+password: 123QWEasdZXC!@#
 
-# Nginx Reverse Proxy:
+## Nginx Reverse Proxy:
 host: 172.16.6.50
 port: 22
 username: twistar
