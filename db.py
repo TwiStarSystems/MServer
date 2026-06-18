@@ -45,14 +45,6 @@ def get_db() -> sqlite3.Connection:
     return _local.conn
 
 
-def close_db():
-    """Close the current thread's connection (call at thread teardown if needed)."""
-    conn = getattr(_local, 'conn', None)
-    if conn:
-        conn.close()
-        _local.conn = None
-
-
 # ── Schema DDL ────────────────────────────────────────────────────────────────
 _SCHEMA = """
 -- Schema version tracking

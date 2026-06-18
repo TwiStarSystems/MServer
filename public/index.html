@@ -1743,39 +1743,6 @@
       </div>
     </div>
     
-    <!-- MFA Verification Modal (for login) -->
-    <div id="mfa-verify-modal" class="modal" style="display: none;">
-      <div class="modal-content modal-small">
-        <div class="modal-header">
-          <h2>🔐 Two-Factor Authentication</h2>
-        </div>
-        <div class="modal-body">
-          <p class="mfa-info">Enter the 6-digit code from your authenticator app.</p>
-          
-          <div class="form-group">
-            <label for="mfa-login-code">Verification Code</label>
-            <input type="text" id="mfa-login-code" class="form-control" placeholder="123456" maxlength="6" pattern="[0-9]{6}" autofocus>
-          </div>
-          
-          <div class="mfa-recovery-option">
-            <a href="#" onclick="showRecoveryCodeInput(); return false;">Lost your authenticator? Use recovery code</a>
-          </div>
-          
-          <div id="mfa-recovery-input" style="display: none;">
-            <div class="form-group">
-              <label for="mfa-recovery-input-code">Recovery Code</label>
-              <input type="text" id="mfa-recovery-input-code" class="form-control" placeholder="XXXXXXXX-XXXXXXXX-XXXXXXXX">
-              <small class="form-hint">Using your recovery code will disable MFA on your account.</small>
-            </div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-primary" onclick="verifyMFALogin()">Verify</button>
-          <button class="btn" onclick="cancelMFALogin()">Cancel</button>
-        </div>
-      </div>
-    </div>
-    
     <!-- Footer -->
     <footer id="app-footer" class="app-footer">
       Made By TwiStarSystems © All Rights Reserved

@@ -266,48 +266,6 @@ def get_current_version():
     return ('unknown', 'unknown')
 
 
-def get_remote_version_file():
-    """
-    Fetch the version file from the remote repository.
-    Returns version string or None if unable to fetch.
-    """
-    try:
-        # Fetch latest from remote
-        subprocess.run(
-            ['git', 'fetch', 'origin', 'main'],
-            cwd=BASE_DIR,
-            capture_output=True,
-            timeout=10
-        )
-
-        # Get version file content from origin/main
-        result = subprocess.run(
-            ['git', 'show', 'origin/main:version'],
-            cwd=BASE_DIR,
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-
-        if result.returncode == 0:
-            content = result.stdout.strip()
-
-            # Parse content (supports both formats)
-            if '=' in content:
-                parts = content.split('=', 1)
-                if len(parts) == 2:
-                    return parts[1].strip()
-
-            # Plain version format
-            if all(c.isdigit() or c == '.' for c in content):
-                return content
-
-        return None
-    except Exception as e:
-        print(f"[Version] Error fetching remote version: {e}")
-        return None
-
-
 # ==================== Settings Manager ====================
 
 class SettingsManager:
@@ -785,47 +743,6 @@ class EmailService:
 
     # ---- Legacy direct-send methods (kept for backwards compatibility) ----
 
-    def send_backup_notification(self, to_email, server_name, backup_name, success=True, error_message=None):
-        """Send backup completion notification"""
-        site_title = self.settings_manager.get_branding().get('siteTitle', 'MServerController')
-        
-        if success:
-            subject = f"[{site_title}] Backup Complete: {server_name}"
-            html_content = f"""
-            <html>
-            <body style="font-family: Arial, sans-serif; background-color: #1a1a2e; color: #e0e0e0; padding: 20px;">
-                <div style="max-width: 600px; margin: 0 auto; background-color: #16213e; border-radius: 8px; padding: 30px;">
-                    <h2 style="color: #10b981; margin-top: 0;">✅ Backup Completed Successfully</h2>
-                    <p style="margin: 10px 0;"><strong>Server:</strong> {server_name}</p>
-                    <p style="margin: 10px 0;"><strong>Backup Name:</strong> {backup_name}</p>
-                    <p style="margin: 10px 0;"><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    <hr style="border: 1px solid #333; margin: 20px 0;">
-                    <p style="color: #888; font-size: 12px;">This is an automated notification from {site_title}.</p>
-                </div>
-            </body>
-            </html>
-            """
-            text_content = f"Backup Completed Successfully\nServer: {server_name}\nBackup: {backup_name}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        else:
-            subject = f"[{site_title}] Backup Failed: {server_name}"
-            html_content = f"""
-            <html>
-            <body style="font-family: Arial, sans-serif; background-color: #1a1a2e; color: #e0e0e0; padding: 20px;">
-                <div style="max-width: 600px; margin: 0 auto; background-color: #16213e; border-radius: 8px; padding: 30px;">
-                    <h2 style="color: #ef4444; margin-top: 0;">❌ Backup Failed</h2>
-                    <p style="margin: 10px 0;"><strong>Server:</strong> {server_name}</p>
-                    <p style="margin: 10px 0;"><strong>Error:</strong> {error_message or 'Unknown error'}</p>
-                    <p style="margin: 10px 0;"><strong>Time:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                    <hr style="border: 1px solid #333; margin: 20px 0;">
-                    <p style="color: #888; font-size: 12px;">This is an automated notification from {site_title}.</p>
-                </div>
-            </body>
-            </html>
-            """
-            text_content = f"Backup Failed\nServer: {server_name}\nError: {error_message or 'Unknown error'}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        return self.send_email(to_email, subject, html_content, text_content)
-    
     def send_test_email(self, to_email):
         """Send a test email to verify SMTP configuration"""
         site_title = self.settings_manager.get_branding().get('siteTitle', 'MServerController')
@@ -1421,21 +1338,6 @@ class BackupScheduler:
             for r in rows
         ]
 
-    def _get_last_backup_time(self, server_id):
-        """Return datetime of the most recent successful backup, or None."""
-        row = get_db().execute(
-            '''SELECT timestamp FROM backup_events
-               WHERE server_id=? AND success=1
-               ORDER BY timestamp DESC LIMIT 1''',
-            (server_id,)
-        ).fetchone()
-        if row:
-            try:
-                return datetime.fromisoformat(row['timestamp'])
-            except Exception:
-                pass
-        return None
-
     # ── Backup retention ──────────────────────────────────────────────────────
 
     def _cleanup_old_backups(self, server_id, max_backups=None):
@@ -1897,16 +1799,22 @@ class UserManager:
         count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
         if count == 0:
             admin_id = str(uuid.uuid4())[:8]
+            # Generate a random one-time password instead of a well-known default.
+            default_pw = secrets.token_urlsafe(12)
             conn.execute(
                 '''INSERT INTO users
                    (id, username, password, role, name, email, approved, created, is_anti_lockout,
                     notification_prefs)
                    VALUES (?, ?, ?, 'admin', '', 'admin@example.com', 1, ?, 0, '{}')''',
-                (admin_id, 'admin', generate_password_hash('admin'), datetime.now().isoformat())
+                (admin_id, 'admin', generate_password_hash(default_pw), datetime.now().isoformat())
             )
             conn.commit()
-            print("Default admin created - Username: admin, Password: admin")
-            print("WARNING: Change the default password immediately!")
+            print("=" * 60)
+            print("Default admin account created")
+            print(f"  Username: admin")
+            print(f"  Password: {default_pw}")
+            print("This password is shown ONLY ONCE. Log in and change it now.")
+            print("=" * 60)
 
     # ── Authentication ────────────────────────────────────────────────────────
 
@@ -2065,15 +1973,6 @@ class UserManager:
             'created':   row['created'],
             'lastLogin': row['last_login'],
         }
-
-    def get_user_by_username(self, username):
-        """Get (user_id, user_dict) by username (case-insensitive)."""
-        row = get_db().execute(
-            'SELECT * FROM users WHERE username=? COLLATE NOCASE', (username,)
-        ).fetchone()
-        if row is None:
-            return None, None
-        return row['id'], self._row_to_dict(row)
 
     def get_all_users(self):
         """Get all users as safe dicts (for admin panel)."""
@@ -2761,109 +2660,6 @@ class JarVersionManager:
             return True, str(dest_path)
         except Exception as e:
             return False, f'Failed to copy JAR: {str(e)}'
-    
-    def _get_paper_download_url(self, version):
-        """Get Paper download URL from API"""
-        try:
-            # Get latest build for version
-            api_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}"
-            response = requests.get(api_url, timeout=10)
-            if response.status_code != 200:
-                return None
-            
-            data = response.json()
-            builds = data.get('builds', [])
-            if not builds:
-                return None
-            
-            latest_build = max(builds)
-            
-            # Get download URL for latest build
-            build_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/{latest_build}"
-            build_response = requests.get(build_url, timeout=10)
-            if build_response.status_code != 200:
-                return None
-            
-            build_data = build_response.json()
-            downloads = build_data.get('downloads', {})
-            application = downloads.get('application', {})
-            jar_name = application.get('name')
-            
-            if jar_name:
-                return f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/{latest_build}/downloads/{jar_name}"
-            return None
-        except Exception as e:
-            print(f"Error fetching Paper URL: {e}")
-            return None
-    
-    def _get_purpur_download_url(self, version):
-        """Get Purpur download URL from API"""
-        try:
-            # Get latest build for version
-            api_url = f"https://api.purpurmc.org/v2/purpur/{version}"
-            response = requests.get(api_url, timeout=10)
-            if response.status_code != 200:
-                return None
-            
-            data = response.json()
-            builds = data.get('builds', {})
-            latest = builds.get('latest')
-            
-            if latest:
-                return f"https://api.purpurmc.org/v2/purpur/{version}/{latest}/download"
-            return None
-        except Exception as e:
-            print(f"Error fetching Purpur URL: {e}")
-            return None
-    
-    def get_download_url(self, server_type, version):
-        """Get download URL for a specific server type and version"""
-        if server_type not in self.jar_urls:
-            return None
-        
-        if version not in self.jar_urls[server_type]:
-            return None
-        
-        url = self.jar_urls[server_type][version]
-        
-        # Handle API-based downloads
-        if url == 'API':
-            if server_type == 'paper':
-                return self._get_paper_download_url(version)
-            elif server_type == 'purpur':
-                return self._get_purpur_download_url(version)
-        
-        return url
-    
-    def download_jar(self, server_type, version, dest_path, progress_callback=None):
-        """Download a server JAR file"""
-        url = self.get_download_url(server_type, version)
-        if not url:
-            return False, "Download URL not found"
-        
-        try:
-            response = requests.get(url, stream=True, timeout=300)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            
-            dest_path = Path(dest_path)
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(dest_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_callback and total_size:
-                            progress_callback(downloaded, total_size)
-            
-            return True, str(dest_path)
-        except requests.RequestException as e:
-            return False, f"Download failed: {str(e)}"
-        except Exception as e:
-            return False, f"Error: {str(e)}"
 
 
 # Initialize JAR manager
@@ -3074,10 +2870,6 @@ class NBTEditor:
         elif tag_type == self.TAG_LONG_ARRAY:
             writer.write(struct.pack('>i', len(value)))
             writer.write(struct.pack(f'>{len(value)}q', *value))
-    
-    def to_json(self, nbt_data):
-        """Convert NBT data to JSON-serializable format"""
-        return json.dumps(nbt_data, indent=2)
     
     def to_dict(self, nbt_data):
         """Convert NBT tree structure to a simple Python dict"""
@@ -3517,18 +3309,6 @@ class ServerManager:
                 missing_fields.append(field)
         
         return len(missing_fields) == 0, missing_fields
-    
-    def update_managed_conf_field(self, server_id, field, value):
-        """Update a single field in managed.conf"""
-        server_config = self.get_server_config(server_id)
-        if not server_config:
-            return False, "Server not found"
-        
-        server_dir = Path(server_config.get('serverPath', ''))
-        config = self._read_managed_conf(server_dir)
-        config[field] = value
-        self._write_managed_conf(server_dir, config)
-        return True, f"{field} updated"
     
     def is_managed(self, server_id):
         """Check if a server has a managed.conf file"""
@@ -4250,9 +4030,48 @@ def is_safe_path(base_path, requested_path):
     try:
         base = Path(base_path).resolve()
         full = (base / requested_path).resolve()
-        return str(full).startswith(str(base))
+        # Proper containment check (avoids the str.startswith prefix bug where
+        # e.g. base "/srv/foo" would wrongly accept "/srv/foobar").
+        return full == base or base in full.parents
     except Exception:
         return False
+
+
+def is_server_path_allowed(server_path):
+    """Ensure a server's base directory stays within SERVERS_DIR.
+
+    The per-server file routes trust the stored serverPath as the base for
+    is_safe_path(). If a user could set serverPath to an arbitrary location
+    (e.g. "/"), every file read/write/delete route would operate against the
+    whole filesystem. Constrain all server directories to live under SERVERS_DIR.
+    """
+    try:
+        base = SERVERS_DIR.resolve()
+        full = Path(server_path).resolve()
+        return full == base or base in full.parents
+    except Exception:
+        return False
+
+
+def safe_extractall(zipf, dest_dir):
+    """Extract a zip archive, rejecting path-traversal and symlink members.
+
+    zipfile.extractall() sanitizes ".."/absolute names but still happily writes
+    symlink members, which a crafted archive can use to escape dest_dir on a
+    follow-up write. Validate every member before extracting.
+    """
+    dest = Path(dest_dir).resolve()
+    for info in zipf.infolist():
+        name = info.filename
+        if name.startswith('/') or '..' in Path(name).parts:
+            raise ValueError(f'Unsafe path in archive: {name}')
+        # Reject symlink members (S_IFLNK == 0o120000 in the high 16 bits).
+        if (info.external_attr >> 16) & 0o170000 == 0o120000:
+            raise ValueError(f'Archive contains a symbolic link: {name}')
+        target = (dest / name).resolve()
+        if target != dest and dest not in target.parents:
+            raise ValueError(f'Path escapes destination: {name}')
+    zipf.extractall(dest_dir)
 
 # ==================== CSRF Token Endpoint ====================
 
@@ -5000,6 +4819,10 @@ def create_server():
     data = request.get_json()
     name = data.get('name', 'New Server')
     server_path = data.get('serverPath', '')
+    # Reject server paths outside SERVERS_DIR — a user-controlled base directory
+    # would let the per-server file routes read/write anywhere on disk (RCE).
+    if server_path and not is_server_path_allowed(server_path):
+        return jsonify({'error': 'Invalid server path: must be within the servers directory'}), 400
     java_args = data.get('javaArgs', '-Xmx4G -Xms1G')
     category = data.get('category', 'unmodded')
     executable = 'server.sh' if category == 'bedrock' else 'server.jar'
@@ -5087,7 +4910,7 @@ def create_server():
 
 
 @app.route('/api/servers/<server_id>/setup-bedrock', methods=['POST'])
-@login_required
+@server_access_required
 def setup_bedrock_server(server_id):
     """Download and set up a Bedrock server: download zip, extract, write server.properties, set permissions"""
     server_config = server_manager.get_server_config(server_id)
@@ -5588,6 +5411,7 @@ def update_server(server_id):
     data.pop('id', None)
     data.pop('created', None)
     data.pop('owner', None)  # Can't change owner
+    data.pop('serverPath', None)  # Can't repoint the base directory (path-traversal / RCE vector)
     
     if server_manager.update_server(server_id, **data):
         return jsonify({'success': True})
@@ -7943,9 +7767,9 @@ def restore_backup(server_id):
                 else:
                     item.unlink()
 
-            # Extract backup
+            # Extract backup (reject traversal/symlink members)
             with zipfile.ZipFile(backup_path, 'r') as zipf:
-                zipf.extractall(server_path)
+                safe_extractall(zipf, server_path)
 
             if was_running:
                 server_manager.start_server(server_id)
