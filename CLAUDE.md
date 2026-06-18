@@ -23,10 +23,9 @@ python3 -m py_compile server.py db.py api_manager.py
 node --check public/app.js       # if node is present; for JS files
 
 # --- Installer / lifecycle (Debian/Ubuntu, run as root) ---
-sudo ./install.sh install        # full install to /opt/mservercontroller + systemd + nginx
+sudo ./install.sh install        # full install to /opt/mservercontroller + systemd (HTTP only; put your own reverse proxy in front)
 sudo ./install.sh update         # pull/update an existing install
 sudo ./install.sh status         # health/status report
-./install.sh dev                 # set up a local dev environment
 sudo ./install.sh uninstall
 
 # --- Production service (systemd unit name: mservercontroller) ---

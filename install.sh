@@ -101,23 +101,9 @@ generate_secret_key() {
 prompt_env_config() {
     print_header "Environment Configuration"
     
-    # Flask environment
-    echo "Flask Environment:"
-    echo "  1) Production (recommended for deployment)"
-    echo "  2) Development (for testing only)"
-    echo ""
-    read -p "Select environment [1-2] (default: 1): " flask_choice
-    flask_choice=${flask_choice:-1}
-    
-    if [ "$flask_choice" = "2" ]; then
-        FLASK_ENV="development"
-        print_info "Development mode selected"
-    else
-        FLASK_ENV="production"
-        print_info "Production mode selected"
-    fi
-    echo ""
-    
+    # Flask environment is always production (this installer only deploys prod).
+    FLASK_ENV="production"
+
     # Secret key
     print_info "Generating secure secret key..."
     SECRET_KEY=$(generate_secret_key)
@@ -141,53 +127,24 @@ prompt_env_config() {
     PERMANENT_SESSION_LIFETIME=${session_lifetime:-604800}
     echo ""
 
-    # HTTPS / secure cookie
-    read -p "Are you deploying behind HTTPS? [y/N]: " https_choice
-    if [[ "$https_choice" =~ ^[Yy]$ ]]; then
-        SESSION_COOKIE_SECURE="true"
-        print_info "SESSION_COOKIE_SECURE enabled (cookies require HTTPS)"
-    else
-        SESSION_COOKIE_SECURE="false"
-    fi
-    echo ""
-
-    # Nginx reverse proxy setup
-    SETUP_NGINX="false"
-    if [[ "$https_choice" =~ ^[Yy]$ ]]; then
-        read -p "Install and configure Nginx as reverse proxy with SSL (Let's Encrypt)? [y/N]: " nginx_choice
-        if [[ "$nginx_choice" =~ ^[Yy]$ ]]; then
-            SETUP_NGINX="true"
-            read -p "Enter the domain name (e.g. panel.example.com): " NGINX_DOMAIN
-            if [ -z "$NGINX_DOMAIN" ]; then
-                print_warning "No domain provided, skipping Nginx setup."
-                SETUP_NGINX="false"
-            fi
-        fi
-    else
-        read -p "Install Nginx as HTTP reverse proxy? [y/N]: " nginx_choice
-        if [[ "$nginx_choice" =~ ^[Yy]$ ]]; then
-            SETUP_NGINX="true"
-            read -p "Enter the domain name or server IP (e.g. panel.example.com or _): " NGINX_DOMAIN
-            NGINX_DOMAIN="${NGINX_DOMAIN:-_}"
-        fi
-    fi
-    echo ""
+    # Secure cookies. MServerController always runs as plain HTTP and sits behind
+    # an external reverse proxy that terminates TLS, so enforce the Secure cookie
+    # flag (the proxy must forward X-Forwarded-Proto=https). Override in .env if
+    # you ever expose the app over plain HTTP directly.
+    SESSION_COOKIE_SECURE="true"
 
     # CORS origins
     read -p "Allowed WebSocket/CORS origins (comma-separated, e.g. https://panel.example.com) [default: *]: " cors_input
     CORS_ORIGINS="${cors_input:-*}"
     if [ "$CORS_ORIGINS" != "*" ]; then
         # Auto-prepend https:// to each entry if no scheme is provided
+        # (the panel is served over HTTPS by the reverse proxy).
         _fixed_origins=""
         IFS=',' read -ra _parts <<< "$CORS_ORIGINS"
         for _part in "${_parts[@]}"; do
             _part="$(echo "$_part" | xargs)"  # trim whitespace
             if [ -n "$_part" ] && [[ ! "$_part" =~ ^https?:// ]]; then
-                if [[ "$https_choice" =~ ^[Yy]$ ]]; then
-                    _part="https://$_part"
-                else
-                    _part="http://$_part"
-                fi
+                _part="https://$_part"
             fi
             if [ -n "$_fixed_origins" ]; then
                 _fixed_origins="$_fixed_origins,$_part"
@@ -245,7 +202,9 @@ EOF
 # Session lifetime in seconds (default: 604800 = 7 days)
 PERMANENT_SESSION_LIFETIME=$PERMANENT_SESSION_LIFETIME
 
-# Set to true when serving over HTTPS to enforce secure cookies
+# Secure-cookie flag. Defaults to true: the app runs HTTP behind a reverse proxy
+# that terminates TLS and forwards X-Forwarded-Proto=https. Set to false only if
+# you expose the panel over plain HTTP directly (not recommended).
 SESSION_COOKIE_SECURE=$SESSION_COOKIE_SECURE
 
 # Comma-separated allowed WebSocket/CORS origins (use * to allow all)
@@ -260,7 +219,7 @@ EOF
 # 1. This file contains sensitive information - keep it secure
 # 2. Never commit this file to version control
 # 3. In production, always use FLASK_ENV=production
-# 4. Set SESSION_COOKIE_SECURE=true when behind HTTPS
+# 4. Keep SESSION_COOKIE_SECURE=true when a TLS-terminating proxy is in front
 # 5. Restrict CORS_ORIGINS to your domain for production deployments
 EOF
 
@@ -402,140 +361,6 @@ set_permissions() {
     print_success "Permissions configured"
 }
 
-# Setup Nginx reverse proxy
-setup_nginx() {
-    if [ "$SETUP_NGINX" != "true" ]; then
-        return
-    fi
-
-    print_info "Installing Nginx..."
-    apt-get install -y nginx
-
-    local service_port="${SERVER_PORT:-3000}"
-    local nginx_conf="/etc/nginx/sites-available/mservercontroller"
-
-    if [[ "$https_choice" =~ ^[Yy]$ ]]; then
-        # HTTPS with Let's Encrypt
-        print_info "Installing Certbot for Let's Encrypt SSL..."
-        apt-get install -y certbot python3-certbot-nginx
-
-        # Create HTTP config first (certbot needs this)
-        cat > "$nginx_conf" <<NGINXEOF
-server {
-    listen 80;
-    server_name ${NGINX_DOMAIN};
-
-    client_max_body_size 25G;
-
-    # Security headers
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
-
-    location / {
-        proxy_pass http://127.0.0.1:${service_port};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-        proxy_buffering off;
-    }
-
-    location /socket.io {
-        proxy_pass http://127.0.0.1:${service_port};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "Upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-    }
-}
-NGINXEOF
-        # Enable site
-        ln -sf "$nginx_conf" /etc/nginx/sites-enabled/mservercontroller
-        rm -f /etc/nginx/sites-enabled/default
-
-        # Test and reload nginx
-        nginx -t && systemctl reload nginx
-
-        # Obtain SSL certificate
-        print_info "Obtaining SSL certificate for ${NGINX_DOMAIN}..."
-        certbot --nginx -d "${NGINX_DOMAIN}" --non-interactive --agree-tos --email "admin@${NGINX_DOMAIN}" --redirect || {
-            print_warning "Certbot failed. You can run it manually later:"
-            echo "  sudo certbot --nginx -d ${NGINX_DOMAIN}"
-        }
-
-        print_success "Nginx configured with HTTPS for ${NGINX_DOMAIN}"
-    else
-        # HTTP-only reverse proxy
-        cat > "$nginx_conf" <<NGINXEOF
-server {
-    listen 80;
-    server_name ${NGINX_DOMAIN};
-
-    client_max_body_size 25G;
-
-    # Security headers
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
-
-    location / {
-        proxy_pass http://127.0.0.1:${service_port};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-        proxy_buffering off;
-    }
-
-    location /socket.io {
-        proxy_pass http://127.0.0.1:${service_port};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "Upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400;
-        proxy_send_timeout 86400;
-    }
-}
-NGINXEOF
-        # Enable site
-        ln -sf "$nginx_conf" /etc/nginx/sites-enabled/mservercontroller
-        rm -f /etc/nginx/sites-enabled/default
-
-        # Test and reload nginx
-        nginx -t && systemctl reload nginx
-
-        print_success "Nginx configured as HTTP reverse proxy"
-    fi
-
-    systemctl enable nginx
-}
-
-
-
 # Create systemd service
 create_service() {
     print_info "Creating systemd service..."
@@ -612,24 +437,14 @@ show_completion() {
     echo "MServerController is now running."
     echo ""
     
-    # Show configuration
-    if [ "$SETUP_NGINX" = "true" ] && [ -n "$NGINX_DOMAIN" ] && [ "$NGINX_DOMAIN" != "_" ]; then
-        if [[ "$https_choice" =~ ^[Yy]$ ]]; then
-            echo "Access the web interface at:"
-            echo "  https://${NGINX_DOMAIN}"
-        else
-            echo "Access the web interface at:"
-            echo "  http://${NGINX_DOMAIN}"
-        fi
-    else
-        echo "Configuration:"
-        echo "  Transport: HTTP on port ${SERVER_PORT:-3000}"
-        echo ""
-        echo "Access the web interface at:"
-        echo "  http://$(hostname -I | awk '{print $1}'):${SERVER_PORT:-3000}"
-        echo "  or"
-        echo "  http://localhost:${SERVER_PORT:-3000}"
-    fi
+    # MServerController serves plain HTTP; put it behind your reverse proxy for TLS.
+    echo "Configuration:"
+    echo "  Transport: HTTP on port ${SERVER_PORT:-3000} (place your reverse proxy in front for HTTPS)"
+    echo ""
+    echo "Access the web interface (direct / behind your proxy) at:"
+    echo "  http://$(hostname -I | awk '{print $1}'):${SERVER_PORT:-3000}"
+    echo "  or"
+    echo "  http://localhost:${SERVER_PORT:-3000}"
     echo ""
 
     echo "First-run setup:"
@@ -721,7 +536,6 @@ do_install() {
     setup_python_env
     create_directories
     set_permissions
-    setup_nginx
     create_service
     
     if start_services; then
@@ -930,74 +744,6 @@ do_update() {
     fi
 }
 
-# Dev mode - run locally without installing
-do_dev() {
-    print_header "Development Mode"
-    
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    
-    if [ ! -f "$SCRIPT_DIR/server.py" ]; then
-        print_error "server.py not found in current directory"
-        exit 1
-    fi
-    
-    cd "$SCRIPT_DIR"
-    
-    # Create venv if it doesn't exist
-    if [ ! -d "venv" ]; then
-        print_info "Creating virtual environment..."
-        python3 -m venv venv
-    fi
-    
-    source venv/bin/activate
-    
-    # Check if dependencies need to be installed or updated
-    print_info "Checking Python dependencies..."
-    pip install --upgrade pip -q
-    pip install -r requirements.txt -q
-    
-    # Create data directories if they don't exist
-    mkdir -p servers backups uploads serverexecutables
-    
-    # Check if .env file exists, if not create a development one
-    if [ ! -f ".env" ]; then
-        print_warning ".env file not found - creating development configuration..."
-        
-        # Generate a development secret key
-        local dev_secret=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-        
-        cat > .env <<EOF
-# Development Environment Configuration
-# Auto-generated by installer
-
-# Flask environment
-FLASK_ENV=development
-
-# Secret key for session encryption
-SECRET_KEY=$dev_secret
-
-# Port (default for development)
-PORT=3000
-EOF
-        print_success ".env file created for development"
-        echo "  FLASK_ENV=development"
-        echo "  PORT=3000"
-        echo ""
-    fi
-    
-    echo ""
-    print_success "Development environment ready!"
-    echo ""
-    echo "Starting MServerController in development mode..."
-    echo "Access at: http://localhost:3000"
-    echo "Press Ctrl+C to stop"
-    echo ""
-    echo "=========================================="
-    
-    # Run the server
-    python server.py --port 3000
-}
-
 # Uninstall
 do_uninstall() {
     print_header "Uninstall MServerController"
@@ -1063,16 +809,7 @@ do_status() {
             echo "  Version: $(cat \"$INSTALL_DIR/version\")"
         fi
         
-        # Check for SSL and Nginx
-        if [ -d "$INSTALL_DIR/ssl" ] && [ -f "$INSTALL_DIR/ssl/cert.pem" ]; then
-            if [ -f "/etc/nginx/sites-enabled/mservercontroller" ]; then
-                echo "  Mode: HTTPS via Nginx reverse proxy"
-            else
-                echo "  Mode: HTTPS direct (app handles SSL)"
-            fi
-        else
-            echo "  Mode: HTTP (no encryption)"
-        fi
+        echo "  Mode: HTTP (TLS handled by your external reverse proxy)"
     else
         print_warning "No installation found at $INSTALL_DIR"
         return
@@ -1092,17 +829,6 @@ do_status() {
         print_success "Service is enabled (starts on boot)"
     else
         print_warning "Service is not enabled"
-    fi
-    
-    # Check nginx status if site is configured
-    if [ -f "/etc/nginx/sites-enabled/mservercontroller" ]; then
-        echo ""
-        echo "Nginx Status:"
-        if systemctl is-active --quiet nginx 2>/dev/null; then
-            print_success "Nginx is running"
-        else
-            print_warning "Nginx is not running"
-        fi
     fi
     
     echo ""
@@ -1138,7 +864,6 @@ show_usage() {
     echo "Options:"
     echo "  install       Fresh installation (default if no option given)"
     echo "  update        Update existing installation (preserves data)"
-    echo "  dev           Run in development mode (no installation)"
     echo "  status        Show installation status"
     echo "  uninstall     Remove MServerController completely"
     echo "  help          Show this help message"
@@ -1146,7 +871,6 @@ show_usage() {
     echo "Examples:"
     echo "  sudo $0 install        # Fresh installation"
     echo "  sudo $0 update         # Update to latest version"
-    echo "  $0 dev                 # Run locally for development"
     echo "  $0 status              # Check installation status"
     echo ""
 }
@@ -1168,20 +892,18 @@ show_menu() {
     echo ""
     echo "  1) Fresh Install      - Complete new installation"
     echo "  2) Update             - Update existing installation (preserves data)"
-    echo "  3) Development Mode   - Run locally without installing"
-    echo "  4) Status             - Show installation status"
-    echo "  5) Uninstall          - Remove MServerController"
-    echo "  6) Exit"
+    echo "  3) Status             - Show installation status"
+    echo "  4) Uninstall          - Remove MServerController"
+    echo "  5) Exit"
     echo ""
-    read -p "Enter your choice [1-6]: " choice
-    
+    read -p "Enter your choice [1-5]: " choice
+
     case $choice in
         1) check_root; do_install ;;
         2) check_root; do_update ;;
-        3) do_dev ;;
-        4) do_status ;;
-        5) check_root; do_uninstall ;;
-        6) echo "Goodbye!"; exit 0 ;;
+        3) do_status ;;
+        4) check_root; do_uninstall ;;
+        5) echo "Goodbye!"; exit 0 ;;
         *) print_error "Invalid option"; exit 1 ;;
     esac
 }
@@ -1196,9 +918,6 @@ main() {
         update)
             check_root
             do_update
-            ;;
-        dev|development)
-            do_dev
             ;;
         status)
             do_status
