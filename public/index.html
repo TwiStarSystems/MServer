@@ -123,7 +123,7 @@
 
         <nav class="tabs">
           <button class="tab-button active" data-tab="terminal">Terminal</button>
-          <button class="tab-button" data-tab="quickcmds">Quick Commands</button>
+          <button class="tab-button" data-tab="quickcmds">Commands</button>
           <button class="tab-button" data-tab="logs">Logs</button>
           <button class="tab-button" data-tab="files">Files</button>
           <button class="tab-button" data-tab="mods" id="mods-tab-btn" style="display: none;">Mods</button>
@@ -145,13 +145,14 @@
           </div>
           <div class="quickcmds-buttons-section quickcmds-buttons-terminal">
             <div id="quickcmds-grid" class="quickcmds-grid">
-              <span class="quickcmds-empty">No quick commands configured. Set them up in the Quick Commands tab.</span>
+              <span class="quickcmds-empty">No quick commands configured. Set them up in the Commands tab.</span>
             </div>
           </div>
         </div>
 
-        <!-- Quick Commands Tab -->
+        <!-- Commands Tab -->
         <div id="quickcmds-tab" class="tab-content">
+          <!-- Quick Commands Section -->
           <div class="quickcmds-container">
             <div class="quickcmds-header">
               <div class="quickcmds-title-row">
@@ -183,6 +184,113 @@
                 </thead>
                 <tbody id="quickcmds-list">
                   <tr><td colspan="3" class="empty-message">No commands yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Server Messaging Section -->
+          <div class="commands-section-divider"></div>
+          <div class="server-messaging-container">
+            <div class="messaging-header">
+              <h3>📢 Server Messaging</h3>
+              <p class="quickcmds-info">Send messages to players manually, on a schedule, or triggered by server events.</p>
+            </div>
+
+            <!-- Manual Send -->
+            <div class="messaging-manual-send">
+              <h4>Send Message Now</h4>
+              <div class="messaging-form">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Command Type</label>
+                    <select id="msg-type" class="form-control" onchange="onMsgTypeChange()">
+                      <option value="say">/say — Broadcast to all players</option>
+                      <option value="msg">/msg — Private message to a player</option>
+                      <option value="chat" selected>/tellraw — Rich formatted message</option>
+                      <option value="title">Title — Large screen text</option>
+                      <option value="subtitle">Subtitle — Below title text</option>
+                      <option value="actionbar">Action Bar — Above hotbar</option>
+                    </select>
+                  </div>
+                  <div class="form-group" id="msg-target-group">
+                    <label>Target</label>
+                    <input type="text" id="msg-target" class="form-control" value="@a" placeholder="@a, @p, or player name">
+                    <small class="form-help" id="msg-target-help">@a = all, @p = nearest, or player name</small>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Message</label>
+                  <textarea id="msg-text" class="form-control" rows="2" placeholder="Enter message to send" oninput="updateMsgPreview()"></textarea>
+                </div>
+                <div id="msg-formatting-group">
+                  <div class="form-row">
+                    <div class="form-group">
+                      <label>Color</label>
+                      <select id="msg-color" class="form-control" onchange="updateMsgPreview()">
+                        <option value="white">White</option>
+                        <option value="yellow">Yellow</option>
+                        <option value="gold">Gold</option>
+                        <option value="aqua">Aqua</option>
+                        <option value="green">Green</option>
+                        <option value="blue">Blue</option>
+                        <option value="light_purple">Light Purple</option>
+                        <option value="red">Red</option>
+                        <option value="dark_red">Dark Red</option>
+                        <option value="dark_blue">Dark Blue</option>
+                        <option value="dark_green">Dark Green</option>
+                        <option value="dark_aqua">Dark Aqua</option>
+                        <option value="dark_purple">Dark Purple</option>
+                        <option value="gray">Gray</option>
+                        <option value="dark_gray">Dark Gray</option>
+                        <option value="black">Black</option>
+                      </select>
+                    </div>
+                    <div class="form-group">
+                      <label>Formatting</label>
+                      <div class="msg-format-toggles">
+                        <label class="toggle-label"><input type="checkbox" id="msg-bold" onchange="updateMsgPreview()"> <strong>B</strong></label>
+                        <label class="toggle-label"><input type="checkbox" id="msg-italic" onchange="updateMsgPreview()"> <em>I</em></label>
+                        <label class="toggle-label"><input type="checkbox" id="msg-underlined" onchange="updateMsgPreview()"> <u>U</u></label>
+                        <label class="toggle-label"><input type="checkbox" id="msg-strikethrough" onchange="updateMsgPreview()"> <s>S</s></label>
+                        <label class="toggle-label"><input type="checkbox" id="msg-obfuscated" onchange="updateMsgPreview()"> ?</label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label>Preview</label>
+                    <div id="msg-preview" class="msg-preview-box">Your message will appear here</div>
+                  </div>
+                </div>
+                <div class="messaging-send-actions">
+                  <button class="btn btn-success" onclick="sendPlayerMessage()">Send Now</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Scheduled / Event Messages -->
+            <div class="messaging-scheduled">
+              <div class="messaging-scheduled-header">
+                <h4>Scheduled &amp; Event Messages</h4>
+                <div>
+                  <button class="btn btn-success btn-small" onclick="openScheduledMsgModal()">+ Add Message</button>
+                  <button class="btn btn-small" onclick="loadScheduledMessages()">Refresh</button>
+                </div>
+              </div>
+              <table class="quickcmds-table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Name</th>
+                    <th>Trigger</th>
+                    <th>Type</th>
+                    <th>Message</th>
+                    <th>Runs</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="scheduled-messages-list">
+                  <tr><td colspan="7" class="empty-message">No scheduled messages configured.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -383,7 +491,7 @@
               <div class="players-section-header">
                 <h3>🟢 Online Players</h3>
                 <div class="players-section-actions">
-                  <button class="btn btn-small" onclick="openMessagePlayersModal()">📢 Message Players</button>
+                  <button class="btn btn-small" onclick="goToMessaging()">📢 Message Players</button>
                   <button class="btn btn-small" onclick="loadOnlinePlayers()">Refresh</button>
                 </div>
               </div>
@@ -1282,34 +1390,102 @@
       </div>
     </div>
 
-    <!-- Message Players Modal -->
-    <div id="message-players-modal" class="modal">
-      <div class="modal-content modal-small">
+    <!-- Scheduled Message Create/Edit Modal -->
+    <div id="scheduled-msg-modal" class="modal">
+      <div class="modal-content modal-medium">
         <div class="modal-header">
-          <h2>📢 Message Players</h2>
-          <button class="close-btn" onclick="closeMessagePlayersModal()">&times;</button>
+          <h2 id="scheduled-msg-modal-title">📢 Add Scheduled Message</h2>
+          <button class="close-btn" onclick="closeScheduledMsgModal()">&times;</button>
         </div>
-        <div class="form-group">
-          <label>Target</label>
-          <input type="text" id="msg-target" class="form-control" value="@a" placeholder="@a, @p, or player name">
-          <small class="form-help">@a = all players, @p = nearest player, or enter a specific name</small>
-        </div>
-        <div class="form-group">
-          <label>Message Type</label>
-          <select id="msg-type" class="form-control">
-            <option value="chat">Chat (tellraw)</option>
-            <option value="title">Title (large screen text)</option>
-            <option value="subtitle">Subtitle (below title)</option>
-            <option value="actionbar">Action Bar (above hotbar)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Message</label>
-          <input type="text" id="msg-text" class="form-control" placeholder="Enter message to send">
+        <div class="modal-body" style="padding: 20px;">
+          <input type="hidden" id="sched-msg-id" value="">
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" id="sched-msg-name" class="form-control" placeholder="e.g., Backup Warning">
+          </div>
+          <div class="form-group">
+            <label>Trigger</label>
+            <select id="sched-msg-trigger" class="form-control" onchange="onSchedTriggerChange()">
+              <option value="cron">Scheduled (Cron)</option>
+              <option value="backup_start">Event: Backup Starting</option>
+              <option value="backup_complete">Event: Backup Complete</option>
+              <option value="server_start">Event: Server Started</option>
+              <option value="server_stop">Event: Server Stopped</option>
+              <option value="server_crash">Event: Server Crashed</option>
+            </select>
+          </div>
+          <div class="form-group" id="sched-msg-cron-group">
+            <label>Schedule (Cron Expression)</label>
+            <input type="text" id="sched-msg-cron" class="form-control" placeholder="*/30 * * * *" value="0 * * * *">
+            <small class="form-help">Format: minute hour day month day-of-week<br>
+            • <code>0 * * * *</code> — Every hour<br>
+            • <code>*/30 * * * *</code> — Every 30 minutes<br>
+            • <code>0 3 * * *</code> — Daily at 3:00 AM</small>
+          </div>
+          <div class="form-group">
+            <label>Command Type</label>
+            <select id="sched-msg-type" class="form-control" onchange="onSchedMsgTypeChange()">
+              <option value="say">/say — Broadcast</option>
+              <option value="msg">/msg — Private message</option>
+              <option value="chat">/tellraw — Rich formatted</option>
+              <option value="title">Title — Large screen text</option>
+              <option value="subtitle">Subtitle</option>
+              <option value="actionbar">Action Bar</option>
+            </select>
+          </div>
+          <div class="form-group" id="sched-msg-target-group">
+            <label>Target</label>
+            <input type="text" id="sched-msg-target" class="form-control" value="@a" placeholder="@a, @p, or player name">
+          </div>
+          <div class="form-group">
+            <label>Message</label>
+            <textarea id="sched-msg-text" class="form-control" rows="2" placeholder="Enter message text"></textarea>
+          </div>
+          <div id="sched-msg-formatting-group">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Color</label>
+                <select id="sched-msg-color" class="form-control">
+                  <option value="white">White</option>
+                  <option value="yellow">Yellow</option>
+                  <option value="gold">Gold</option>
+                  <option value="aqua">Aqua</option>
+                  <option value="green">Green</option>
+                  <option value="blue">Blue</option>
+                  <option value="light_purple">Light Purple</option>
+                  <option value="red">Red</option>
+                  <option value="dark_red">Dark Red</option>
+                  <option value="dark_blue">Dark Blue</option>
+                  <option value="dark_green">Dark Green</option>
+                  <option value="dark_aqua">Dark Aqua</option>
+                  <option value="dark_purple">Dark Purple</option>
+                  <option value="gray">Gray</option>
+                  <option value="dark_gray">Dark Gray</option>
+                  <option value="black">Black</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Formatting</label>
+                <div class="msg-format-toggles">
+                  <label class="toggle-label"><input type="checkbox" id="sched-msg-bold"> <strong>B</strong></label>
+                  <label class="toggle-label"><input type="checkbox" id="sched-msg-italic"> <em>I</em></label>
+                  <label class="toggle-label"><input type="checkbox" id="sched-msg-underlined"> <u>U</u></label>
+                  <label class="toggle-label"><input type="checkbox" id="sched-msg-strikethrough"> <s>S</s></label>
+                  <label class="toggle-label"><input type="checkbox" id="sched-msg-obfuscated"> ?</label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="sched-msg-enabled" checked>
+              Enable immediately
+            </label>
+          </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-success" onclick="sendPlayerMessage()">Send</button>
-          <button class="btn" onclick="closeMessagePlayersModal()">Cancel</button>
+          <button class="btn btn-success" onclick="saveScheduledMessage()">Save</button>
+          <button class="btn" onclick="closeScheduledMsgModal()">Cancel</button>
         </div>
       </div>
     </div>
@@ -1439,6 +1615,11 @@
             ⚠️ If the server is currently online, it will be temporarily powered down before the backup begins and restarted afterward to ensure data integrity.
           </div>
           <div class="form-group">
+            <label>Backup Name</label>
+            <input type="text" id="backup-custom-name" class="form-control" placeholder="Leave blank for default (backup-YYYY-MM-DDTHH-MM-SS)">
+            <small class="form-help">Optional custom name for this backup</small>
+          </div>
+          <div class="form-group">
             <label>Compression Level (0 = none, 9 = maximum)</label>
             <input type="range" id="backup-compression-level" class="form-control" min="0" max="9" value="6" oninput="document.getElementById('backup-compression-level-val').textContent = this.value">
             <small class="form-help">Level: <span id="backup-compression-level-val">6</span> — higher = smaller file, slower</small>
@@ -1468,6 +1649,28 @@
         <div class="modal-footer">
           <button class="btn btn-success" onclick="confirmRestore()">Restore</button>
           <button class="btn" onclick="closeRestoreModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rename Backup Modal -->
+    <div id="rename-backup-modal" class="modal">
+      <div class="modal-content modal-small">
+        <div class="modal-header">
+          <h2>✏️ Rename Backup</h2>
+          <button class="close-btn" onclick="closeRenameBackupModal()">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 20px;">
+          <p>Current name: <strong id="rename-backup-current"></strong></p>
+          <div class="form-group">
+            <label>New Name</label>
+            <input type="text" id="rename-backup-new-name" class="form-control" placeholder="Enter new backup name">
+            <small class="form-help">The .zip extension will be added automatically if omitted</small>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success" onclick="confirmRenameBackup()">Rename</button>
+          <button class="btn" onclick="closeRenameBackupModal()">Cancel</button>
         </div>
       </div>
     </div>

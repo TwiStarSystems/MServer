@@ -7494,3 +7494,81 @@ select.form-control:disabled {
   margin-top: 8px;
 }
 .job-actions .btn { font-size: 0.78rem; padding: 4px 10px; }
+
+/* ── Message Players Modal ── */
+.msg-format-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.msg-format-toggles .toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+.msg-format-toggles .toggle-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.msg-preview-box {
+  background: #1a1a2e;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: 'Minecraft', 'Courier New', monospace;
+  font-size: 15px;
+  min-height: 40px;
+  color: #fff;
+  word-break: break-word;
+}
+#msg-formatting-group,
+#sched-msg-formatting-group {
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+.commands-section-divider {
+  border-top: 2px solid var(--color-border);
+  margin: 24px 0;
+}
+.server-messaging-container {
+  padding: 0 16px 16px;
+}
+.messaging-header h3 {
+  margin: 0 0 4px;
+}
+.messaging-manual-send {
+  margin-top: 16px;
+}
+.messaging-manual-send h4,
+.messaging-scheduled-header h4 {
+  margin: 0 0 12px;
+}
+.messaging-form {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 16px;
+}
+.messaging-send-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+.messaging-scheduled {
+  margin-top: 24px;
+}
+.messaging-scheduled-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.messaging-scheduled-header div {
+  display: flex;
+  gap: 8px;
+}

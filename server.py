@@ -1165,6 +1165,11 @@ class BackupScheduler:
                 print(f"[Scheduler] Server {server_id} not found")
                 return
 
+            try:
+                message_scheduler.fire_event(server_id, 'backup_start')
+            except Exception:
+                pass
+
             server_path = Path(server_config.get('serverPath', SERVERS_DIR))
             if not server_path.exists():
                 print(f"[Scheduler] Server path not found for {server_id}")
@@ -1256,6 +1261,7 @@ class BackupScheduler:
             })
 
             _backup_ctx = {
+                'server_id':   server_id,
                 'server_name': server_config.get('name', server_id),
                 'backup_name': backup_name,
                 'size':        size,
@@ -1738,6 +1744,289 @@ class TaskScheduler:
         except Exception:
             pass
         return t
+
+
+# ==================== Server Message Scheduler ====================
+
+class MessageScheduler:
+    """Manages scheduled and event-triggered server messages — backed by SQLite."""
+
+    EVENT_TRIGGERS = ['backup_start', 'backup_complete', 'server_start', 'server_stop', 'server_crash']
+
+    def __init__(self, server_manager):
+        self.server_manager = server_manager
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
+        self._restore_jobs()
+
+    @staticmethod
+    def _row_to_dict(row):
+        if row is None:
+            return None
+        return {
+            'id':            row['id'],
+            'serverId':      row['server_id'],
+            'name':          row['name'],
+            'trigger':       row['trigger'],
+            'cronExpr':      row['cron_expr'],
+            'msgType':       row['msg_type'],
+            'target':        row['target'],
+            'message':       row['message'],
+            'color':         row['color'],
+            'bold':          bool(row['bold']),
+            'italic':        bool(row['italic']),
+            'underlined':    bool(row['underlined']),
+            'strikethrough': bool(row['strikethrough']),
+            'obfuscated':    bool(row['obfuscated']),
+            'enabled':       bool(row['enabled']),
+            'runCount':      row['run_count'],
+            'lastRun':       row['last_run'],
+            'createdAt':     row['created'],
+        }
+
+    def _restore_jobs(self):
+        rows = get_db().execute(
+            "SELECT * FROM scheduled_messages WHERE enabled=1 AND trigger='cron'"
+        ).fetchall()
+        for row in rows:
+            self._add_cron_job(row['server_id'], row['id'], row['cron_expr'])
+
+    def _add_cron_job(self, server_id, msg_id, cron_expr):
+        job_id = f"msg_{server_id}_{msg_id}"
+        try:
+            self.scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        if not cron_expr:
+            return
+        try:
+            parts = cron_expr.split()
+            if len(parts) == 5:
+                trigger = CronTrigger(
+                    minute=parts[0], hour=parts[1],
+                    day=parts[2], month=parts[3], day_of_week=parts[4]
+                )
+                self.scheduler.add_job(
+                    self._execute_message, trigger=trigger,
+                    id=job_id, args=[server_id, msg_id]
+                )
+        except Exception as e:
+            print(f"[MessageScheduler] Failed to add cron job {job_id}: {e}")
+
+    def _build_command(self, msg, is_bedrock):
+        msg_type = msg['msgType']
+        message = msg['message']
+        target = msg['target']
+        color = msg['color']
+        safe = message.replace('\\', '\\\\').replace('"', '\\"')
+
+        if msg_type == 'say':
+            return f'say {message}'
+        elif msg_type == 'msg':
+            return f'msg {target} {message}'
+        elif msg_type == 'chat':
+            if is_bedrock:
+                return f'tellraw {target} {{"rawtext":[{{"text":"{safe}"}}]}}'
+            parts = [f'"text":"{safe}"', f'"color":"{color}"']
+            if msg['bold']:
+                parts.append('"bold":true')
+            if msg['italic']:
+                parts.append('"italic":true')
+            if msg['underlined']:
+                parts.append('"underlined":true')
+            if msg['strikethrough']:
+                parts.append('"strikethrough":true')
+            if msg['obfuscated']:
+                parts.append('"obfuscated":true')
+            return f'tellraw {target} {{{",".join(parts)}}}'
+        elif msg_type in ('title', 'subtitle', 'actionbar'):
+            if is_bedrock:
+                return f'titleraw {target} {msg_type} {{"rawtext":[{{"text":"{safe}"}}]}}'
+            parts = [f'"text":"{safe}"', f'"color":"{color}"']
+            if msg['bold']:
+                parts.append('"bold":true')
+            if msg['italic']:
+                parts.append('"italic":true')
+            return f'title {target} {msg_type} {{{",".join(parts)}}}'
+        return None
+
+    def _execute_message(self, server_id, msg_id):
+        try:
+            conn = get_db()
+            row = conn.execute('SELECT * FROM scheduled_messages WHERE id=?', (msg_id,)).fetchone()
+            if not row or not row['enabled']:
+                return
+            msg = self._row_to_dict(row)
+            instance = self.server_manager.servers.get(server_id)
+            if not instance or not instance.is_running():
+                print(f"[MessageScheduler] Server {server_id} not running, skipping message {msg_id}")
+                return
+
+            server_config = self.server_manager.get_server_config(server_id)
+            is_bedrock = server_config and server_config.get('category') == 'bedrock'
+            command = self._build_command(msg, is_bedrock)
+            if command:
+                instance.send_command(command)
+                conn.execute(
+                    'UPDATE scheduled_messages SET run_count=run_count+1, last_run=? WHERE id=?',
+                    (datetime.now().isoformat(), msg_id)
+                )
+                conn.commit()
+                print(f"[MessageScheduler] Sent message {msg_id} to server {server_id}: {command}")
+        except Exception as e:
+            print(f"[MessageScheduler] Failed to execute message {msg_id}: {e}")
+
+    def fire_event(self, server_id, event_type):
+        """Called by event hooks (backup, start, stop, crash) to fire matching messages."""
+        try:
+            rows = get_db().execute(
+                'SELECT * FROM scheduled_messages WHERE server_id=? AND trigger=? AND enabled=1',
+                (server_id, event_type)
+            ).fetchall()
+            for row in rows:
+                self._execute_message(server_id, row['id'])
+        except Exception as e:
+            print(f"[MessageScheduler] Error firing event {event_type} for {server_id}: {e}")
+
+    def create_message(self, server_id, config):
+        msg_id = str(int(datetime.now().timestamp() * 1000))
+        trigger = config.get('trigger', 'cron')
+        cron_expr = config.get('cronExpr', '') if trigger == 'cron' else None
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO scheduled_messages
+               (id, server_id, name, trigger, cron_expr, msg_type, target, message,
+                color, bold, italic, underlined, strikethrough, obfuscated,
+                enabled, run_count, last_run, created)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)''',
+            (msg_id, server_id,
+             config.get('name', 'Unnamed Message'),
+             trigger,
+             cron_expr,
+             config.get('msgType', 'say'),
+             config.get('target', '@a'),
+             config.get('message', ''),
+             config.get('color', 'white'),
+             1 if config.get('bold') else 0,
+             1 if config.get('italic') else 0,
+             1 if config.get('underlined') else 0,
+             1 if config.get('strikethrough') else 0,
+             1 if config.get('obfuscated') else 0,
+             1 if config.get('enabled', True) else 0,
+             datetime.now().isoformat())
+        )
+        conn.commit()
+        msg = self._row_to_dict(
+            conn.execute('SELECT * FROM scheduled_messages WHERE id=?', (msg_id,)).fetchone()
+        )
+        if msg['enabled'] and trigger == 'cron' and cron_expr:
+            self._add_cron_job(server_id, msg_id, cron_expr)
+        return msg
+
+    def update_message(self, server_id, msg_id, config):
+        conn = get_db()
+        row = conn.execute(
+            'SELECT * FROM scheduled_messages WHERE id=? AND server_id=?',
+            (msg_id, server_id)
+        ).fetchone()
+        if row is None:
+            return None
+        old = self._row_to_dict(row)
+        trigger = config.get('trigger', old['trigger'])
+        cron_expr = config.get('cronExpr', old['cronExpr']) if trigger == 'cron' else None
+        conn.execute(
+            '''UPDATE scheduled_messages SET name=?, trigger=?, cron_expr=?, msg_type=?,
+               target=?, message=?, color=?, bold=?, italic=?, underlined=?,
+               strikethrough=?, obfuscated=?, enabled=?
+               WHERE id=?''',
+            (config.get('name', old['name']),
+             trigger,
+             cron_expr,
+             config.get('msgType', old['msgType']),
+             config.get('target', old['target']),
+             config.get('message', old['message']),
+             config.get('color', old['color']),
+             1 if config.get('bold', old['bold']) else 0,
+             1 if config.get('italic', old['italic']) else 0,
+             1 if config.get('underlined', old['underlined']) else 0,
+             1 if config.get('strikethrough', old['strikethrough']) else 0,
+             1 if config.get('obfuscated', old['obfuscated']) else 0,
+             1 if config.get('enabled', old['enabled']) else 0,
+             msg_id)
+        )
+        conn.commit()
+        updated = self._row_to_dict(
+            conn.execute('SELECT * FROM scheduled_messages WHERE id=?', (msg_id,)).fetchone()
+        )
+        job_id = f"msg_{server_id}_{msg_id}"
+        try:
+            self.scheduler.remove_job(job_id)
+        except Exception:
+            pass
+        if updated['enabled'] and trigger == 'cron' and cron_expr:
+            self._add_cron_job(server_id, msg_id, cron_expr)
+        return updated
+
+    def delete_message(self, server_id, msg_id):
+        conn = get_db()
+        result = conn.execute(
+            'DELETE FROM scheduled_messages WHERE id=? AND server_id=?',
+            (msg_id, server_id)
+        )
+        conn.commit()
+        try:
+            self.scheduler.remove_job(f"msg_{server_id}_{msg_id}")
+        except Exception:
+            pass
+        return result.rowcount > 0
+
+    def get_messages(self, server_id):
+        rows = get_db().execute(
+            'SELECT * FROM scheduled_messages WHERE server_id=? ORDER BY created',
+            (server_id,)
+        ).fetchall()
+        result = []
+        for row in rows:
+            m = self._row_to_dict(row)
+            if m['trigger'] == 'cron':
+                try:
+                    job = self.scheduler.get_job(f"msg_{server_id}_{row['id']}")
+                    if job and job.next_run_time:
+                        m['nextRun'] = job.next_run_time.isoformat()
+                except Exception:
+                    pass
+            result.append(m)
+        return result
+
+    def get_message(self, server_id, msg_id):
+        row = get_db().execute(
+            'SELECT * FROM scheduled_messages WHERE id=? AND server_id=?',
+            (msg_id, server_id)
+        ).fetchone()
+        if row is None:
+            return None
+        m = self._row_to_dict(row)
+        if m['trigger'] == 'cron':
+            try:
+                job = self.scheduler.get_job(f"msg_{server_id}_{msg_id}")
+                if job and job.next_run_time:
+                    m['nextRun'] = job.next_run_time.isoformat()
+            except Exception:
+                pass
+        return m
+
+    def test_message(self, server_id, config):
+        """Send a message immediately without saving it."""
+        instance = self.server_manager.servers.get(server_id)
+        if not instance or not instance.is_running():
+            return False, "Server is not running"
+        server_config = self.server_manager.get_server_config(server_id)
+        is_bedrock = server_config and server_config.get('category') == 'bedrock'
+        command = self._build_command(config, is_bedrock)
+        if not command:
+            return False, "Invalid message type"
+        instance.send_command(command)
+        return True, command
 
 
 # ==================== User Management & RBAC ====================
@@ -2481,6 +2770,14 @@ def dispatch_notification(event_type, context):
         })
     except Exception as e:
         app.logger.error(f'[Notify] Webhook dispatch error for {event_type}: {e}')
+
+    # Fire event-triggered server messages
+    server_id = context.get('server_id')
+    if server_id and event_type in MessageScheduler.EVENT_TRIGGERS:
+        try:
+            message_scheduler.fire_event(server_id, event_type)
+        except Exception as e:
+            app.logger.error(f'[Notify] Message event dispatch error for {event_type}: {e}')
 
 
 # ==================== Authentication Decorators ====================
@@ -4173,6 +4470,9 @@ backup_scheduler = BackupScheduler()
 # Initialize task scheduler
 task_scheduler = TaskScheduler(server_manager, socketio)
 
+# Initialize message scheduler
+message_scheduler = MessageScheduler(server_manager)
+
 
 # ==================== Background Job Queue ====================
 
@@ -4468,7 +4768,8 @@ def _job_backup(job_id, params, progress, cancel):
             if inst is None or not inst.is_running():
                 break
 
-    backup_name = f'backup-{timestamp}.zip'
+    custom_name = params.get('custom_name', '')
+    backup_name = custom_name if custom_name else f'backup-{timestamp}.zip'
     backup_path = backup_dir / backup_name
     try:
         all_files = [Path(root) / f for root, _, files in os.walk(server_path) for f in files]
@@ -6940,25 +7241,82 @@ def unban_ip(server_id, ip_address):
 @app.route('/api/servers/<server_id>/players/message', methods=['POST'])
 @server_access_required
 def message_players(server_id):
-    """Send a message to players via console commands (tellraw/title/actionbar)"""
+    """Send a message to players via console commands (say/msg/tellraw/title/actionbar)"""
     data = request.get_json()
     msg_type = data.get('type', 'chat')
     target = data.get('target', '@a').strip()
     message = data.get('message', '').strip()
+    color = data.get('color', 'white')
+    bold = data.get('bold', False)
+    italic = data.get('italic', False)
+    underlined = data.get('underlined', False)
+    strikethrough = data.get('strikethrough', False)
+    obfuscated = data.get('obfuscated', False)
 
     if not message:
         return jsonify({'error': 'Message is required'}), 400
 
+    server_config = server_manager.get_server_config(server_id)
+    is_bedrock = server_config and server_config.get('category') == 'bedrock'
+
     safe = message.replace('\\', '\\\\').replace('"', '\\"')
 
-    if msg_type == 'chat':
-        command = f'tellraw {target} {{"text":"{safe}","color":"white"}}'
+    VALID_COLORS = {
+        'black', 'dark_blue', 'dark_green', 'dark_aqua', 'dark_red',
+        'dark_purple', 'gold', 'gray', 'dark_gray', 'blue', 'green',
+        'aqua', 'red', 'light_purple', 'yellow', 'white'
+    }
+    if color not in VALID_COLORS:
+        color = 'white'
+
+    if msg_type == 'say':
+        command = f'say {message}'
+    elif msg_type == 'msg':
+        if not target or target.startswith('@a'):
+            return jsonify({'error': '/msg requires a specific player target, not @a'}), 400
+        command = f'msg {target} {message}'
+    elif msg_type == 'chat':
+        if is_bedrock:
+            command = f'tellraw {target} {{"rawtext":[{{"text":"{safe}"}}]}}'
+        else:
+            parts = [f'"text":"{safe}"', f'"color":"{color}"']
+            if bold:
+                parts.append('"bold":true')
+            if italic:
+                parts.append('"italic":true')
+            if underlined:
+                parts.append('"underlined":true')
+            if strikethrough:
+                parts.append('"strikethrough":true')
+            if obfuscated:
+                parts.append('"obfuscated":true')
+            command = f'tellraw {target} {{{",".join(parts)}}}'
     elif msg_type == 'title':
-        command = f'title {target} title {{"text":"{safe}","bold":true}}'
+        if is_bedrock:
+            command = f'titleraw {target} title {{"rawtext":[{{"text":"{safe}"}}]}}'
+        else:
+            parts = [f'"text":"{safe}"', '"bold":true', f'"color":"{color}"']
+            if italic:
+                parts.append('"italic":true')
+            command = f'title {target} title {{{",".join(parts)}}}'
     elif msg_type == 'subtitle':
-        command = f'title {target} subtitle {{"text":"{safe}"}}'
+        if is_bedrock:
+            command = f'titleraw {target} subtitle {{"rawtext":[{{"text":"{safe}"}}]}}'
+        else:
+            parts = [f'"text":"{safe}"', f'"color":"{color}"']
+            if bold:
+                parts.append('"bold":true')
+            if italic:
+                parts.append('"italic":true')
+            command = f'title {target} subtitle {{{",".join(parts)}}}'
     elif msg_type == 'actionbar':
-        command = f'title {target} actionbar {{"text":"{safe}"}}'
+        if is_bedrock:
+            command = f'titleraw {target} actionbar {{"rawtext":[{{"text":"{safe}"}}]}}'
+        else:
+            parts = [f'"text":"{safe}"', f'"color":"{color}"']
+            if bold:
+                parts.append('"bold":true')
+            command = f'title {target} actionbar {{{",".join(parts)}}}'
     else:
         return jsonify({'error': f'Unknown message type: {msg_type}'}), 400
 
@@ -6966,7 +7324,70 @@ def message_players(server_id):
     if not success:
         return jsonify({'error': msg}), 400
 
-    return jsonify({'success': True, 'message': f'Message sent to {target}'})
+    type_labels = {
+        'say': '/say broadcast',
+        'msg': f'/msg to {target}',
+        'chat': 'tellraw',
+        'title': 'title',
+        'subtitle': 'subtitle',
+        'actionbar': 'action bar'
+    }
+    return jsonify({'success': True, 'message': f'{type_labels.get(msg_type, msg_type)} sent to {target}', 'command': command})
+
+
+# ==================== Scheduled / Event Messages API ====================
+
+@app.route('/api/servers/<server_id>/messages', methods=['GET'])
+@server_access_required
+def get_scheduled_messages(server_id):
+    """Get all scheduled/event messages for a server."""
+    return jsonify({'messages': message_scheduler.get_messages(server_id)})
+
+@app.route('/api/servers/<server_id>/messages', methods=['POST'])
+@server_access_required
+def create_scheduled_message(server_id):
+    """Create a new scheduled/event message."""
+    data = request.get_json()
+    if not data.get('message', '').strip():
+        return jsonify({'error': 'Message text is required'}), 400
+    trigger = data.get('trigger', 'cron')
+    if trigger == 'cron' and not data.get('cronExpr', '').strip():
+        return jsonify({'error': 'Cron expression is required for scheduled messages'}), 400
+    if trigger != 'cron' and trigger not in MessageScheduler.EVENT_TRIGGERS:
+        return jsonify({'error': f'Unknown event trigger: {trigger}'}), 400
+    msg = message_scheduler.create_message(server_id, data)
+    return jsonify({'success': True, 'message': msg}), 201
+
+@app.route('/api/servers/<server_id>/messages/<msg_id>', methods=['PUT'])
+@server_access_required
+def update_scheduled_message(server_id, msg_id):
+    """Update an existing scheduled/event message."""
+    data = request.get_json()
+    msg = message_scheduler.update_message(server_id, msg_id, data)
+    if msg is None:
+        return jsonify({'error': 'Message not found'}), 404
+    return jsonify({'success': True, 'message': msg})
+
+@app.route('/api/servers/<server_id>/messages/<msg_id>', methods=['DELETE'])
+@server_access_required
+def delete_scheduled_message(server_id, msg_id):
+    """Delete a scheduled/event message."""
+    if message_scheduler.delete_message(server_id, msg_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Message not found'}), 404
+
+@app.route('/api/servers/<server_id>/messages/test', methods=['POST'])
+@server_access_required
+def test_scheduled_message(server_id):
+    """Test-fire a message immediately without saving."""
+    data = request.get_json()
+    if not data.get('message', '').strip():
+        return jsonify({'error': 'Message text is required'}), 400
+    success, result = message_scheduler.test_message(server_id, data)
+    if not success:
+        return jsonify({'error': result}), 400
+    return jsonify({'success': True, 'command': result})
+
 
 @app.route('/api/servers/<server_id>/players/ops', methods=['GET'])
 @server_access_required
@@ -8311,12 +8732,23 @@ def create_backup(server_id):
     compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
     backup_type = str(data.get('backupType', 'manual'))
 
+    custom_name = data.get('customName', '').strip()
+    if custom_name:
+        custom_name = secure_filename(custom_name)
+        if not custom_name:
+            return jsonify({'error': 'Invalid backup name'}), 400
+        if not custom_name.lower().endswith('.zip'):
+            custom_name += '.zip'
+
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+    job_params = {'server_id': server_id, 'compression_level': compression_level,
+                  'backup_type': backup_type}
+    if custom_name:
+        job_params['custom_name'] = custom_name
     job_id = job_manager.submit(
         'backup', f'Backup: {server_name}',
-        params={'server_id': server_id, 'compression_level': compression_level,
-                'backup_type': backup_type},
+        params=job_params,
         created_by=get_current_user()[0],
         server_id=server_id
     )
@@ -8376,6 +8808,37 @@ def delete_backup(server_id):
     try:
         backup_path.unlink()
         return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/servers/<server_id>/backups/rename', methods=['POST'])
+@server_access_required
+def rename_backup(server_id):
+    data = request.get_json()
+    old_name = secure_filename(data.get('oldName', ''))
+    new_name = secure_filename(data.get('newName', ''))
+    if not old_name or not new_name:
+        return jsonify({'error': 'Invalid backup name'}), 400
+    if not new_name.lower().endswith('.zip'):
+        new_name += '.zip'
+
+    backup_dir = (BACKUPS_DIR / server_id).resolve()
+    old_path = (BACKUPS_DIR / server_id / old_name).resolve()
+    new_path = (BACKUPS_DIR / server_id / new_name).resolve()
+
+    if not str(old_path).startswith(str(backup_dir)) or not str(new_path).startswith(str(backup_dir)):
+        return jsonify({'error': 'Invalid backup path'}), 400
+    if not old_path.exists():
+        return jsonify({'error': 'Backup not found'}), 404
+    if new_path.exists():
+        return jsonify({'error': 'A backup with that name already exists'}), 409
+
+    try:
+        old_path.rename(new_path)
+        checksum_old = old_path.with_suffix('.sha256')
+        if checksum_old.exists():
+            checksum_old.rename(new_path.with_suffix('.sha256'))
+        return jsonify({'success': True, 'newName': new_name})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

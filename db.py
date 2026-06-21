@@ -124,6 +124,29 @@ CREATE TABLE IF NOT EXISTS tasks (
     FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
 );
 
+-- ── Scheduled / Event-Triggered Messages ─────────────────────────────────────
+CREATE TABLE IF NOT EXISTS scheduled_messages (
+    id          TEXT PRIMARY KEY,
+    server_id   TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    trigger     TEXT NOT NULL,          -- 'cron' or event name: 'backup_start', 'backup_complete', 'server_start', 'server_stop', 'server_crash'
+    cron_expr   TEXT,                   -- only for trigger='cron'
+    msg_type    TEXT NOT NULL DEFAULT 'say',  -- 'say', 'msg', 'chat' (tellraw), 'title', 'subtitle', 'actionbar'
+    target      TEXT NOT NULL DEFAULT '@a',
+    message     TEXT NOT NULL,
+    color       TEXT NOT NULL DEFAULT 'white',
+    bold        INTEGER NOT NULL DEFAULT 0,
+    italic      INTEGER NOT NULL DEFAULT 0,
+    underlined  INTEGER NOT NULL DEFAULT 0,
+    strikethrough INTEGER NOT NULL DEFAULT 0,
+    obfuscated  INTEGER NOT NULL DEFAULT 0,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    run_count   INTEGER NOT NULL DEFAULT 0,
+    last_run    TEXT,
+    created     TEXT NOT NULL,
+    FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+);
+
 -- ── Backup Event Log ──────────────────────────────────────────────────────────
 -- Replaces per-server backups/<id>/_backup_log.json files
 CREATE TABLE IF NOT EXISTS backup_events (

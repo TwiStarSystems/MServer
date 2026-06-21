@@ -4123,6 +4123,7 @@ async function loadBackups() {
             <button class="btn btn-small action-btn" onclick="downloadBackup('${escapeHtml(backup.name)}')">Download</button>
             <button class="btn btn-success btn-small action-btn" onclick="restoreBackup('${escapeHtml(backup.name)}')">Restore</button>
             <button class="btn btn-small action-btn" onclick="verifyBackup('${escapeHtml(backup.name)}')">Verify</button>
+            <button class="btn btn-small action-btn" onclick="openRenameBackupModal('${escapeHtml(backup.name)}')">Rename</button>
             <button class="btn btn-danger btn-small action-btn" onclick="deleteBackup('${escapeHtml(backup.name)}')">Delete</button>
           </div>
         </td>
@@ -4136,7 +4137,7 @@ async function loadBackups() {
 
 function openCreateBackupModal() {
   if (!currentServerId) return;
-  // Reset to defaults
+  document.getElementById('backup-custom-name').value = '';
   document.getElementById('backup-compression-level').value = 6;
   document.getElementById('backup-compression-level-val').textContent = '6';
   document.getElementById('create-backup-modal').classList.add('active');
@@ -4150,14 +4151,17 @@ async function createBackup() {
   if (!currentServerId) return;
 
   const compressionLevel = parseInt(document.getElementById('backup-compression-level').value) || 6;
+  const customName = document.getElementById('backup-custom-name').value.trim();
 
   closeCreateBackupModal();
   showNotification('⏳ Backup started. The server will be stopped if running, backed up, then restarted.', 'info');
 
   try {
+    const payload = { compressionLevel, backupType: 'manual' };
+    if (customName) payload.customName = customName;
     await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
       method: 'POST',
-      body: JSON.stringify({ compressionLevel, backupType: 'manual' })
+      body: JSON.stringify(payload)
     });
     // Backup runs as a background job; the Tasks panel shows progress and the
     // backup list refreshes via onJobFinished when the job completes.
@@ -4201,6 +4205,44 @@ async function confirmRestore() {
   } catch (error) {
     console.error('Failed to start restore:', error);
     showNotification('Failed to start restore', 'error');
+  }
+}
+
+let _renameBackupOldName = null;
+
+function openRenameBackupModal(name) {
+  if (!currentServerId) return;
+  _renameBackupOldName = name;
+  document.getElementById('rename-backup-current').textContent = name;
+  const base = name.replace(/\.zip$/i, '');
+  document.getElementById('rename-backup-new-name').value = base;
+  document.getElementById('rename-backup-modal').classList.add('active');
+}
+
+function closeRenameBackupModal() {
+  document.getElementById('rename-backup-modal').classList.remove('active');
+  _renameBackupOldName = null;
+}
+
+async function confirmRenameBackup() {
+  if (!currentServerId || !_renameBackupOldName) return;
+  const newName = document.getElementById('rename-backup-new-name').value.trim();
+  if (!newName) {
+    showNotification('Please enter a new name', 'error');
+    return;
+  }
+  const oldName = _renameBackupOldName;
+  closeRenameBackupModal();
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/backups/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ oldName, newName })
+    });
+    showNotification('Backup renamed successfully', 'success');
+    loadBackups();
+  } catch (error) {
+    console.error('Failed to rename backup:', error);
+    showNotification('Failed to rename backup', 'error');
   }
 }
 
@@ -4789,6 +4831,7 @@ function switchTab(tabName) {
     loadResourcePack();
   } else if (tabName === 'quickcmds') {
     loadCannedCommands();
+    loadScheduledMessages();
   } else if (tabName === 'terminal') {
     loadCannedCommands();
   }
@@ -6041,33 +6084,321 @@ async function unbanIp(ip) {
   }
 }
 
-// Player Messaging
-function openMessagePlayersModal(targetPlayer) {
-  document.getElementById('msg-target').value = targetPlayer || '@a';
-  document.getElementById('msg-type').value = 'chat';
-  document.getElementById('msg-text').value = '';
-  document.getElementById('message-players-modal').classList.add('active');
+// ==================== Server Messaging ====================
+
+const MC_COLORS = {
+  black: '#000000', dark_blue: '#0000AA', dark_green: '#00AA00', dark_aqua: '#00AAAA',
+  dark_red: '#AA0000', dark_purple: '#AA00AA', gold: '#FFAA00', gray: '#AAAAAA',
+  dark_gray: '#555555', blue: '#5555FF', green: '#55FF55', aqua: '#55FFFF',
+  red: '#FF5555', light_purple: '#FF55FF', yellow: '#FFFF55', white: '#FFFFFF'
+};
+
+const EVENT_TRIGGER_LABELS = {
+  'cron':            'Scheduled',
+  'backup_start':    'Backup Starting',
+  'backup_complete': 'Backup Complete',
+  'server_start':    'Server Started',
+  'server_stop':     'Server Stopped',
+  'server_crash':    'Server Crashed'
+};
+
+const MSG_TYPE_LABELS = {
+  'say': '/say', 'msg': '/msg', 'chat': '/tellraw',
+  'title': 'Title', 'subtitle': 'Subtitle', 'actionbar': 'Action Bar'
+};
+
+function goToMessaging(targetPlayer) {
+  switchTab('quickcmds');
+  if (targetPlayer) {
+    document.getElementById('msg-target').value = targetPlayer;
+    document.getElementById('msg-type').value = 'msg';
+    onMsgTypeChange();
+  }
+  const el = document.querySelector('.server-messaging-container');
+  if (el) el.scrollIntoView({ behavior: 'smooth' });
 }
 
-function closeMessagePlayersModal() {
-  document.getElementById('message-players-modal').classList.remove('active');
+function openMessagePlayersModal(targetPlayer) {
+  goToMessaging(targetPlayer);
+}
+
+function onMsgTypeChange() {
+  const type = document.getElementById('msg-type').value;
+  const targetGroup = document.getElementById('msg-target-group');
+  const formatGroup = document.getElementById('msg-formatting-group');
+  const targetHelp = document.getElementById('msg-target-help');
+
+  if (type === 'say') {
+    targetGroup.style.display = 'none';
+    formatGroup.style.display = 'none';
+  } else if (type === 'msg') {
+    targetGroup.style.display = '';
+    formatGroup.style.display = 'none';
+    targetHelp.textContent = 'Enter a specific player name (required for /msg)';
+  } else {
+    targetGroup.style.display = '';
+    formatGroup.style.display = '';
+    targetHelp.textContent = '@a = all, @p = nearest, or player name';
+  }
+  updateMsgPreview();
+}
+
+function updateMsgPreview() {
+  const preview = document.getElementById('msg-preview');
+  if (!preview) return;
+  const type = document.getElementById('msg-type').value;
+  const text = document.getElementById('msg-text').value || 'Your message will appear here';
+
+  if (type === 'say' || type === 'msg') {
+    preview.style.color = '#FFFFFF';
+    preview.style.fontWeight = 'normal';
+    preview.style.fontStyle = 'normal';
+    preview.style.textDecoration = 'none';
+    if (type === 'say') {
+      preview.textContent = `[Server] ${text}`;
+    } else {
+      const target = document.getElementById('msg-target').value.trim() || 'Player';
+      preview.textContent = `You whisper to ${target}: ${text}`;
+    }
+    return;
+  }
+
+  const color = document.getElementById('msg-color').value;
+  const bold = document.getElementById('msg-bold').checked;
+  const italic = document.getElementById('msg-italic').checked;
+  const underlined = document.getElementById('msg-underlined').checked;
+  const strikethrough = document.getElementById('msg-strikethrough').checked;
+  const obfuscated = document.getElementById('msg-obfuscated').checked;
+
+  preview.style.color = MC_COLORS[color] || '#FFFFFF';
+  preview.style.fontWeight = bold ? 'bold' : 'normal';
+  preview.style.fontStyle = italic ? 'italic' : 'normal';
+
+  let deco = [];
+  if (underlined) deco.push('underline');
+  if (strikethrough) deco.push('line-through');
+  preview.style.textDecoration = deco.length ? deco.join(' ') : 'none';
+
+  if (obfuscated) {
+    preview.textContent = text.replace(/./g, '█');
+  } else {
+    preview.textContent = text;
+  }
 }
 
 async function sendPlayerMessage() {
-  const target = document.getElementById('msg-target').value.trim();
   const type = document.getElementById('msg-type').value;
+  const target = document.getElementById('msg-target').value.trim();
   const message = document.getElementById('msg-text').value.trim();
 
   if (!message) { showNotification('Please enter a message', 'warning'); return; }
-  if (!target) { showNotification('Please enter a target', 'warning'); return; }
+  if (type !== 'say' && !target) { showNotification('Please enter a target', 'warning'); return; }
+  if (type === 'msg' && (!target || target === '@a')) {
+    showNotification('/msg requires a specific player name', 'warning');
+    return;
+  }
+
+  const body = { type, message, target };
+  if (type !== 'say' && type !== 'msg') {
+    body.color = document.getElementById('msg-color').value;
+    body.bold = document.getElementById('msg-bold').checked;
+    body.italic = document.getElementById('msg-italic').checked;
+    body.underlined = document.getElementById('msg-underlined').checked;
+    body.strikethrough = document.getElementById('msg-strikethrough').checked;
+    body.obfuscated = document.getElementById('msg-obfuscated').checked;
+  }
 
   try {
     const result = await apiRequest(`/api/servers/${currentServerId}/players/message`, {
       method: 'POST',
-      body: JSON.stringify({ target, type, message })
+      body: JSON.stringify(body)
     });
-    closeMessagePlayersModal();
     showNotification(result.message || 'Message sent', 'success');
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+// ── Scheduled / Event Messages ──
+
+async function loadScheduledMessages() {
+  if (!currentServerId) return;
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/messages`);
+    renderScheduledMessages(data.messages || []);
+  } catch (err) {
+    console.error('Failed to load scheduled messages:', err);
+  }
+}
+
+function renderScheduledMessages(messages) {
+  const tbody = document.getElementById('scheduled-messages-list');
+  if (!tbody) return;
+  if (messages.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-message">No scheduled messages configured.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = messages.map(m => {
+    const statusDot = m.enabled ? '🟢' : '⚫';
+    const triggerLabel = EVENT_TRIGGER_LABELS[m.trigger] || m.trigger;
+    const cronInfo = m.trigger === 'cron' && m.cronExpr ? ` (${escapeHtml(m.cronExpr)})` : '';
+    const typeLabel = MSG_TYPE_LABELS[m.msgType] || m.msgType;
+    const msgPreview = escapeHtml(m.message.length > 40 ? m.message.substring(0, 40) + '...' : m.message);
+    return `<tr>
+      <td>${statusDot}</td>
+      <td>${escapeHtml(m.name)}</td>
+      <td>${escapeHtml(triggerLabel)}${cronInfo}</td>
+      <td>${escapeHtml(typeLabel)}</td>
+      <td title="${escapeHtml(m.message)}">${msgPreview}</td>
+      <td>${m.runCount}</td>
+      <td class="actions-cell">
+        <button class="btn btn-small" onclick="testScheduledMessage('${m.id}')">Test</button>
+        <button class="btn btn-small" onclick="editScheduledMessage('${m.id}')">Edit</button>
+        <button class="btn btn-small" onclick="toggleScheduledMessage('${m.id}', ${m.enabled ? 'false' : 'true'})">${m.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="btn btn-danger btn-small" onclick="deleteScheduledMessage('${m.id}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openScheduledMsgModal(msg) {
+  const isEdit = !!msg;
+  document.getElementById('scheduled-msg-modal-title').textContent = isEdit ? '✏️ Edit Scheduled Message' : '📢 Add Scheduled Message';
+  document.getElementById('sched-msg-id').value = isEdit ? msg.id : '';
+  document.getElementById('sched-msg-name').value = isEdit ? msg.name : '';
+  document.getElementById('sched-msg-trigger').value = isEdit ? msg.trigger : 'cron';
+  document.getElementById('sched-msg-cron').value = isEdit && msg.cronExpr ? msg.cronExpr : '0 * * * *';
+  document.getElementById('sched-msg-type').value = isEdit ? msg.msgType : 'say';
+  document.getElementById('sched-msg-target').value = isEdit ? msg.target : '@a';
+  document.getElementById('sched-msg-text').value = isEdit ? msg.message : '';
+  document.getElementById('sched-msg-color').value = isEdit ? msg.color : 'white';
+  document.getElementById('sched-msg-bold').checked = isEdit ? msg.bold : false;
+  document.getElementById('sched-msg-italic').checked = isEdit ? msg.italic : false;
+  document.getElementById('sched-msg-underlined').checked = isEdit ? msg.underlined : false;
+  document.getElementById('sched-msg-strikethrough').checked = isEdit ? msg.strikethrough : false;
+  document.getElementById('sched-msg-obfuscated').checked = isEdit ? msg.obfuscated : false;
+  document.getElementById('sched-msg-enabled').checked = isEdit ? msg.enabled : true;
+  onSchedTriggerChange();
+  onSchedMsgTypeChange();
+  document.getElementById('scheduled-msg-modal').classList.add('active');
+}
+
+function closeScheduledMsgModal() {
+  document.getElementById('scheduled-msg-modal').classList.remove('active');
+}
+
+function onSchedTriggerChange() {
+  const trigger = document.getElementById('sched-msg-trigger').value;
+  document.getElementById('sched-msg-cron-group').style.display = trigger === 'cron' ? '' : 'none';
+}
+
+function onSchedMsgTypeChange() {
+  const type = document.getElementById('sched-msg-type').value;
+  const targetGroup = document.getElementById('sched-msg-target-group');
+  const formatGroup = document.getElementById('sched-msg-formatting-group');
+  if (type === 'say') {
+    targetGroup.style.display = 'none';
+    formatGroup.style.display = 'none';
+  } else if (type === 'msg') {
+    targetGroup.style.display = '';
+    formatGroup.style.display = 'none';
+  } else {
+    targetGroup.style.display = '';
+    formatGroup.style.display = '';
+  }
+}
+
+async function saveScheduledMessage() {
+  const msgId = document.getElementById('sched-msg-id').value;
+  const name = document.getElementById('sched-msg-name').value.trim();
+  const trigger = document.getElementById('sched-msg-trigger').value;
+  const msgType = document.getElementById('sched-msg-type').value;
+  const message = document.getElementById('sched-msg-text').value.trim();
+
+  if (!name) { showNotification('Name is required', 'warning'); return; }
+  if (!message) { showNotification('Message is required', 'warning'); return; }
+  if (trigger === 'cron' && !document.getElementById('sched-msg-cron').value.trim()) {
+    showNotification('Cron expression is required', 'warning'); return;
+  }
+
+  const body = {
+    name, trigger, message, msgType,
+    cronExpr: document.getElementById('sched-msg-cron').value.trim(),
+    target: document.getElementById('sched-msg-target').value.trim() || '@a',
+    color: document.getElementById('sched-msg-color').value,
+    bold: document.getElementById('sched-msg-bold').checked,
+    italic: document.getElementById('sched-msg-italic').checked,
+    underlined: document.getElementById('sched-msg-underlined').checked,
+    strikethrough: document.getElementById('sched-msg-strikethrough').checked,
+    obfuscated: document.getElementById('sched-msg-obfuscated').checked,
+    enabled: document.getElementById('sched-msg-enabled').checked,
+  };
+
+  try {
+    if (msgId) {
+      await apiRequest(`/api/servers/${currentServerId}/messages/${msgId}`, {
+        method: 'PUT', body: JSON.stringify(body)
+      });
+    } else {
+      await apiRequest(`/api/servers/${currentServerId}/messages`, {
+        method: 'POST', body: JSON.stringify(body)
+      });
+    }
+    closeScheduledMsgModal();
+    loadScheduledMessages();
+    showNotification(msgId ? 'Message updated' : 'Message created', 'success');
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function editScheduledMessage(msgId) {
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/messages`);
+    const msg = (data.messages || []).find(m => m.id === msgId);
+    if (msg) openScheduledMsgModal(msg);
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function toggleScheduledMessage(msgId, enable) {
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/messages/${msgId}`, {
+      method: 'PUT', body: JSON.stringify({ enabled: enable === 'true' || enable === true })
+    });
+    loadScheduledMessages();
+    showNotification(enable === 'true' || enable === true ? 'Message enabled' : 'Message disabled', 'success');
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function deleteScheduledMessage(msgId) {
+  if (!await confirmAction('Delete this scheduled message?', { title: 'Delete Message', icon: '📢', okText: 'Delete' })) return;
+  try {
+    await apiRequest(`/api/servers/${currentServerId}/messages/${msgId}`, { method: 'DELETE' });
+    loadScheduledMessages();
+    showNotification('Message deleted', 'success');
+  } catch (error) {
+    // Error shown by apiRequest
+  }
+}
+
+async function testScheduledMessage(msgId) {
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/messages`);
+    const msg = (data.messages || []).find(m => m.id === msgId);
+    if (!msg) return;
+    await apiRequest(`/api/servers/${currentServerId}/messages/test`, {
+      method: 'POST',
+      body: JSON.stringify({
+        msgType: msg.msgType, target: msg.target, message: msg.message,
+        color: msg.color, bold: msg.bold, italic: msg.italic,
+        underlined: msg.underlined, strikethrough: msg.strikethrough, obfuscated: msg.obfuscated
+      })
+    });
+    showNotification('Test message sent', 'success');
   } catch (error) {
     // Error shown by apiRequest
   }
@@ -6285,6 +6616,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (taskModal) {
     taskModal.onclick = (e) => {
       if (e.target.id === 'task-modal') closeTaskModal();
+    };
+  }
+
+  const schedMsgModal = document.getElementById('scheduled-msg-modal');
+  if (schedMsgModal) {
+    schedMsgModal.onclick = (e) => {
+      if (e.target.id === 'scheduled-msg-modal') closeScheduledMsgModal();
     };
   }
 
@@ -7130,7 +7468,7 @@ function renderCannedCommandsGrid() {
   const serverRunning = grid.dataset.serverRunning === 'true';
   grid.innerHTML = '';
   if (_cannedCommands.length === 0) {
-    grid.innerHTML = '<span class="quickcmds-empty">No quick commands configured. Set them up in the Quick Commands tab.</span>';
+    grid.innerHTML = '<span class="quickcmds-empty">No quick commands configured. Set them up in the Commands tab.</span>';
     return;
   }
   _cannedCommands.forEach((item, idx) => {
