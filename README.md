@@ -4,6 +4,7 @@ A Web-Based Multi-Server Minecraft Manager
 
 MServerController is a modern, feature-rich web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python/Flask and Socket.IO, it provides a responsive dark-themed interface with real-time monitoring, role-based access control, automated backups, task scheduling, and a full public REST API.
 
+![Version](https://img.shields.io/badge/Version-3.3.1-purple.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
@@ -14,10 +15,11 @@ MServerController is a modern, feature-rich web application for creating, runnin
 - Create, start, stop, kill, and monitor unlimited Minecraft servers from a single dashboard
 - Per-server isolated configuration, files, backups, and scheduled tasks
 - Real-time status indicators (Running, Stopped, Starting, Stopping, Unresponsive)
-- Server import from ZIP archive or custom JAR upload
+- Server import from ZIP archive, custom JAR upload, or world-only import
 - Managed server mode with automatic JAR update tracking
 - Server approval workflow (optional admin gating for new servers)
-- Bedrock server support
+- Bedrock Edition support alongside Java Edition
+- First-run setup wizard for initial admin account creation
 
 ### 🖥️ Real-Time Terminal & Logs
 - Live server console output via WebSocket (Socket.IO)
@@ -61,6 +63,7 @@ MServerController is a modern, feature-rich web application for creating, runnin
 - **Automated backup scheduling** with cron expressions
 - Configurable backup retention (max count and auto-cleanup)
 - SMTP email notifications for backup success/failure
+- **External backup storage** (S3-compatible or FTP) with automatic upload
 - Backups organized by server
 
 ### ⏰ Task Scheduler
@@ -69,10 +72,25 @@ MServerController is a modern, feature-rich web application for creating, runnin
 - Run-limited tasks (execute N times then auto-disable)
 - Per-server task management with enable/disable toggle
 
+### 💬 Server Messaging
+- Schedule automated in-game messages (announcements, MOTD, reminders)
+- Cron-based and event-triggered delivery (on backup, start, stop, crash)
+- Full text formatting (color, bold, italic, underlined, strikethrough, obfuscated)
+- Target specific players or broadcast to all
+- Per-server message management with enable/disable toggle
+
+### 🔄 Background Job Queue
+- Long-running operations (backups, restores, JAR swaps, deletions) run asynchronously
+- Real-time progress reporting via WebSocket push notifications
+- Per-server concurrency control (no overlapping jobs on the same server)
+- Job history with status tracking (queued, running, completed, failed, cancelled)
+- Cancel running jobs from the UI
+- Downloadable job artifacts (e.g. backup files)
+
 ### 👥 User Management & RBAC
-- Role-based access control with three roles: **Admin**, **Moderator**, **User**
+- Role-based access control with three tiers: **Admin** (full access), **User** (manage own servers), **Public** (view-only status)
 - User registration with optional admin approval workflow
-- Per-server access control (users see only their assigned servers)
+- Per-server access control (users see only their owned/assigned servers)
 - Admin user management panel (create, edit, delete, approve users)
 - Account lockout after failed login attempts with automatic anti-lockout emergency admin
 - Username, display name, and email profile management
@@ -107,6 +125,9 @@ MServerController is a modern, feature-rich web application for creating, runnin
 - **App Settings**: Toggle registration, require approval, server approval workflow
 - **MFA Settings**: Require MFA for admins or all users
 - **SMTP Configuration**: Email notifications with test email support
+- **Email Templates**: Customizable notification templates with reset-to-default
+- **Webhook Notifications**: Outbound webhooks for server events
+- **External Backup Storage**: Configure S3-compatible or FTP destinations
 - **JAR Bucket Manager**: Download server JARs from official APIs (Paper, Purpur, Folia, Forge, NeoForge, Fabric, Vanilla, Spigot, BungeeCord)
 - **Tools Manager**: Upload and execute custom Python scripts (admin only)
 - **User Management**: Full CRUD with role assignment and password reset
@@ -127,9 +148,10 @@ MServerController is a modern, feature-rich web application for creating, runnin
 ### 📱 Responsive Design
 - Dark-themed modern UI
 - Sidebar server list with collapsible navigation
-- Tabbed interface per server (Terminal, Logs, Files, Mods, Properties, Resource Pack, Players, Backups, Tasks)
+- Tabbed interface per server (Terminal, Logs, Files, Mods, Properties, Resource Pack, Players, Backups, Tasks, Messages)
 - Profile modal with password change and MFA setup
 - Mobile-friendly responsive layout
+- First-run setup page with guided onboarding
 
 ### 👤 Player Management
 - View and manage operator (ops) list with permission levels
@@ -247,13 +269,15 @@ The application will be available at `http://localhost:3000`
 
 1. **Access the web interface** at `http://your-server-ip`
 
-2. **Add a server** by clicking the "Add" button in the sidebar:
+2. **Complete first-run setup** — on a fresh install you'll be guided to create the initial admin account
+
+3. **Add a server** by clicking the "Add" button in the sidebar:
    - Enter a name for your server
    - Specify the server directory (or leave empty to create a new one)
    - Configure the JAR file name and Java arguments
    - Click "Save"
 
-3. **Start your server** by selecting it and clicking "Start"
+4. **Start your server** by selecting it and clicking "Start"
 
 ### Managing Multiple Servers
 
@@ -285,6 +309,7 @@ The application will be available at `http://localhost:3000`
 |----------|-------------|---------|
 | `PORT` | HTTP port for the application | `3000` |
 | `SECRET_KEY` | Flask secret key for sessions | Auto-generated |
+| `FLASK_ENV` | Set to `development` for debug mode and looser cookies | (unset) |
 
 ### Server Configuration
 
@@ -302,6 +327,17 @@ Each server stores its configuration in `config.json`:
     }
   }
 }
+```
+
+### External Backup Storage (Optional)
+
+Configure via the Admin Settings panel to automatically upload backups to:
+- **S3-compatible storage** (AWS S3, MinIO, Backblaze B2, etc.)
+- **FTP/SFTP server**
+
+Requires `boto3` for S3 support (not installed by default):
+```bash
+pip install boto3>=1.34.0
 ```
 
 ## Service Management
@@ -464,6 +500,24 @@ This only copies the application files (server.py, public/) without reinstalling
 | PUT | `/api/servers/<id>/tasks/<tid>` | Update task |
 | DELETE | `/api/servers/<id>/tasks/<tid>` | Delete task |
 
+### Server Messages
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/servers/<id>/messages` | List scheduled messages |
+| POST | `/api/servers/<id>/messages` | Create scheduled message |
+| PUT | `/api/servers/<id>/messages/<mid>` | Update message |
+| DELETE | `/api/servers/<id>/messages/<mid>` | Delete message |
+| POST | `/api/servers/<id>/messages/test` | Test-send a message now |
+
+### Background Jobs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/jobs` | List all jobs (with status filter) |
+| GET | `/api/jobs/<id>` | Get job details and progress |
+| POST | `/api/jobs/<id>/cancel` | Cancel a running job |
+| DELETE | `/api/jobs/<id>` | Delete a completed job |
+| GET | `/api/jobs/<id>/download` | Download job artifact |
+
 ### Admin
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -476,6 +530,19 @@ This only copies the application files (server.py, public/) without reinstalling
 | POST | `/api/admin/users/<id>/password` | Reset password |
 | DELETE | `/api/admin/users/<id>/mfa` | Reset user MFA |
 | POST | `/api/admin/users/<id>/enable` | Enable account |
+
+### Settings (Admin)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/settings/smtp` | Get SMTP configuration |
+| PUT | `/api/settings/smtp` | Update SMTP configuration |
+| POST | `/api/settings/smtp/test` | Send test email |
+| GET | `/api/settings/webhook` | Get webhook configuration |
+| PUT | `/api/settings/webhook` | Update webhook configuration |
+| POST | `/api/settings/webhook/test` | Send test webhook |
+| GET | `/api/settings/email-templates` | List email templates |
+| PUT | `/api/settings/email-template/<name>` | Update email template |
+| POST | `/api/settings/email-template/<name>/reset` | Reset template to default |
 
 ### Public API (v1) — API Key Auth
 | Method | Endpoint | Description |
@@ -545,22 +612,25 @@ sudo tail -f /var/log/nginx/error.log
 ```
 MServerController/
 ├── server.py                 # Main Python/Flask backend (API, WebSocket, managers)
+├── db.py                     # SQLite database layer (schema, connections, queries)
 ├── api_manager.py            # Public API v1 blueprint (key auth endpoints)
 ├── requirements.txt          # Python dependencies
 ├── version                   # Application version file
 ├── nginx.conf                # Nginx reverse proxy configuration
 ├── install.sh                # Interactive installation script
 ├── git-release.sh            # Git release/versioning helper
-├── users.json                # User accounts (generated)
+├── msc.db                    # SQLite database (users, servers, jobs, stats — generated)
 ├── config.json               # Server configurations (generated)
 ├── configs/
 │   └── jarurls.conf          # JAR download URL configuration
 ├── public/                   # Frontend files
 │   ├── index.html            # Main dashboard page
 │   ├── login.html            # Login/registration page
+│   ├── setup.html            # First-run setup wizard
 │   ├── settings.html         # Admin settings panel
 │   ├── public.html           # Public server status page
 │   ├── app.js                # Dashboard frontend logic
+│   ├── setup.js              # First-run setup logic
 │   ├── settings.js           # Settings panel logic
 │   ├── login.js              # Login/registration logic
 │   ├── public.js             # Public page logic

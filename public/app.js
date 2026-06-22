@@ -221,6 +221,7 @@ async function checkAuth() {
     const response = await fetch('/api/auth/me');
     if (response.ok) {
       currentUser = await response.json();
+      window.currentUser = currentUser;
       updateUserUI();
       return true;
     } else {
@@ -235,15 +236,14 @@ async function checkAuth() {
 }
 
 function updateUserUI() {
-  // Update user info in top bar
   const userInfo = document.getElementById('user-info');
   if (userInfo && currentUser) {
-    // Use displayName (or name) if available, otherwise fall back to username
     const displayName = currentUser.displayName || currentUser.name || currentUser.username;
+    const groupName = currentUser.groupName || 'No Group';
     userInfo.innerHTML = `
       <div class="user-display">
         <span class="user-name">${escapeHtml(displayName)}</span>
-        <span class="user-role ${currentUser.role}">${currentUser.role}</span>
+        <span class="group-badge">${escapeHtml(groupName)}</span>
       </div>
       <div class="user-actions">
         <button class="btn-icon" onclick="openProfileSettings()" title="Profile Settings">⚙️</button>
@@ -251,11 +251,11 @@ function updateUserUI() {
       </div>
     `;
   }
-  
-  // Show/hide settings link based on admin role
+
   const settingsLink = document.getElementById('settings-link');
   if (settingsLink && currentUser) {
-    settingsLink.style.display = currentUser.role === 'admin' ? 'inline-block' : 'none';
+    const hasPanel = currentUser.permissions && currentUser.permissions.some(p => p === '*' || p.startsWith('panel.'));
+    settingsLink.style.display = hasPanel ? 'inline-block' : 'none';
   }
 }
 
@@ -320,8 +320,8 @@ function openProfileSettings() {
     // Populate profile display section (read-only)
     document.getElementById('profile-display-username').textContent = currentUser.username;
     const roleDisplay = document.getElementById('profile-display-role');
-    roleDisplay.textContent = currentUser.role.toUpperCase();
-    roleDisplay.className = 'profile-info-value profile-role-badge ' + currentUser.role;
+    roleDisplay.textContent = (currentUser.groupName || 'No Group').toUpperCase();
+    roleDisplay.className = 'profile-info-value profile-role-badge group-badge';
     
     // Populate editable fields
     document.getElementById('profile-username').value = currentUser.username;
@@ -1151,6 +1151,7 @@ async function startServer() {
     clearTerminal();
     
     const result = await apiRequest(`/api/servers/${currentServerId}/start`, { method: 'POST' });
+    if (result.pending) return;
     if (result.success) {
       appendTerminalOutput('Starting server...\n');
       updateServerStatus('starting', false);
@@ -1429,6 +1430,7 @@ async function stopServer() {
   
   try {
     const result = await apiRequest(`/api/servers/${currentServerId}/stop`, { method: 'POST' });
+    if (result.pending) return;
     if (result.success) {
       appendTerminalOutput('Stopping server gracefully...\n');
       setTimeout(() => loadServerDetails(), 2000);
@@ -3168,10 +3170,11 @@ async function saveServer(e) {
   try {
     if (editingServerId) {
       // Update existing server
-      await apiRequest(`/api/servers/${editingServerId}`, {
+      const editResult = await apiRequest(`/api/servers/${editingServerId}`, {
         method: 'PUT',
         body: JSON.stringify(serverData)
       });
+      if (editResult.pending) { closeServerModal(); return; }
     } else {
       // Create new server (manual)
       const result = await apiRequest('/api/servers', {
@@ -3283,9 +3286,14 @@ async function confirmDeleteServer(deleteFiles) {
       ? `/api/servers/${currentServerId}?deleteFiles=true`
       : `/api/servers/${currentServerId}`;
     
-    await apiRequest(url, { method: 'DELETE' });
+    const result = await apiRequest(url, { method: 'DELETE' });
 
     closeDeleteServerModal();
+
+    if (result.pending) {
+      // Pending approval — don't navigate away
+      return;
+    }
 
     showNotification(
       deleteFiles
@@ -3294,8 +3302,6 @@ async function confirmDeleteServer(deleteFiles) {
       'info'
     );
 
-    // Deletion now runs as a background job; navigate away and let the job's
-    // completion event refresh the server list (onJobFinished -> loadServers).
     currentServerId = null;
     document.getElementById('no-server-view').style.display = 'flex';
     document.getElementById('server-view').style.display = 'none';
@@ -4159,12 +4165,11 @@ async function createBackup() {
   try {
     const payload = { compressionLevel, backupType: 'manual' };
     if (customName) payload.customName = customName;
-    await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/create`, {
       method: 'POST',
       body: JSON.stringify(payload)
     });
-    // Backup runs as a background job; the Tasks panel shows progress and the
-    // backup list refreshes via onJobFinished when the job completes.
+    if (result.pending) return;
     openJobsPanel();
   } catch (error) {
     console.error('Failed to start backup:', error);
@@ -4284,10 +4289,11 @@ async function deleteBackup(name) {
   if (!await confirmAction(`Delete backup "${name}"?`, { title: 'Delete Backup', icon: '🗑️', okText: 'Delete' })) return;
   
   try {
-    await apiRequest(`/api/servers/${currentServerId}/backups/delete`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/backups/delete`, {
       method: 'DELETE',
       body: JSON.stringify({ name })
     });
+    if (result.pending) return;
     loadBackups();
   } catch (error) {
     console.error('Failed to delete backup:', error);

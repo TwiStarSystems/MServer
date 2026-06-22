@@ -22,12 +22,32 @@
           <a href="/" class="nav-link">Dashboard</a>
           <a href="/settings.html" class="nav-link active" id="settings-link">Settings</a>
         </nav>
+        <button id="notif-bell" class="notif-bell" title="Notifications" onclick="toggleNotifPanel()">
+          🔔
+          <span id="notif-badge" class="notif-badge" style="display:none;">0</span>
+        </button>
         <div id="user-info" class="user-info">
           <!-- Populated by JavaScript -->
         </div>
       </div>
     </header>
-    
+
+    <!-- Notifications drawer -->
+    <div id="notif-overlay" class="jobs-overlay" onclick="closeNotifPanel()"></div>
+    <aside id="notif-panel" class="jobs-panel notif-panel" aria-hidden="true">
+      <div class="jobs-panel-header">
+        <h3>🔔 Notifications</h3>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-small" onclick="markAllNotifsRead()" title="Mark all read">Mark read</button>
+          <button class="btn btn-small" onclick="dismissAllNotifs()" title="Dismiss all">Clear all</button>
+          <button class="close-btn" onclick="closeNotifPanel()" title="Close">&times;</button>
+        </div>
+      </div>
+      <div id="notif-list" class="jobs-list">
+        <div class="jobs-empty">No notifications.</div>
+      </div>
+    </aside>
+
     <!-- Main Settings Content -->
     <main class="settings-main">
       <div class="settings-container">
@@ -38,7 +58,7 @@
         <nav class="settings-tabs">
           <button type="button" class="settings-tab-btn active" data-tab="stats">📊 Server Stats</button>
           <button type="button" class="settings-tab-btn" data-tab="branding">🎨 Branding</button>
-          <button type="button" class="settings-tab-btn" data-tab="users">👥 User Management</button>
+          <button type="button" class="settings-tab-btn" data-tab="users">👥 User/Group Management</button>
           <button type="button" class="settings-tab-btn" data-tab="approvals">✅ Approvals</button>
           <button type="button" class="settings-tab-btn" data-tab="api">🔌 API Manager</button>
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
@@ -135,15 +155,24 @@
           </div>
         </section>
         
-        <!-- User Management Section -->
+        <!-- User/Group Management Section -->
         <section id="users-section" class="settings-section">
           <div class="user-mgmt-header">
             <h3>👥 Registered Users</h3>
             <button type="button" class="btn btn-success" onclick="openAddUserModal()">+ Add User</button>
           </div>
-          
           <div id="users-list" class="user-mgmt-content active">
             <div class="loading">Loading users...</div>
+          </div>
+
+          <hr style="margin: 2rem 0;">
+
+          <div class="user-mgmt-header">
+            <h3>🛡️ Permission Groups</h3>
+            <button type="button" class="btn btn-success" onclick="openAddGroupModal()">+ New Group</button>
+          </div>
+          <div id="groups-list" class="user-mgmt-content active">
+            <div class="loading">Loading groups...</div>
           </div>
         </section>
         
@@ -159,7 +188,7 @@
                 <div class="loading">Loading pending users...</div>
               </div>
             </div>
-            
+
             <div class="approval-card">
               <div class="approval-card-header">
                 <h3>🎮 Server Requests</h3>
@@ -167,6 +196,16 @@
               </div>
               <div id="pending-servers-list" class="approval-list">
                 <div class="loading">Loading pending servers...</div>
+              </div>
+            </div>
+
+            <div class="approval-card">
+              <div class="approval-card-header">
+                <h3>⏳ Pending Actions</h3>
+                <span class="approval-count" id="pending-actions-count">0</span>
+              </div>
+              <div id="pending-actions-list" class="approval-list">
+                <div class="loading">Loading pending actions...</div>
               </div>
             </div>
           </div>
@@ -247,9 +286,14 @@
           <div class="settings-card">
             <h3>🌐 Network & Connectivity</h3>
             <div class="form-group" style="margin-bottom: 16px;">
-              <label for="base-url">Base URL</label>
-              <input type="text" id="base-url" class="form-control" placeholder="https://mc.example.com" value="">
-              <small>Your server's base domain/IP (e.g., mc.example.com or 123.45.67.89). Used for resource packs and public server information.</small>
+              <label for="base-url">Panel URL</label>
+              <input type="text" id="base-url" class="form-control" placeholder="https://panel.mc.example.com" value="">
+              <small>The public URL of this panel. Used for resource pack URLs and links in notifications.</small>
+            </div>
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label for="game-hostname">Game Server Hostname</label>
+              <input type="text" id="game-hostname" class="form-control" placeholder="mc.example.com" value="">
+              <small>The hostname players use to connect to your game servers (e.g., mc.twistar.org). Shown on the public page with each server's port.</small>
             </div>
 
             <div class="form-group" style="margin-bottom: 16px;">
@@ -294,7 +338,7 @@
           </div>
 
           <div class="settings-card">
-            <h3>👤 User Creation & Modification</h3>
+            <h3>👤 User Settings</h3>
             <div class="settings-option">
               <div class="settings-option-info">
                 <label>Enable User Registration</label>
@@ -305,32 +349,21 @@
                 <span class="toggle-slider"></span>
               </label>
             </div>
-            <div class="settings-option">
-              <div class="settings-option-info">
-                <label>Require Admin Approval for Registration</label>
-                <small>New user registrations will require admin approval before they can login</small>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="require-approval" onchange="saveAppSettings()">
-                <span class="toggle-slider"></span>
-              </label>
+          </div>
+
+          <div class="settings-card">
+            <h3>🛡️ Action Policies</h3>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 16px;">
+              Control what happens when non-admin users perform actions. Admins always bypass these policies.
+            </p>
+            <div id="policy-list">
+              <!-- Populated by JavaScript -->
+              <div class="loading">Loading policies...</div>
             </div>
           </div>
-          
+
           <div class="settings-card">
             <h3>🎮 Game Server Settings</h3>
-            <div class="settings-option">
-              <div class="settings-option-info">
-                <label>Require Admin Approval to Create Servers</label>
-                <small>Users will need admin approval before they can create new game servers</small>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="require-server-approval" onchange="saveAppSettings()">
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-
-            <div class="settings-divider" style="margin: 16px 0; border-top: 1px solid var(--border-color);"></div>
             <h4 style="margin: 0 0 12px; font-size: 0.95rem; color: var(--text-secondary);">💾 Backup Retention</h4>
 
             <div class="settings-option">
@@ -831,11 +864,9 @@
           <input type="password" id="new-password" class="form-control" required minlength="6" placeholder="Enter password">
         </div>
         <div class="form-group">
-          <label for="new-role">Role</label>
-          <select id="new-role" class="form-control">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-            <option value="public">Public</option>
+          <label for="new-group">Group</label>
+          <select id="new-group" class="form-control">
+            <option value="">Loading...</option>
           </select>
         </div>
         <div class="modal-footer">
@@ -1026,13 +1057,11 @@
         </div>
         
         <div class="form-group">
-          <label for="edit-user-role">Role</label>
-          <select id="edit-user-role" class="form-control">
-            <option value="public">Public</option>
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
+          <label for="edit-user-group">Group</label>
+          <select id="edit-user-group" class="form-control">
+            <option value="">Loading...</option>
           </select>
-          <small class="form-hint">User's permission level.</small>
+          <small class="form-hint">User's permission group.</small>
         </div>
         
         <hr class="divider">
@@ -1062,8 +1091,34 @@
     </footer>
   </div>
   
+  <!-- Group Create/Edit Modal -->
+  <div id="group-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2 id="group-modal-title">Create Group</h2>
+        <button class="btn-icon modal-close" onclick="closeGroupModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="group-name">Group Name</label>
+          <input type="text" id="group-name" class="form-control" placeholder="e.g. Moderator" required>
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="group-default"> Default group for new registrations</label>
+        </div>
+        <h4>Permissions</h4>
+        <div id="group-perms"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeGroupModal()">Cancel</button>
+        <button type="button" class="btn btn-success" onclick="saveGroup()">Save Group</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="utils.js"></script>
+  <script src="notifications.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

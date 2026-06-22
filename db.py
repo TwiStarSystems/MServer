@@ -17,8 +17,10 @@ Usage:
     init_db()   # safe to call every boot — uses CREATE TABLE IF NOT EXISTS
 """
 
+import json
 import sqlite3
 import threading
+from datetime import datetime
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent.absolute() / 'msc.db'
@@ -54,12 +56,23 @@ CREATE TABLE IF NOT EXISTS db_meta (
 );
 INSERT OR IGNORE INTO db_meta VALUES ('schema_version', '1');
 
+-- ── Permission Groups ─────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS groups (
+    id          TEXT PRIMARY KEY,
+    name        TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    permissions TEXT NOT NULL DEFAULT '[]',
+    is_default  INTEGER NOT NULL DEFAULT 0,
+    is_builtin  INTEGER NOT NULL DEFAULT 0,
+    priority    INTEGER NOT NULL DEFAULT 0,
+    created     TEXT NOT NULL
+);
+
 -- ── Users ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (
     id                    TEXT PRIMARY KEY,
     username              TEXT UNIQUE NOT NULL COLLATE NOCASE,
     password              TEXT NOT NULL,
-    role                  TEXT NOT NULL DEFAULT 'user',
+    group_id              TEXT,
     name                  TEXT NOT NULL DEFAULT '',
     email                 TEXT NOT NULL DEFAULT '',
     mfa_enabled           INTEGER NOT NULL DEFAULT 0,
@@ -72,7 +85,8 @@ CREATE TABLE IF NOT EXISTS users (
     account_disabled      INTEGER NOT NULL DEFAULT 0,
     disabled_at           TEXT,
     is_anti_lockout       INTEGER NOT NULL DEFAULT 0,
-    notification_prefs    TEXT NOT NULL DEFAULT '{}'
+    notification_prefs    TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
 );
 
 -- ── Servers ───────────────────────────────────────────────────────────────────
@@ -236,7 +250,85 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_server ON jobs(server_id, created DESC);
+
+-- ── Pending Actions (approval-gated user requests) ───────────────────────────
+CREATE TABLE IF NOT EXISTS pending_actions (
+    id          TEXT PRIMARY KEY,
+    action_type TEXT NOT NULL,              -- registration|serverCreate|serverDelete|serverEdit|serverLifecycle|backupCreate|backupDelete|fileUpload|modManagement|playerManagement
+    target_id   TEXT,                       -- server_id or other resource id (null for creation)
+    user_id     TEXT NOT NULL,              -- who requested the action
+    payload     TEXT NOT NULL DEFAULT '{}', -- JSON: full action parameters
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending|approved|rejected
+    reviewed_by TEXT,                       -- admin user_id who acted on it
+    review_note TEXT,                       -- optional admin comment
+    created     TEXT NOT NULL,
+    reviewed    TEXT                        -- timestamp of approval/rejection
+);
+CREATE INDEX IF NOT EXISTS idx_pending_actions_status ON pending_actions(status, created DESC);
+CREATE INDEX IF NOT EXISTS idx_pending_actions_user   ON pending_actions(user_id, created DESC);
+
+-- ── Notifications ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS notifications (
+    id        TEXT PRIMARY KEY,
+    user_id   TEXT NOT NULL,                -- recipient user_id
+    type      TEXT NOT NULL,                -- approval_request|action_notify|action_approved|action_rejected|system
+    title     TEXT NOT NULL,
+    message   TEXT NOT NULL DEFAULT '',
+    link      TEXT,                         -- optional route to navigate to (e.g. /settings#approvals)
+    ref_type  TEXT,                         -- pending_action|server|user (nullable)
+    ref_id    TEXT,                         -- id of referenced object (nullable)
+    read      INTEGER NOT NULL DEFAULT 0,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    created   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, dismissed, created DESC);
+
+-- ── Server Group Access (sharing) ────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS server_group_access (
+    server_id TEXT NOT NULL,
+    group_id  TEXT NOT NULL,
+    PRIMARY KEY (server_id, group_id),
+    FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id)  REFERENCES groups(id)  ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_sga_group ON server_group_access(group_id);
 """
+
+
+_DEFAULT_USER_PERMISSIONS = json.dumps([
+    'servers.view', 'servers.create', 'servers.edit', 'servers.delete',
+    'servers.start', 'servers.stop', 'servers.restart', 'servers.console',
+    'servers.files.view', 'servers.files.edit',
+    'servers.properties.view', 'servers.properties.edit',
+    'servers.mods.view', 'servers.mods.manage',
+    'servers.backups.view', 'servers.backups.create', 'servers.backups.delete',
+    'servers.backups.restore', 'servers.backups.schedule',
+    'servers.players.view', 'servers.players.manage',
+    'servers.tasks.view', 'servers.tasks.manage',
+    'servers.messages.view', 'servers.messages.manage',
+    'servers.nbt.view', 'servers.nbt.edit',
+])
+
+
+def _seed_default_groups():
+    conn = get_db()
+    now = datetime.now().isoformat()
+    conn.execute(
+        '''INSERT OR IGNORE INTO groups (id, name, permissions, is_default, is_builtin, priority, created)
+           VALUES (?, ?, ?, 0, 1, 100, ?)''',
+        ('builtin-admin', 'Admin', '["*"]', now)
+    )
+    conn.execute(
+        '''INSERT OR IGNORE INTO groups (id, name, permissions, is_default, is_builtin, priority, created)
+           VALUES (?, ?, ?, 1, 1, 50, ?)''',
+        ('builtin-user', 'User', _DEFAULT_USER_PERMISSIONS, now)
+    )
+    conn.execute(
+        '''INSERT OR IGNORE INTO groups (id, name, permissions, is_default, is_builtin, priority, created)
+           VALUES (?, ?, ?, 0, 1, 10, ?)''',
+        ('builtin-public', 'Public', '["servers.view"]', now)
+    )
+    conn.commit()
 
 
 def init_db():
@@ -248,6 +340,7 @@ def init_db():
     conn = get_db()
     conn.executescript(_SCHEMA)
     conn.commit()
+    _seed_default_groups()
     recover_interrupted_jobs()
 
 

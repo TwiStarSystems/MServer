@@ -21,6 +21,10 @@
           <a href="/" class="nav-link active">Dashboard</a>
           <a href="/settings.html" class="nav-link" id="settings-link" style="display:none;">Settings</a>
         </nav>
+        <button id="notif-bell" class="notif-bell" title="Notifications" onclick="toggleNotifPanel()">
+          🔔
+          <span id="notif-badge" class="notif-badge" style="display:none;">0</span>
+        </button>
         <button id="tasks-btn" class="tasks-btn" title="Background tasks" onclick="toggleJobsPanel()">
           <span class="tasks-btn-icon">📋</span>
           <span>Tasks</span>
@@ -41,6 +45,22 @@
       </div>
       <div id="jobs-list" class="jobs-list">
         <div class="jobs-empty">No tasks yet.</div>
+      </div>
+    </aside>
+
+    <!-- Notifications drawer -->
+    <div id="notif-overlay" class="jobs-overlay" onclick="closeNotifPanel()"></div>
+    <aside id="notif-panel" class="jobs-panel notif-panel" aria-hidden="true">
+      <div class="jobs-panel-header">
+        <h3>🔔 Notifications</h3>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-small" onclick="markAllNotifsRead()" title="Mark all read">Mark read</button>
+          <button class="btn btn-small" onclick="dismissAllNotifs()" title="Dismiss all">Clear all</button>
+          <button class="close-btn" onclick="closeNotifPanel()" title="Close">&times;</button>
+        </div>
+      </div>
+      <div id="notif-list" class="jobs-list">
+        <div class="jobs-empty">No notifications.</div>
       </div>
     </aside>
 
@@ -1983,6 +2003,7 @@
   }
   </script>
   <script src="utils.js"></script>
+  <script src="notifications.js"></script>
   <script src="app.js"></script>
 
   <!-- Toast notification container -->

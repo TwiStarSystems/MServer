@@ -55,6 +55,23 @@ async function fetchCSRFToken() {
 }
 
 /**
+ * Check if the current user has a specific permission.
+ * Supports wildcards: '*' matches everything, 'servers.*' matches 'servers.files.view'.
+ */
+function hasPermission(permission) {
+  if (!window.currentUser || !window.currentUser.permissions) return false;
+  const perms = window.currentUser.permissions;
+  if (perms.includes('*')) return true;
+  if (perms.includes(permission)) return true;
+  const parts = permission.split('.');
+  for (let i = 1; i < parts.length; i++) {
+    const wildcard = parts.slice(0, i).join('.') + '.*';
+    if (perms.includes(wildcard)) return true;
+  }
+  return false;
+}
+
+/**
  * Make an authenticated API request
  * @param {string} url - The API endpoint URL
  * @param {object} options - Fetch options (method, headers, body, etc.)
@@ -88,6 +105,13 @@ async function apiRequest(url, options = {}) {
 
   if (!response.ok) {
     throw new Error(data.error || data.message || `HTTP ${response.status}`);
+  }
+
+  // Auto-handle pending approval responses
+  if (data && data.pending === true && data.message) {
+    if (typeof showNotification === 'function') {
+      showNotification(data.message, 'info');
+    }
   }
 
   return data;

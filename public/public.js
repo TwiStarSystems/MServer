@@ -66,6 +66,18 @@ function createServerCard(server) {
                 <span class="status-text ${statusClass}">${statusText}</span>
             </div>
             <div class="server-info">
+                ${server.address ? `
+                <div class="info-row">
+                    <span class="info-label">Address</span>
+                    <span class="info-value">${escapeHtml(server.address)}</span>
+                </div>
+                ` : ''}
+                ${server.ownerName ? `
+                <div class="info-row">
+                    <span class="info-label">Owner</span>
+                    <span class="info-value">${escapeHtml(server.ownerName)}</span>
+                </div>
+                ` : ''}
                 <div class="info-row">
                     <span class="info-label">Version</span>
                     <span class="info-value">${versionDisplay}</span>

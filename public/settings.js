@@ -68,6 +68,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Load users when User Management tab is clicked
       if (tab === 'users') {
         loadUsers();
+        loadGroups();
       }
       // Load approvals when Approvals tab is clicked
       if (tab === 'approvals') {
@@ -102,12 +103,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     currentUser = await response.json();
-    if (currentUser.role !== 'admin') {
+    window.currentUser = currentUser;
+    const hasPanel = currentUser.permissions && currentUser.permissions.some(p => p === '*' || p.startsWith('panel.'));
+    if (!hasPanel) {
       window.location.href = '/';
       return;
     }
-    // Update user UI in top bar
     updateUserUI();
+    applyTabVisibility();
   } catch (err) {
     console.error('Auth error:', err);
     window.location.href = '/login.html';
@@ -159,16 +162,48 @@ document.addEventListener('DOMContentLoaded', async () => {
 function updateUserUI() {
   const userInfo = document.getElementById('user-info');
   if (userInfo && currentUser) {
+    const groupName = currentUser.groupName || 'No Group';
     userInfo.innerHTML = `
       <div class="user-display">
         <span class="user-name">${escapeHtml(currentUser.username)}</span>
-        <span class="user-role ${currentUser.role}">${currentUser.role}</span>
+        <span class="group-badge">${escapeHtml(groupName)}</span>
       </div>
       <div class="user-actions">
         <button class="btn-icon" onclick="openProfileSettings()" title="Profile Settings">⚙️</button>
         <button class="btn-icon" onclick="logout()" title="Logout">🚪</button>
       </div>
     `;
+  }
+}
+
+function applyTabVisibility() {
+  const tabMap = {
+    'stats': 'panel.stats.view',
+    'branding': 'panel.settings.manage',
+    'users': 'panel.users.view',
+    'approvals': 'panel.approvals.manage',
+    'api': 'panel.settings.manage',
+    'appsettings': 'panel.settings.view',
+    'external-backup': 'panel.settings.view',
+    'tools': 'panel.tools.manage',
+  };
+  let firstVisible = null;
+  document.querySelectorAll('.settings-tab-btn').forEach(btn => {
+    const tab = btn.getAttribute('data-tab');
+    const perm = tabMap[tab];
+    if (perm && !hasPermission(perm)) {
+      btn.style.display = 'none';
+    } else {
+      if (!firstVisible) firstVisible = tab;
+    }
+  });
+  if (firstVisible) {
+    document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
+    const activeBtn = document.querySelector(`.settings-tab-btn[data-tab="${firstVisible}"]`);
+    const activeSec = document.getElementById(`${firstVisible}-section`);
+    if (activeBtn) activeBtn.classList.add('active');
+    if (activeSec) activeSec.classList.add('active');
   }
 }
 
@@ -219,8 +254,8 @@ function openProfileSettings() {
     // Populate profile display section (read-only)
     document.getElementById('profile-display-username').textContent = currentUser.username;
     const roleDisplay = document.getElementById('profile-display-role');
-    roleDisplay.textContent = currentUser.role.toUpperCase();
-    roleDisplay.className = 'profile-info-value profile-role-badge ' + currentUser.role;
+    roleDisplay.textContent = (currentUser.groupName || 'No Group').toUpperCase();
+    roleDisplay.className = 'profile-info-value profile-role-badge group-badge';
     
     // Populate editable fields
     document.getElementById('profile-username').value = currentUser.username;
@@ -1925,7 +1960,7 @@ async function loadUsers() {
               <th>Username</th>
               <th>Display Name</th>
               <th>Email</th>
-              <th>Role</th>
+              <th>Group</th>
               <th>MFA</th>
               <th>Created</th>
               <th>Last Login</th>
@@ -1938,7 +1973,7 @@ async function loadUsers() {
                 <td>${escapeHtml(u.username)}</td>
                 <td>${u.name ? escapeHtml(u.name) : '<span class="text-muted">Not set</span>'}</td>
                 <td>${u.email ? escapeHtml(u.email) : '<span class="text-muted">Not set</span>'}</td>
-                <td><span class="role-badge ${u.role}">${u.role}</span></td>
+                <td><span class="group-badge">${escapeHtml(u.groupName || 'None')}</span></td>
                 <td>${u.mfaEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-secondary">Disabled</span>'}</td>
                 <td>${new Date(u.created).toLocaleDateString()}</td>
                 <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
@@ -1968,7 +2003,7 @@ async function loadUsers() {
 // ==================== Approvals Functions ====================
 
 async function loadPendingApprovals() {
-  await Promise.all([loadPendingUsers(), loadPendingServers()]);
+  await Promise.all([loadPendingUsers(), loadPendingServers(), loadPendingActions()]);
 }
 
 async function loadPendingUsers() {
@@ -2140,13 +2175,13 @@ async function openEditUserModal(userId) {
     // Populate the modal fields
     document.getElementById('edit-user-display-username').textContent = user.username;
     const roleDisplay = document.getElementById('edit-user-display-role');
-    roleDisplay.textContent = user.role.toUpperCase();
-    roleDisplay.className = 'profile-info-value profile-role-badge ' + user.role;
-    
+    roleDisplay.textContent = (user.groupName || 'No Group').toUpperCase();
+    roleDisplay.className = 'profile-info-value profile-role-badge group-badge';
+
     document.getElementById('edit-user-username').value = user.username;
     document.getElementById('edit-user-name').value = user.name || '';
     document.getElementById('edit-user-email').value = user.email || '';
-    document.getElementById('edit-user-role').value = user.role;
+    await populateGroupSelect('edit-user-group', user.groupId);
     
     // Update MFA status display
     const mfaStatusContainer = document.getElementById('edit-user-mfa-status');
@@ -2183,7 +2218,7 @@ async function saveEditUser() {
   const username = document.getElementById('edit-user-username').value.trim();
   const name = document.getElementById('edit-user-name').value.trim();
   const email = document.getElementById('edit-user-email').value.trim();
-  const role = document.getElementById('edit-user-role').value;
+  const groupId = document.getElementById('edit-user-group').value;
   const newPassword = document.getElementById('edit-user-new-password').value;
   
   if (!username) {
@@ -2231,16 +2266,16 @@ async function saveEditUser() {
       return;
     }
     
-    // Update role
-    const roleResponse = await fetch(`/api/admin/users/${editingUserId}/role`, {
+    // Update group
+    const groupResponse = await fetch(`/api/admin/users/${editingUserId}/group`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role })
+      body: JSON.stringify({ groupId })
     });
-    
-    if (!roleResponse.ok) {
-      const data = await roleResponse.json();
-      showNotification(data.error || 'Failed to update role', 'error');
+
+    if (!groupResponse.ok) {
+      const data = await groupResponse.json();
+      showNotification(data.error || 'Failed to update group', 'error');
       return;
     }
     
@@ -2302,7 +2337,8 @@ async function clearUserMFA(userId) {
 
 // ==================== Add User Functions ====================
 
-function openAddUserModal() {
+async function openAddUserModal() {
+  await populateGroupSelect('new-group');
   document.getElementById('add-user-modal').style.display = 'flex';
   document.getElementById('new-username').focus();
 }
@@ -2318,35 +2354,29 @@ async function createUser(event) {
   const username = document.getElementById('new-username').value.trim();
   const email = document.getElementById('new-email').value.trim();
   const password = document.getElementById('new-password').value;
-  const role = document.getElementById('new-role').value;
-  
+  const groupId = document.getElementById('new-group').value;
+
   if (!username || !password) {
     alert('Please fill in all fields');
     return;
   }
-  
+
   try {
     const response = await fetch('/api/admin/users', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password, role })
+      body: JSON.stringify({ username, email, password, groupId })
     });
-    
+
     const data = await response.json();
-    
+
     if (!response.ok) {
       throw new Error(data.error || 'Failed to create user');
     }
-    
+
     alert('User created successfully!');
     closeAddUserModal();
     loadUsers();
-    
-    // Clear the form
-    document.getElementById('new-username').value = '';
-    document.getElementById('new-email').value = '';
-    document.getElementById('new-password').value = '';
-    document.getElementById('new-role').value = 'user';
   } catch (err) {
     console.error('Failed to create user:', err);
     alert('Failed to create user: ' + err.message);
@@ -2362,11 +2392,12 @@ async function loadAppSettings() {
       const settings = await response.json();
       
       document.getElementById('enable-registration').checked = settings.enableRegistration ?? true;
-      document.getElementById('require-approval').checked = settings.requireApproval ?? true;
-      document.getElementById('require-server-approval').checked = settings.requireServerApproval ?? false;
       document.getElementById('global-max-backups').value = settings.globalMaxBackups ?? 10;
       document.getElementById('auto-delete-expired-backups').checked = settings.autoDeleteExpiredBackups ?? false;
     }
+
+    // Load action policies
+    await loadPolicies();
     
     // Load MFA settings
     const mfaResponse = await fetch('/api/settings/mfa');
@@ -2394,7 +2425,9 @@ async function loadNetworkSettings() {
     const response = await fetch('/api/settings/network');
     if (response.ok) {
       const net = await response.json();
-      document.getElementById('base-url').value = (await fetch('/api/settings/branding').then(r => r.json())).baseUrl || '';
+      const branding = await fetch('/api/settings/branding').then(r => r.json());
+      document.getElementById('base-url').value = branding.baseUrl || '';
+      document.getElementById('game-hostname').value = branding.gameHostname || '';
       document.getElementById('cors-origins').value = net.corsOrigins || '';
       document.getElementById('session-cookie-secure').checked = net.sessionCookieSecure ?? false;
       document.getElementById('session-cookie-domain').value = net.sessionCookieDomain || '';
@@ -2408,11 +2441,11 @@ async function loadNetworkSettings() {
 
 async function saveNetworkSettings() {
   try {
-    // Save baseUrl via branding endpoint
     const baseUrl = document.getElementById('base-url').value;
+    const gameHostname = document.getElementById('game-hostname').value;
     const brandingFd = new FormData();
     brandingFd.append('baseUrl', baseUrl);
-    // Preserve current branding values
+    brandingFd.append('gameHostname', gameHostname);
     const currentBranding = await fetch('/api/settings/branding').then(r => r.json());
     brandingFd.append('siteTitle', currentBranding.siteTitle || '');
     brandingFd.append('footerAddition', currentBranding.footerAddition || '');
@@ -2496,8 +2529,6 @@ function toggleSmtpFields() {
 async function saveAppSettings() {
   const settings = {
     enableRegistration: document.getElementById('enable-registration').checked,
-    requireApproval: document.getElementById('require-approval').checked,
-    requireServerApproval: document.getElementById('require-server-approval').checked,
     globalMaxBackups: parseInt(document.getElementById('global-max-backups').value) || 0,
     autoDeleteExpiredBackups: document.getElementById('auto-delete-expired-backups').checked
   };
@@ -3208,5 +3239,369 @@ async function resetEmailTemplate(key) {
     await loadEmailTemplates();
   } catch (err) {
     showNotification('Failed to reset template', 'error');
+  }
+}
+
+
+// ==================== Action Policies ====================
+
+const POLICY_DEFS = [
+  { key: 'registration',     label: 'User Registration',    desc: 'New user account sign-ups' },
+  { key: 'serverCreate',     label: 'Server Creation',      desc: 'Creating new game servers' },
+  { key: 'serverDelete',     label: 'Server Deletion',      desc: 'Deleting game servers' },
+  { key: 'serverEdit',       label: 'Server Settings',      desc: 'Editing server configuration and properties' },
+  { key: 'serverLifecycle',  label: 'Server Start/Stop',    desc: 'Starting, stopping, and restarting servers' },
+  { key: 'backupCreate',     label: 'Backup Creation',      desc: 'Creating server backups' },
+  { key: 'backupDelete',     label: 'Backup Deletion',      desc: 'Deleting server backups' },
+  { key: 'fileUpload',       label: 'File Uploads',         desc: 'Uploading files to server directories' },
+  { key: 'modManagement',    label: 'Mod Management',       desc: 'Installing, enabling, disabling, or deleting mods/plugins' },
+  { key: 'playerManagement', label: 'Player Management',    desc: 'Whitelist, ban, op, and kick operations' },
+];
+
+let _currentPolicies = {};
+
+async function loadPolicies() {
+  try {
+    const resp = await fetch('/api/settings/policies');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _currentPolicies = data.policies || {};
+    renderPolicies();
+  } catch (err) {
+    console.error('Failed to load policies:', err);
+  }
+}
+
+function renderPolicies() {
+  const container = document.getElementById('policy-list');
+  if (!container) return;
+
+  container.innerHTML = POLICY_DEFS.map(p => {
+    const current = _currentPolicies[p.key] || 'allow';
+    return `<div class="policy-row">
+      <div class="policy-info">
+        <label>${escapeHtml(p.label)}</label>
+        <small>${escapeHtml(p.desc)}</small>
+      </div>
+      <div class="policy-selector" data-key="${p.key}">
+        <button type="button" class="${current === 'allow' ? 'active' : ''}"
+          onclick="setPolicy('${p.key}', 'allow', this)">Allow</button>
+        <button type="button" class="${current === 'notify' ? 'active-warn' : ''}"
+          onclick="setPolicy('${p.key}', 'notify', this)">Notify</button>
+        <button type="button" class="${current === 'require_approval' ? 'active-danger' : ''}"
+          onclick="setPolicy('${p.key}', 'require_approval', this)">Require Approval</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function setPolicy(key, value, btnEl) {
+  _currentPolicies[key] = value;
+
+  // Update button states in this selector
+  const selector = btnEl.parentElement;
+  selector.querySelectorAll('button').forEach(b => {
+    b.className = '';
+  });
+  if (value === 'allow') btnEl.className = 'active';
+  else if (value === 'notify') btnEl.className = 'active-warn';
+  else btnEl.className = 'active-danger';
+
+  try {
+    const resp = await fetch('/api/settings/policies', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value })
+    });
+    if (!resp.ok) throw new Error('Save failed');
+  } catch (err) {
+    console.error('Failed to save policy:', err);
+    showNotification('Failed to save policy', 'error');
+  }
+}
+
+
+// ==================== Pending Actions (Approvals tab) ====================
+
+async function loadPendingActions() {
+  try {
+    const resp = await fetch('/api/admin/pending-actions');
+    if (!resp.ok) {
+      document.getElementById('pending-actions-count').textContent = '0';
+      return;
+    }
+    const data = await resp.json();
+    const actions = data.actions || [];
+
+    document.getElementById('pending-actions-count').textContent = actions.length;
+
+    const list = document.getElementById('pending-actions-list');
+    if (actions.length === 0) {
+      list.innerHTML = `<div class="approval-empty"><p>No pending action requests</p></div>`;
+      return;
+    }
+
+    list.innerHTML = `<div class="approval-items">
+      ${actions.map(a => {
+        const payloadPreview = Object.entries(a.payload || {})
+          .filter(([k]) => k !== 'server_name')
+          .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(String(v))}`)
+          .join('\n');
+        return `<div class="pending-action-item">
+          <div class="pending-action-header">
+            <span class="pending-action-label">${escapeHtml(a.actionLabel || a.actionType)}</span>
+          </div>
+          <div class="pending-action-meta">
+            Requested by <strong>${escapeHtml(a.username || 'Unknown')}</strong>
+            ${a.payload?.server_name ? ` for server <strong>${escapeHtml(a.payload.server_name)}</strong>` : ''}
+            &mdash; ${new Date(a.created).toLocaleString()}
+          </div>
+          ${payloadPreview ? `<div class="pending-action-details">${escapeHtml(payloadPreview)}</div>` : ''}
+          <div class="pending-action-actions">
+            <button class="btn btn-small btn-success" onclick="approvePendingAction('${a.id}')">Approve</button>
+            <button class="btn btn-small btn-danger" onclick="rejectPendingAction('${a.id}')">Reject</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  } catch (err) {
+    console.error('Failed to load pending actions:', err);
+    document.getElementById('pending-actions-count').textContent = '0';
+    document.getElementById('pending-actions-list').innerHTML = `<div class="approval-empty"><p>Error loading pending actions</p></div>`;
+  }
+}
+
+async function approvePendingAction(actionId) {
+  try {
+    const resp = await fetch(`/api/admin/pending-actions/${actionId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    if (!resp.ok) throw new Error('Failed to approve');
+    showNotification('Action approved and executed', 'success');
+    loadPendingActions();
+  } catch (err) {
+    console.error('Failed to approve action:', err);
+    alert('Failed to approve action: ' + err.message);
+  }
+}
+
+async function rejectPendingAction(actionId) {
+  const note = prompt('Rejection reason (optional):') || '';
+  try {
+    const resp = await fetch(`/api/admin/pending-actions/${actionId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note })
+    });
+    if (!resp.ok) throw new Error('Failed to reject');
+    showNotification('Action rejected', 'success');
+    loadPendingActions();
+  } catch (err) {
+    console.error('Failed to reject action:', err);
+    alert('Failed to reject action: ' + err.message);
+  }
+}
+
+
+// ==================== Group Management ====================
+
+let _groupsCache = [];
+let _permCatalog = null;
+
+async function populateGroupSelect(selectId, selectedId) {
+  if (!_groupsCache.length) {
+    try {
+      const resp = await fetch('/api/admin/groups');
+      if (resp.ok) {
+        const data = await resp.json();
+        _groupsCache = data.groups || [];
+      }
+    } catch (e) { /* ignore */ }
+  }
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  sel.innerHTML = _groupsCache.map(g =>
+    `<option value="${escapeHtml(g.id)}" ${g.id === selectedId ? 'selected' : ''}>${escapeHtml(g.name)}</option>`
+  ).join('');
+}
+
+async function loadGroups() {
+  const container = document.getElementById('groups-list');
+  if (!container) return;
+  try {
+    const resp = await fetch('/api/admin/groups');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _groupsCache = data.groups || [];
+    renderGroups(_groupsCache, container);
+  } catch (e) {
+    container.innerHTML = '<div class="jobs-empty">Failed to load groups.</div>';
+  }
+}
+
+function renderGroups(groups, container) {
+  if (!groups.length) {
+    container.innerHTML = '<div class="jobs-empty">No groups found.</div>';
+    return;
+  }
+  container.innerHTML = groups.map(g => {
+    const permCount = g.permissions.includes('*') ? 'All' : g.permissions.length;
+    const badges = [
+      g.isBuiltin ? '<span class="badge badge-secondary">Built-in</span>' : '',
+      g.isDefault ? '<span class="badge badge-success">Default</span>' : '',
+    ].filter(Boolean).join(' ');
+    return `<div class="group-card">
+      <div class="group-card-header">
+        <span class="group-badge">${escapeHtml(g.name)}</span>
+        ${badges}
+        <span class="text-muted" style="margin-left:auto">${permCount} permissions | ${g.userCount || 0} users</span>
+      </div>
+      <div class="group-card-actions">
+        <button class="btn btn-small btn-primary" onclick="openEditGroupModal('${escapeHtml(g.id)}')">Edit</button>
+        ${!g.isBuiltin ? `<button class="btn btn-small btn-danger" onclick="deleteGroup('${escapeHtml(g.id)}', '${escapeHtml(g.name)}')">Delete</button>` : ''}
+        ${!g.isDefault ? `<button class="btn btn-small" onclick="setDefaultGroup('${escapeHtml(g.id)}')">Set Default</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadPermCatalog() {
+  if (_permCatalog) return _permCatalog;
+  try {
+    const resp = await fetch('/api/admin/groups/permissions');
+    if (resp.ok) _permCatalog = await resp.json();
+  } catch (e) { /* ignore */ }
+  return _permCatalog;
+}
+
+function renderPermissionCheckboxes(containerId, selectedPerms) {
+  const catalog = _permCatalog;
+  if (!catalog) return;
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const isAll = selectedPerms.includes('*');
+  let html = '';
+  for (const [category, perms] of Object.entries(catalog.categories)) {
+    html += `<div class="perm-category">
+      <div class="perm-category-header">
+        <strong>${escapeHtml(category)}</strong>
+        <button type="button" class="btn btn-small" onclick="toggleAllPerms('${containerId}', '${escapeHtml(category)}', true)">Select All</button>
+        <button type="button" class="btn btn-small" onclick="toggleAllPerms('${containerId}', '${escapeHtml(category)}', false)">Deselect All</button>
+      </div>
+      <div class="perm-grid">`;
+    for (const p of perms) {
+      const label = catalog.labels[p] || p;
+      const checked = isAll || selectedPerms.includes(p) ? 'checked' : '';
+      html += `<label class="perm-checkbox" data-category="${escapeHtml(category)}">
+        <input type="checkbox" name="perm" value="${escapeHtml(p)}" ${checked}> ${escapeHtml(label)}
+      </label>`;
+    }
+    html += '</div></div>';
+  }
+  container.innerHTML = html;
+}
+
+function toggleAllPerms(containerId, category, state) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll(`label[data-category="${category}"] input`).forEach(cb => {
+    cb.checked = state;
+  });
+}
+
+function getSelectedPerms(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('input[name="perm"]:checked')).map(cb => cb.value);
+}
+
+async function openAddGroupModal() {
+  await loadPermCatalog();
+  document.getElementById('group-modal-title').textContent = 'Create Group';
+  document.getElementById('group-name').value = '';
+  document.getElementById('group-name').disabled = false;
+  document.getElementById('group-default').checked = false;
+  renderPermissionCheckboxes('group-perms', []);
+  document.getElementById('group-modal').style.display = 'flex';
+  document.getElementById('group-modal').dataset.groupId = '';
+}
+
+async function openEditGroupModal(groupId) {
+  await loadPermCatalog();
+  const group = _groupsCache.find(g => g.id === groupId);
+  if (!group) return;
+  document.getElementById('group-modal-title').textContent = 'Edit Group: ' + group.name;
+  document.getElementById('group-name').value = group.name;
+  document.getElementById('group-name').disabled = group.isBuiltin;
+  document.getElementById('group-default').checked = group.isDefault;
+  renderPermissionCheckboxes('group-perms', group.permissions);
+  document.getElementById('group-modal').style.display = 'flex';
+  document.getElementById('group-modal').dataset.groupId = groupId;
+}
+
+function closeGroupModal() {
+  document.getElementById('group-modal').style.display = 'none';
+}
+
+async function saveGroup() {
+  const groupId = document.getElementById('group-modal').dataset.groupId;
+  const name = document.getElementById('group-name').value.trim();
+  const isDefault = document.getElementById('group-default').checked;
+  const permissions = getSelectedPerms('group-perms');
+
+  if (!name) {
+    alert('Group name is required');
+    return;
+  }
+
+  try {
+    const url = groupId ? `/api/admin/groups/${groupId}` : '/api/admin/groups';
+    const method = groupId ? 'PUT' : 'POST';
+    const body = { permissions, isDefault };
+    if (!groupId || !document.getElementById('group-name').disabled) {
+      body.name = name;
+    }
+    const resp = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Failed to save group');
+    showNotification(groupId ? 'Group updated' : 'Group created', 'success');
+    closeGroupModal();
+    _groupsCache = [];
+    loadGroups();
+  } catch (err) {
+    alert('Failed to save group: ' + err.message);
+  }
+}
+
+async function deleteGroup(groupId, name) {
+  if (!confirm(`Delete group "${name}"? Users in this group will be moved to the default group.`)) return;
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Failed to delete');
+    showNotification('Group deleted', 'success');
+    _groupsCache = [];
+    loadGroups();
+    loadUsers();
+  } catch (err) {
+    alert('Failed to delete group: ' + err.message);
+  }
+}
+
+async function setDefaultGroup(groupId) {
+  try {
+    const resp = await fetch(`/api/admin/groups/${groupId}/default`, { method: 'POST' });
+    if (!resp.ok) throw new Error('Failed');
+    showNotification('Default group updated', 'success');
+    _groupsCache = [];
+    loadGroups();
+  } catch (err) {
+    alert('Failed to set default group: ' + err.message);
   }
 }

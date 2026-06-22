@@ -7572,3 +7572,224 @@ select.form-control:disabled {
   display: flex;
   gap: 8px;
 }
+
+/* ── Notification Bell + Panel ────────────────────────────── */
+.notif-bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: 0 4px;
+  background: transparent;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.notif-bell:hover { background: rgba(204, 156, 223, 0.12); }
+.notif-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: #e74c3c;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  border-radius: 9px;
+}
+
+.notif-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.notif-item.notif-unread {
+  background: rgba(204, 156, 223, 0.06);
+  border-left: 3px solid var(--color-primary);
+}
+.notif-item.notif-read {
+  opacity: 0.7;
+}
+.notif-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.notif-icon { font-size: 1rem; flex-shrink: 0; }
+.notif-title { font-weight: 600; font-size: 0.9rem; flex: 1; }
+.notif-time { font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; }
+.notif-message { font-size: 0.82rem; color: var(--text-secondary); margin: 4px 0 6px; }
+.notif-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.notif-item-controls {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+.notif-item-controls .btn-link { font-size: 0.78rem; }
+
+/* ── Policy Selector (3-way) ──────────────────────────────── */
+.policy-selector {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.policy-selector button {
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.policy-selector button:not(:last-child) {
+  border-right: 1px solid var(--color-border);
+}
+.policy-selector button:hover {
+  background: rgba(204, 156, 223, 0.1);
+}
+.policy-selector button.active {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
+}
+.policy-selector button.active-warn {
+  background: #e67e22;
+  color: #fff;
+  font-weight: 600;
+}
+.policy-selector button.active-danger {
+  background: #e74c3c;
+  color: #fff;
+  font-weight: 600;
+}
+
+.policy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.policy-row:last-child { border-bottom: none; }
+.policy-info { flex: 1; margin-right: 16px; }
+.policy-info label { font-weight: 600; font-size: 0.9rem; display: block; margin-bottom: 2px; }
+.policy-info small { color: var(--text-secondary); font-size: 0.8rem; }
+
+/* ── Pending Actions (Approvals tab) ─────────────────────── */
+.pending-action-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+.pending-action-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pending-action-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.pending-action-meta {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 4px 0;
+}
+.pending-action-details {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: rgba(0,0,0,0.15);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  font-family: monospace;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.pending-action-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ── Group Badge ─────────────────────────────────── */
+.group-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background: var(--accent, #4a6fa5);
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+/* ── Group Cards ─────────────────────────────────── */
+.group-card {
+  background: var(--card-bg, #23272e);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.group-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+.group-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ── Permission Checkbox Grid ────────────────────── */
+.perm-category {
+  margin-bottom: 18px;
+}
+.perm-category-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+.perm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 16px;
+}
+.perm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.perm-checkbox input[type="checkbox"] {
+  margin: 0;
+}

@@ -278,14 +278,25 @@ class SettingsManager:
             'siteTitle': 'MServerController',
             'siteIcon': '',
             'footerAddition': '',
-            'baseUrl': ''
+            'baseUrl': '',
+            'gameHostname': '',
         },
         'app': {
             'enableRegistration': True,
-            'requireApproval': True,
-            'requireServerApproval': False,
             'globalMaxBackups': 10,
-            'autoDeleteExpiredBackups': False
+            'autoDeleteExpiredBackups': False,
+            'policies': {
+                'registration':       'require_approval',
+                'serverCreate':       'allow',
+                'serverDelete':       'allow',
+                'serverEdit':         'allow',
+                'serverLifecycle':    'allow',
+                'backupCreate':       'allow',
+                'backupDelete':       'allow',
+                'fileUpload':         'allow',
+                'modManagement':      'allow',
+                'playerManagement':   'allow',
+            }
         },
         'mfa': {
             'requireMfaForAdmins': False,
@@ -368,7 +379,7 @@ class SettingsManager:
         if 'branding' not in self.settings:
             self.settings['branding'] = {}
         
-        for key in ['siteTitle', 'siteIcon', 'footerAddition', 'baseUrl']:
+        for key in ['siteTitle', 'siteIcon', 'footerAddition', 'baseUrl', 'gameHostname']:
             if key in branding_data:
                 self.settings['branding'][key] = branding_data[key]
         
@@ -383,14 +394,44 @@ class SettingsManager:
         """Update app settings"""
         if 'app' not in self.settings:
             self.settings['app'] = {}
-        
-        for key in ['enableRegistration', 'requireApproval', 'requireServerApproval',
-                     'globalMaxBackups', 'autoDeleteExpiredBackups']:
+
+        for key in ['enableRegistration', 'globalMaxBackups', 'autoDeleteExpiredBackups']:
             if key in app_data:
                 self.settings['app'][key] = app_data[key]
-        
+
+        if 'policies' in app_data and isinstance(app_data['policies'], dict):
+            self.update_policies(app_data['policies'])
+
         self._save_settings()
         return self.settings['app']
+
+    VALID_POLICIES = {'allow', 'notify', 'require_approval'}
+    POLICY_KEYS = {
+        'registration', 'serverCreate', 'serverDelete', 'serverEdit',
+        'serverLifecycle', 'backupCreate', 'backupDelete', 'fileUpload',
+        'modManagement', 'playerManagement',
+    }
+
+    def get_policies(self):
+        """Get all action policies"""
+        defaults = self.DEFAULT_SETTINGS['app']['policies']
+        return {**defaults, **self.settings.get('app', {}).get('policies', {})}
+
+    def get_policy(self, action_type):
+        """Get the policy for a specific action type"""
+        return self.get_policies().get(action_type, 'allow')
+
+    def update_policies(self, policies_data):
+        """Update action policies (only known keys and valid values accepted)"""
+        if 'app' not in self.settings:
+            self.settings['app'] = {}
+        if 'policies' not in self.settings['app']:
+            self.settings['app']['policies'] = {}
+        for key, value in policies_data.items():
+            if key in self.POLICY_KEYS and value in self.VALID_POLICIES:
+                self.settings['app']['policies'][key] = value
+        self._save_settings()
+        return self.get_policies()
     
     def update_mfa_settings(self, mfa_data):
         """Update MFA settings"""
@@ -2029,16 +2070,311 @@ class MessageScheduler:
         return True, command
 
 
+# ==================== Permission Groups ====================
+
+class GroupManager:
+    """Manages permission groups backed by SQLite with in-memory cache."""
+
+    ALL_PERMISSIONS = [
+        # Panel
+        'panel.users.view', 'panel.users.manage',
+        'panel.groups.view', 'panel.groups.manage',
+        'panel.approvals.manage',
+        'panel.settings.view', 'panel.settings.manage',
+        'panel.jars.manage', 'panel.tools.manage',
+        'panel.stats.view', 'panel.panel.backup',
+        # Server
+        'servers.view', 'servers.create', 'servers.edit', 'servers.delete',
+        'servers.start', 'servers.stop', 'servers.restart', 'servers.console',
+        'servers.files.view', 'servers.files.edit',
+        'servers.properties.view', 'servers.properties.edit',
+        'servers.mods.view', 'servers.mods.manage',
+        'servers.backups.view', 'servers.backups.create',
+        'servers.backups.delete', 'servers.backups.restore', 'servers.backups.schedule',
+        'servers.players.view', 'servers.players.manage',
+        'servers.tasks.view', 'servers.tasks.manage',
+        'servers.messages.view', 'servers.messages.manage',
+        'servers.nbt.view', 'servers.nbt.edit',
+        'servers.access.all',
+    ]
+
+    PERMISSION_CATEGORIES = {
+        'Panel': [
+            'panel.users.view', 'panel.users.manage',
+            'panel.groups.view', 'panel.groups.manage',
+            'panel.approvals.manage',
+            'panel.settings.view', 'panel.settings.manage',
+            'panel.jars.manage', 'panel.tools.manage',
+            'panel.stats.view', 'panel.panel.backup',
+        ],
+        'Server': [
+            'servers.view', 'servers.create', 'servers.edit', 'servers.delete',
+            'servers.start', 'servers.stop', 'servers.restart', 'servers.console',
+            'servers.files.view', 'servers.files.edit',
+            'servers.properties.view', 'servers.properties.edit',
+            'servers.mods.view', 'servers.mods.manage',
+            'servers.backups.view', 'servers.backups.create',
+            'servers.backups.delete', 'servers.backups.restore', 'servers.backups.schedule',
+            'servers.players.view', 'servers.players.manage',
+            'servers.tasks.view', 'servers.tasks.manage',
+            'servers.messages.view', 'servers.messages.manage',
+            'servers.nbt.view', 'servers.nbt.edit',
+            'servers.access.all',
+        ],
+    }
+
+    PERMISSION_LABELS = {
+        'panel.users.view': 'View Users',
+        'panel.users.manage': 'Manage Users',
+        'panel.groups.view': 'View Groups',
+        'panel.groups.manage': 'Manage Groups',
+        'panel.approvals.manage': 'Manage Approvals',
+        'panel.settings.view': 'View Settings',
+        'panel.settings.manage': 'Manage Settings',
+        'panel.jars.manage': 'Manage Server JARs',
+        'panel.tools.manage': 'Manage Tools',
+        'panel.stats.view': 'View System Stats',
+        'panel.panel.backup': 'Panel Backup/Restore',
+        'servers.view': 'View Servers',
+        'servers.create': 'Create Servers',
+        'servers.edit': 'Edit Servers',
+        'servers.delete': 'Delete Servers',
+        'servers.start': 'Start Servers',
+        'servers.stop': 'Stop/Kill Servers',
+        'servers.restart': 'Restart Servers',
+        'servers.console': 'Console Access',
+        'servers.files.view': 'Browse Files',
+        'servers.files.edit': 'Edit/Upload Files',
+        'servers.properties.view': 'View Properties',
+        'servers.properties.edit': 'Edit Properties',
+        'servers.mods.view': 'View Mods',
+        'servers.mods.manage': 'Manage Mods',
+        'servers.backups.view': 'View Backups',
+        'servers.backups.create': 'Create Backups',
+        'servers.backups.delete': 'Delete Backups',
+        'servers.backups.restore': 'Restore Backups',
+        'servers.backups.schedule': 'Manage Backup Schedules',
+        'servers.players.view': 'View Players',
+        'servers.players.manage': 'Manage Players',
+        'servers.tasks.view': 'View Tasks',
+        'servers.tasks.manage': 'Manage Tasks',
+        'servers.messages.view': 'View Messages',
+        'servers.messages.manage': 'Manage Messages',
+        'servers.nbt.view': 'View NBT Data',
+        'servers.nbt.edit': 'Edit NBT Data',
+        'servers.access.all': 'Access All Servers',
+    }
+
+    def __init__(self):
+        self._cache = {}
+        self._lock = threading.Lock()
+        self._load_cache()
+
+    def _load_cache(self):
+        conn = get_db()
+        rows = conn.execute('SELECT * FROM groups').fetchall()
+        self._cache = {r['id']: self._row_to_dict(r) for r in rows}
+
+    def _invalidate(self):
+        with self._lock:
+            self._load_cache()
+
+    @staticmethod
+    def _row_to_dict(row):
+        if row is None:
+            return None
+        perms = []
+        try:
+            perms = json.loads(row['permissions'] or '[]')
+        except Exception:
+            pass
+        return {
+            'id': row['id'],
+            'name': row['name'],
+            'permissions': perms,
+            'isDefault': bool(row['is_default']),
+            'isBuiltin': bool(row['is_builtin']),
+            'priority': row['priority'],
+            'created': row['created'],
+        }
+
+    # ── Permission checking ──────────────────────────────────────────────────
+
+    def has_permission(self, group_id, permission):
+        if not group_id:
+            return False
+        group = self._cache.get(group_id)
+        if not group:
+            return False
+        perms = group.get('permissions', [])
+        if '*' in perms:
+            return True
+        if permission in perms:
+            return True
+        parts = permission.split('.')
+        for i in range(1, len(parts)):
+            wildcard = '.'.join(parts[:i]) + '.*'
+            if wildcard in perms:
+                return True
+        return False
+
+    def is_admin_group(self, group_id):
+        if not group_id:
+            return False
+        group = self._cache.get(group_id)
+        return group is not None and '*' in group.get('permissions', [])
+
+    def get_permissions_for_group(self, group_id):
+        group = self._cache.get(group_id)
+        if not group:
+            return []
+        perms = group.get('permissions', [])
+        if '*' in perms:
+            return list(self.ALL_PERMISSIONS)
+        resolved = []
+        for p in self.ALL_PERMISSIONS:
+            if p in perms:
+                resolved.append(p)
+                continue
+            parts = p.split('.')
+            for i in range(1, len(parts)):
+                wildcard = '.'.join(parts[:i]) + '.*'
+                if wildcard in perms:
+                    resolved.append(p)
+                    break
+        return resolved
+
+    # ── CRUD ─────────────────────────────────────────────────────────────────
+
+    def get_group(self, group_id):
+        return self._cache.get(group_id)
+
+    def get_all_groups(self):
+        return sorted(self._cache.values(), key=lambda g: -g['priority'])
+
+    def create_group(self, name, permissions, is_default=False):
+        conn = get_db()
+        group_id = str(uuid.uuid4())[:8]
+        valid_perms = [p for p in permissions if p in self.ALL_PERMISSIONS or p.endswith('.*') or p == '*']
+        conn.execute(
+            '''INSERT INTO groups (id, name, permissions, is_default, is_builtin, priority, created)
+               VALUES (?, ?, ?, ?, 0, 0, ?)''',
+            (group_id, name, json.dumps(valid_perms), 1 if is_default else 0,
+             datetime.now().isoformat())
+        )
+        if is_default:
+            conn.execute('UPDATE groups SET is_default=0 WHERE id != ?', (group_id,))
+        conn.commit()
+        self._invalidate()
+        return group_id
+
+    def update_group(self, group_id, name=None, permissions=None, is_default=None, priority=None):
+        group = self.get_group(group_id)
+        if not group:
+            return False, 'Group not found'
+        conn = get_db()
+        if name is not None:
+            if group['isBuiltin']:
+                return False, 'Cannot rename built-in groups'
+            existing = conn.execute(
+                'SELECT id FROM groups WHERE name=? COLLATE NOCASE AND id != ?',
+                (name, group_id)).fetchone()
+            if existing:
+                return False, 'A group with that name already exists'
+            conn.execute('UPDATE groups SET name=? WHERE id=?', (name, group_id))
+        if permissions is not None:
+            if group_id == 'builtin-admin':
+                permissions = list(set(permissions) | {'*'})
+            valid_perms = [p for p in permissions if p in self.ALL_PERMISSIONS or p.endswith('.*') or p == '*']
+            conn.execute('UPDATE groups SET permissions=? WHERE id=?',
+                         (json.dumps(valid_perms), group_id))
+        if is_default is not None and is_default:
+            conn.execute('UPDATE groups SET is_default=0')
+            conn.execute('UPDATE groups SET is_default=1 WHERE id=?', (group_id,))
+        if priority is not None:
+            conn.execute('UPDATE groups SET priority=? WHERE id=?', (priority, group_id))
+        conn.commit()
+        self._invalidate()
+        return True, 'Group updated'
+
+    def delete_group(self, group_id):
+        group = self.get_group(group_id)
+        if not group:
+            return False, 'Group not found'
+        if group['isBuiltin']:
+            return False, 'Cannot delete built-in groups'
+        conn = get_db()
+        default_id = self.get_default_group_id()
+        if default_id == group_id:
+            return False, 'Cannot delete the default group'
+        conn.execute('UPDATE users SET group_id=? WHERE group_id=?',
+                     (default_id, group_id))
+        conn.execute('DELETE FROM groups WHERE id=?', (group_id,))
+        conn.commit()
+        self._invalidate()
+        return True, 'Group deleted'
+
+    def get_default_group_id(self):
+        for gid, g in self._cache.items():
+            if g.get('isDefault'):
+                return gid
+        return 'builtin-user'
+
+    def get_admin_group_id(self):
+        return 'builtin-admin'
+
+    def set_default_group(self, group_id):
+        if group_id not in self._cache:
+            return False
+        conn = get_db()
+        conn.execute('UPDATE groups SET is_default=0')
+        conn.execute('UPDATE groups SET is_default=1 WHERE id=?', (group_id,))
+        conn.commit()
+        self._invalidate()
+        return True
+
+    def get_user_count(self, group_id):
+        conn = get_db()
+        row = conn.execute('SELECT COUNT(*) AS cnt FROM users WHERE group_id=?',
+                           (group_id,)).fetchone()
+        return row['cnt'] if row else 0
+
+    # ── Server group access (sharing) ────────────────────────────────────────
+
+    def get_server_groups(self, server_id):
+        conn = get_db()
+        rows = conn.execute(
+            'SELECT group_id FROM server_group_access WHERE server_id=?',
+            (server_id,)).fetchall()
+        return [self._cache[r['group_id']] for r in rows
+                if r['group_id'] in self._cache]
+
+    def get_server_group_ids(self, server_id):
+        conn = get_db()
+        rows = conn.execute(
+            'SELECT group_id FROM server_group_access WHERE server_id=?',
+            (server_id,)).fetchall()
+        return [r['group_id'] for r in rows]
+
+    def set_server_groups(self, server_id, group_ids):
+        conn = get_db()
+        conn.execute('DELETE FROM server_group_access WHERE server_id=?',
+                     (server_id,))
+        for gid in group_ids:
+            if gid in self._cache:
+                conn.execute(
+                    'INSERT OR IGNORE INTO server_group_access (server_id, group_id) VALUES (?, ?)',
+                    (server_id, gid))
+        conn.commit()
+
+
+group_manager = GroupManager()
+
+
 # ==================== User Management & RBAC ====================
 
 class UserManager:
     """Manages users, authentication, and role-based access control — backed by SQLite."""
-
-    ROLES = {
-        'public': 0,   # Can only see server status
-        'user': 1,     # Can manage own servers
-        'admin': 2     # Full access
-    }
 
     # The permanent hidden anti-lockout admin. Exactly one row carries
     # is_anti_lockout=1. It normally stays disabled and hidden from the user list;
@@ -2074,10 +2410,13 @@ class UserManager:
             prefs = json.loads(row['notification_prefs'] or '{}')
         except Exception:
             pass
+        gid = row['group_id']
+        group = group_manager.get_group(gid) if gid else None
         return {
             'username':             row['username'],
             'password':             row['password'],
-            'role':                 row['role'],
+            'groupId':              gid,
+            'groupName':            group['name'] if group else None,
             'name':                 row['name'],
             'email':                row['email'],
             'mfaEnabled':           bool(row['mfa_enabled']),
@@ -2117,10 +2456,11 @@ class UserManager:
         placeholder = secrets.token_urlsafe(24)  # never logged; account starts disabled
         conn.execute(
             '''INSERT INTO users
-               (id, username, password, role, name, email, mfa_enabled, approved, created,
+               (id, username, password, group_id, name, email, mfa_enabled, approved, created,
                 failed_login_attempts, account_disabled, disabled_at, is_anti_lockout, notification_prefs)
-               VALUES (?, ?, ?, 'admin', ?, ?, 0, 1, ?, 0, 1, NULL, 1, '{}')''',
+               VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?, 0, 1, NULL, 1, '{}')''',
             (user_id, self.ANTI_LOCKOUT_USERNAME, generate_password_hash(placeholder),
+             group_manager.get_admin_group_id(),
              self.ANTI_LOCKOUT_NAME, self.ANTI_LOCKOUT_EMAIL, datetime.now().isoformat())
         )
         conn.commit()
@@ -2133,10 +2473,11 @@ class UserManager:
         return self._count_real_admins() == 0
 
     def _count_real_admins(self):
-        """Count admin accounts that are not the hidden anti-lockout account, in any
+        """Count admin-group accounts that are not the hidden anti-lockout account, in any
         state (enabled or disabled, approved or not)."""
         row = get_db().execute(
-            "SELECT COUNT(*) FROM users WHERE role='admin' AND is_anti_lockout=0"
+            "SELECT COUNT(*) FROM users WHERE group_id=? AND is_anti_lockout=0",
+            (group_manager.get_admin_group_id(),)
         ).fetchone()
         return row[0]
 
@@ -2184,7 +2525,7 @@ class UserManager:
                 return None, "Account has been disabled. Please contact an administrator."
 
         if check_password_hash(row['password'], password):
-            if not row['approved'] and row['role'] != 'admin':
+            if not row['approved'] and not group_manager.is_admin_group(row['group_id']):
                 return None, "Account pending approval"
 
             conn.execute(
@@ -2230,7 +2571,8 @@ class UserManager:
         if not any(c.isdigit() for c in password):
             return None, "Password must contain at least one number"
 
-        require_approval = settings_manager.get_app_settings().get('requireApproval', True)
+        reg_policy = settings_manager.get_policy('registration')
+        require_approval = reg_policy == 'require_approval'
         user_id = str(uuid.uuid4())[:8]
         default_prefs = json.dumps({k: False for k in self._DEFAULT_NOTIF_PREFS})
 
@@ -2238,10 +2580,11 @@ class UserManager:
         try:
             conn.execute(
                 '''INSERT INTO users
-                   (id, username, password, role, name, email, approved, created,
+                   (id, username, password, group_id, name, email, approved, created,
                     failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
-                   VALUES (?, ?, ?, 'user', '', '', ?, ?, 0, 0, 0, ?)''',
+                   VALUES (?, ?, ?, ?, '', '', ?, ?, 0, 0, 0, ?)''',
                 (user_id, username, generate_password_hash(password),
+                 group_manager.get_default_group_id(),
                  0 if require_approval else 1,
                  datetime.now().isoformat(), default_prefs)
             )
@@ -2251,11 +2594,23 @@ class UserManager:
                 return None, "Username already exists"
             raise
 
+        if reg_policy == 'notify':
+            notification_manager.notify_admins(
+                'action_notify', 'New user registered',
+                f'{username} has registered an account.',
+                ref_type='user', ref_id=user_id)
+        elif require_approval:
+            notification_manager.notify_admins(
+                'approval_request', 'User registration — approval needed',
+                f'{username} has registered and is awaiting approval.',
+                link='/settings#approvals',
+                ref_type='user', ref_id=user_id)
+
         if require_approval:
             return user_id, "Registration successful. Please wait for admin approval."
         return user_id, "Registration successful. You can now log in."
 
-    def create_user(self, username, password, role='user', email=''):
+    def create_user(self, username, password, group_id=None, email=''):
         """Create a user directly (admin function, auto-approved)."""
         if len(username) < 3 or len(username) > 32:
             return None, "Username must be 3-32 characters"
@@ -2265,8 +2620,10 @@ class UserManager:
             return None, "That username is reserved"
         if len(password) < 6:
             return None, "Password must be at least 6 characters"
-        if role not in self.ROLES:
-            return None, "Invalid role"
+        if group_id is None:
+            group_id = group_manager.get_default_group_id()
+        if not group_manager.get_group(group_id):
+            return None, "Invalid group"
 
         user_id = str(uuid.uuid4())[:8]
         default_prefs = json.dumps({k: False for k in self._DEFAULT_NOTIF_PREFS})
@@ -2275,10 +2632,10 @@ class UserManager:
         try:
             conn.execute(
                 '''INSERT INTO users
-                   (id, username, password, role, name, email, approved, created,
+                   (id, username, password, group_id, name, email, approved, created,
                     failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
                    VALUES (?, ?, ?, ?, '', ?, 1, ?, 0, 0, 0, ?)''',
-                (user_id, username, generate_password_hash(password), role, email,
+                (user_id, username, generate_password_hash(password), group_id, email,
                  datetime.now().isoformat(), default_prefs)
             )
             conn.commit()
@@ -2287,8 +2644,7 @@ class UserManager:
                 return None, "Username already exists"
             raise
 
-        # If this created a usable admin, the hidden admin can stand down.
-        if role == 'admin':
+        if group_manager.is_admin_group(group_id):
             self._deactivate_anti_lockout_admin()
 
         return user_id, "User created successfully"
@@ -2321,10 +2677,11 @@ class UserManager:
         try:
             conn.execute(
                 '''INSERT INTO users
-                   (id, username, password, role, name, email, approved, created,
+                   (id, username, password, group_id, name, email, approved, created,
                     failed_login_attempts, account_disabled, is_anti_lockout, notification_prefs)
-                   VALUES (?, ?, ?, 'admin', ?, ?, 1, ?, 0, 0, 0, ?)''',
+                   VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0, 0, 0, ?)''',
                 (user_id, username, generate_password_hash(password),
+                 group_manager.get_admin_group_id(),
                  (name or '').strip(), (email or '').strip(),
                  datetime.now().isoformat(), default_prefs)
             )
@@ -2350,12 +2707,15 @@ class UserManager:
         row = get_db().execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
         if row is None:
             return None
+        gid = row['group_id']
+        group = group_manager.get_group(gid) if gid else None
         return {
             'id':        row['id'],
             'username':  row['username'],
             'name':      row['name'],
             'email':     row['email'],
-            'role':      row['role'],
+            'groupId':   gid,
+            'groupName': group['name'] if group else None,
             'mfaEnabled': bool(row['mfa_enabled']),
             'approved':  bool(row['approved']),
             'created':   row['created'],
@@ -2373,21 +2733,24 @@ class UserManager:
             rows = get_db().execute(
                 'SELECT * FROM users WHERE is_anti_lockout=0 ORDER BY created'
             ).fetchall()
-        return [
-            {
+        result = []
+        for r in rows:
+            gid = r['group_id']
+            group = group_manager.get_group(gid) if gid else None
+            result.append({
                 'id':        r['id'],
                 'username':  r['username'],
                 'name':      r['name'],
                 'email':     r['email'],
-                'role':      r['role'],
+                'groupId':   gid,
+                'groupName': group['name'] if group else None,
                 'mfaEnabled': bool(r['mfa_enabled']),
                 'approved':  bool(r['approved']),
                 'created':   r['created'],
                 'lastLogin': r['last_login'],
                 'isAntiLockout': bool(r['is_anti_lockout']),
-            }
-            for r in rows
-        ]
+            })
+        return result
 
     # ── Approval & role ───────────────────────────────────────────────────────
 
@@ -2400,8 +2763,8 @@ class UserManager:
         conn.commit()
         if result.rowcount == 0:
             return False
-        row = conn.execute('SELECT role FROM users WHERE id=?', (user_id,)).fetchone()
-        if row and row['role'] == 'admin' and self._has_active_admin():
+        row = conn.execute('SELECT group_id FROM users WHERE id=?', (user_id,)).fetchone()
+        if row and group_manager.is_admin_group(row['group_id']) and self._has_active_admin():
             self._deactivate_anti_lockout_admin()
         return True
 
@@ -2409,7 +2772,8 @@ class UserManager:
         """Return True if at least one non-disabled, approved, non-anti-lockout admin exists."""
         row = get_db().execute(
             '''SELECT COUNT(*) FROM users
-               WHERE role='admin' AND account_disabled=0 AND approved=1 AND is_anti_lockout=0'''
+               WHERE group_id=? AND account_disabled=0 AND approved=1 AND is_anti_lockout=0''',
+            (group_manager.get_admin_group_id(),)
         ).fetchone()
         return row[0] > 0
 
@@ -2443,12 +2807,12 @@ class UserManager:
 
         conn.execute(
             '''UPDATE users
-               SET password=?, role='admin', name=?, email=?, approved=1,
+               SET password=?, group_id=?, name=?, email=?, approved=1,
                    mfa_enabled=0, mfa_secret=NULL, mfa_recovery_code=NULL,
                    account_disabled=0, failed_login_attempts=0, disabled_at=NULL
                WHERE id=?''',
-            (generate_password_hash(password), self.ANTI_LOCKOUT_NAME,
-             self.ANTI_LOCKOUT_EMAIL, user_id)
+            (generate_password_hash(password), group_manager.get_admin_group_id(),
+             self.ANTI_LOCKOUT_NAME, self.ANTI_LOCKOUT_EMAIL, user_id)
         )
         conn.commit()
 
@@ -2500,21 +2864,20 @@ admin account has been ENABLED:
             self._deactivate_anti_lockout_admin()
         return True, "Account enabled successfully"
 
-    def update_user_role(self, user_id, role):
-        """Update user role."""
+    def update_user_group(self, user_id, group_id):
+        """Update user's group."""
         if self._is_anti_lockout(user_id):
             return False
-        if role not in self.ROLES:
+        if not group_manager.get_group(group_id):
             return False
         conn = get_db()
-        result = conn.execute('UPDATE users SET role=? WHERE id=?', (role, user_id))
+        result = conn.execute('UPDATE users SET group_id=? WHERE id=?', (group_id, user_id))
         conn.commit()
         if result.rowcount == 0:
             return False
-        if role == 'admin':
+        if group_manager.is_admin_group(group_id):
             self._deactivate_anti_lockout_admin()
         else:
-            # Demotion may have removed the last active admin — fail over if so.
             self._check_anti_lockout()
         return True
 
@@ -2721,9 +3084,17 @@ admin account has been ENABLED:
             return True
         return False
 
-    def get_role_level(self, role):
-        """Get numeric role level."""
-        return self.ROLES.get(role, 0)
+    def user_has_permission(self, user, permission):
+        """Check if a user dict has a specific permission via their group."""
+        gid = user.get('groupId') if isinstance(user, dict) else None
+        return group_manager.has_permission(gid, permission)
+
+    def get_user_permissions(self, user):
+        """Return the full resolved permission list for a user."""
+        gid = user.get('groupId') if isinstance(user, dict) else None
+        if not gid:
+            return []
+        return group_manager.get_permissions_for_group(gid)
 
 
 # Initialize database (creates tables if not present — safe on every boot)
@@ -2780,6 +3151,300 @@ def dispatch_notification(event_type, context):
             app.logger.error(f'[Notify] Message event dispatch error for {event_type}: {e}')
 
 
+# ==================== Notification Manager ====================
+
+class NotificationManager:
+    """In-app notification system for admin alerts and user feedback."""
+
+    def create(self, user_id, ntype, title, message='', link=None,
+               ref_type=None, ref_id=None):
+        nid = str(uuid.uuid4())
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO notifications
+               (id, user_id, type, title, message, link, ref_type, ref_id, created)
+               VALUES (?,?,?,?,?,?,?,?,?)''',
+            (nid, user_id, ntype, title, message, link, ref_type, ref_id,
+             datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+        note = self._row_to_dict(conn.execute(
+            'SELECT * FROM notifications WHERE id=?', (nid,)).fetchone())
+        try:
+            socketio.emit('notification:new', {'notification': note},
+                          to=f'user_{user_id}')
+        except Exception:
+            pass
+        return note
+
+    def notify_admins(self, ntype, title, message='', link=None,
+                      ref_type=None, ref_id=None):
+        conn = get_db()
+        admin_gids = [g['id'] for g in group_manager.get_all_groups()
+                      if '*' in g.get('permissions', [])
+                      or 'panel.approvals.manage' in g.get('permissions', [])]
+        if not admin_gids:
+            return []
+        placeholders = ','.join(['?'] * len(admin_gids))
+        admins = conn.execute(
+            f"SELECT id FROM users WHERE group_id IN ({placeholders})",
+            admin_gids).fetchall()
+        notes = []
+        for row in admins:
+            notes.append(self.create(row['id'], ntype, title, message,
+                                     link, ref_type, ref_id))
+        return notes
+
+    def get_for_user(self, user_id, include_dismissed=False, limit=50):
+        conn = get_db()
+        if include_dismissed:
+            rows = conn.execute(
+                '''SELECT * FROM notifications WHERE user_id=?
+                   ORDER BY created DESC LIMIT ?''',
+                (user_id, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                '''SELECT * FROM notifications WHERE user_id=? AND dismissed=0
+                   ORDER BY created DESC LIMIT ?''',
+                (user_id, limit)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def unread_count(self, user_id):
+        conn = get_db()
+        row = conn.execute(
+            '''SELECT COUNT(*) AS cnt FROM notifications
+               WHERE user_id=? AND read=0 AND dismissed=0''',
+            (user_id,)).fetchone()
+        return row['cnt'] if row else 0
+
+    def mark_read(self, notification_id, user_id):
+        conn = get_db()
+        conn.execute(
+            'UPDATE notifications SET read=1 WHERE id=? AND user_id=?',
+            (notification_id, user_id))
+        conn.commit()
+
+    def dismiss(self, notification_id, user_id):
+        conn = get_db()
+        conn.execute(
+            'UPDATE notifications SET dismissed=1, read=1 WHERE id=? AND user_id=?',
+            (notification_id, user_id))
+        conn.commit()
+
+    def mark_all_read(self, user_id):
+        conn = get_db()
+        conn.execute(
+            'UPDATE notifications SET read=1 WHERE user_id=? AND read=0',
+            (user_id,))
+        conn.commit()
+
+    def dismiss_all(self, user_id):
+        conn = get_db()
+        conn.execute(
+            'UPDATE notifications SET dismissed=1, read=1 WHERE user_id=? AND dismissed=0',
+            (user_id,))
+        conn.commit()
+
+    def dismiss_by_ref(self, ref_type, ref_id):
+        conn = get_db()
+        conn.execute(
+            'UPDATE notifications SET dismissed=1, read=1 WHERE ref_type=? AND ref_id=?',
+            (ref_type, ref_id))
+        conn.commit()
+
+    @staticmethod
+    def _row_to_dict(row):
+        if not row:
+            return None
+        return {
+            'id': row['id'], 'userId': row['user_id'], 'type': row['type'],
+            'title': row['title'], 'message': row['message'],
+            'link': row['link'], 'refType': row['ref_type'],
+            'refId': row['ref_id'], 'read': bool(row['read']),
+            'dismissed': bool(row['dismissed']), 'created': row['created'],
+        }
+
+notification_manager = NotificationManager()
+
+
+# ==================== Pending Action Manager ====================
+
+POLICY_ACTION_LABELS = {
+    'registration':       'User Registration',
+    'serverCreate':       'Server Creation',
+    'serverDelete':       'Server Deletion',
+    'serverEdit':         'Server Edit',
+    'serverLifecycle':    'Server Start/Stop/Restart',
+    'backupCreate':       'Backup Creation',
+    'backupDelete':       'Backup Deletion',
+    'fileUpload':         'File Upload',
+    'modManagement':      'Mod Management',
+    'playerManagement':   'Player Management',
+}
+
+class PendingActionManager:
+    """Manages actions that require admin approval before execution."""
+
+    def create(self, action_type, user_id, payload, target_id=None):
+        action_id = str(uuid.uuid4())
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO pending_actions
+               (id, action_type, target_id, user_id, payload, created)
+               VALUES (?,?,?,?,?,?)''',
+            (action_id, action_type, target_id, user_id,
+             json.dumps(payload), datetime.now(timezone.utc).isoformat())
+        )
+        conn.commit()
+
+        user = user_manager.get_user_by_id(user_id)
+        username = user.get('username', 'Unknown') if user else 'Unknown'
+        label = POLICY_ACTION_LABELS.get(action_type, action_type)
+        notification_manager.notify_admins(
+            'approval_request',
+            f'{label} — approval needed',
+            f'{username} has requested: {label}',
+            link='/settings#approvals',
+            ref_type='pending_action', ref_id=action_id
+        )
+        return action_id
+
+    def get_pending(self):
+        conn = get_db()
+        rows = conn.execute(
+            '''SELECT * FROM pending_actions WHERE status='pending'
+               ORDER BY created DESC''').fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def get_all(self, limit=100):
+        conn = get_db()
+        rows = conn.execute(
+            'SELECT * FROM pending_actions ORDER BY created DESC LIMIT ?',
+            (limit,)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def get_by_id(self, action_id):
+        conn = get_db()
+        row = conn.execute(
+            'SELECT * FROM pending_actions WHERE id=?', (action_id,)).fetchone()
+        return self._row_to_dict(row)
+
+    def get_pending_for_user(self, user_id):
+        conn = get_db()
+        rows = conn.execute(
+            '''SELECT * FROM pending_actions
+               WHERE user_id=? AND status='pending' ORDER BY created DESC''',
+            (user_id,)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def approve(self, action_id, admin_id, note=None):
+        conn = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            '''UPDATE pending_actions
+               SET status='approved', reviewed_by=?, review_note=?, reviewed=?
+               WHERE id=? AND status='pending' ''',
+            (admin_id, note, now, action_id))
+        conn.commit()
+
+        action = self.get_by_id(action_id)
+        if not action:
+            return None
+
+        label = POLICY_ACTION_LABELS.get(action['actionType'], action['actionType'])
+        notification_manager.create(
+            action['userId'], 'action_approved',
+            f'{label} approved',
+            f'Your request for {label} has been approved.',
+            ref_type='pending_action', ref_id=action_id)
+        notification_manager.dismiss_by_ref('pending_action', action_id)
+        return action
+
+    def reject(self, action_id, admin_id, note=None):
+        conn = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            '''UPDATE pending_actions
+               SET status='rejected', reviewed_by=?, review_note=?, reviewed=?
+               WHERE id=? AND status='pending' ''',
+            (admin_id, note, now, action_id))
+        conn.commit()
+
+        action = self.get_by_id(action_id)
+        if not action:
+            return None
+
+        label = POLICY_ACTION_LABELS.get(action['actionType'], action['actionType'])
+        msg = f'Your request for {label} has been rejected.'
+        if note:
+            msg += f' Reason: {note}'
+        notification_manager.create(
+            action['userId'], 'action_rejected',
+            f'{label} rejected', msg,
+            ref_type='pending_action', ref_id=action_id)
+        notification_manager.dismiss_by_ref('pending_action', action_id)
+        return action
+
+    @staticmethod
+    def _row_to_dict(row):
+        if not row:
+            return None
+        return {
+            'id': row['id'], 'actionType': row['action_type'],
+            'targetId': row['target_id'], 'userId': row['user_id'],
+            'payload': json.loads(row['payload'] or '{}'),
+            'status': row['status'], 'reviewedBy': row['reviewed_by'],
+            'reviewNote': row['review_note'], 'created': row['created'],
+            'reviewed': row['reviewed'],
+        }
+
+pending_action_manager = PendingActionManager()
+
+
+# ==================== Policy Check Helper ====================
+
+def check_action_policy(action_type, user, payload, target_id=None,
+                        execute_fn=None, description=None):
+    """
+    Enforce the action policy for non-admin users.
+    Returns (result_dict, http_status_code).
+    - 'allow': execute_fn() runs immediately.
+    - 'notify': execute_fn() runs, admins are notified.
+    - 'require_approval': action is queued; admins are notified.
+    """
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+    policy = settings_manager.get_policy(action_type)
+
+    if is_admin or policy == 'allow':
+        if execute_fn:
+            return execute_fn()
+        return {'allowed': True}, 200
+
+    user_id = user.get('id') or session.get('user_id')
+    label = POLICY_ACTION_LABELS.get(action_type, action_type)
+    username = user.get('username', 'Unknown')
+
+    if policy == 'notify':
+        notification_manager.notify_admins(
+            'action_notify',
+            f'{label} — {username}',
+            description or f'{username} performed: {label}',
+            ref_type='server' if target_id else None,
+            ref_id=target_id)
+        if execute_fn:
+            return execute_fn()
+        return {'allowed': True}, 200
+
+    # require_approval
+    pending_id = pending_action_manager.create(
+        action_type, user_id, payload, target_id=target_id)
+    return {
+        'pending': True,
+        'pendingId': pending_id,
+        'message': f'Your request for {label} has been submitted and is awaiting admin approval.'
+    }, 202
+
+
 # ==================== Authentication Decorators ====================
 
 def get_current_user():
@@ -2801,44 +3466,48 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-def role_required(min_role):
-    """Decorator to require a minimum role level"""
+def permission_required(*permissions):
+    """Decorator requiring the current user to have ALL listed permissions."""
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             user_id, user = get_current_user()
             if not user:
                 return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
-            
-            user_role_level = user_manager.get_role_level(user.get('role', 'public'))
-            required_level = user_manager.get_role_level(min_role)
-            
-            if user_role_level < required_level:
-                return jsonify({'error': 'Insufficient permissions', 'code': 'FORBIDDEN'}), 403
-            
+            for perm in permissions:
+                if not user_manager.user_has_permission(user, perm):
+                    return jsonify({'error': 'Insufficient permissions', 'code': 'FORBIDDEN'}), 403
             return f(*args, **kwargs)
         return decorated_function
     return decorator
 
 def admin_required(f):
-    """Decorator to require admin role"""
-    return role_required('admin')(f)
+    """Decorator: user must be in a group with the wildcard permission."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user_id, user = get_current_user()
+        if not user:
+            return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
+        if not group_manager.is_admin_group(user.get('groupId')):
+            return jsonify({'error': 'Insufficient permissions', 'code': 'FORBIDDEN'}), 403
+        return f(*args, **kwargs)
+    return decorated_function
 
 def can_access_server(server_id):
     """Check if current user can access a specific server"""
     user_id, user = get_current_user()
     if not user:
         return False
-    
-    # Admins can access all servers
-    if user.get('role') == 'admin':
+    if user_manager.user_has_permission(user, 'servers.access.all'):
         return True
-    
-    # Users can only access their own servers
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('owner') == user_id:
         return True
-    
+    user_group_id = user.get('groupId')
+    if user_group_id:
+        shared_ids = group_manager.get_server_group_ids(server_id)
+        if user_group_id in shared_ids:
+            return True
     return False
 
 def server_access_required(f):
@@ -2848,10 +3517,8 @@ def server_access_required(f):
         user_id, user = get_current_user()
         if not user:
             return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
-        
         if not can_access_server(server_id):
             return jsonify({'error': 'Access denied to this server', 'code': 'FORBIDDEN'}), 403
-        
         return f(server_id, *args, **kwargs)
     return decorated_function
 
@@ -3693,7 +4360,8 @@ class ServerManager:
             'AutoStart': 'true' if auto_start else 'false',
             'CreatedAt': datetime.now().isoformat(),
             'EULAAccepted': 'false',
-            'LastStarted': ''
+            'LastStarted': '',
+            'PublicVisible': 'true'
         }
         
         # If file exists, preserve existing settings
@@ -5169,9 +5837,10 @@ def api_setup_create_admin():
 @app.route('/settings.html')
 @login_required
 def settings_page():
-    """Serve settings page (admin only)"""
+    """Serve settings page — requires at least one panel permission."""
     user_id, user = get_current_user()
-    if user.get('role') != 'admin':
+    if not any(user_manager.user_has_permission(user, p)
+               for p in group_manager.ALL_PERMISSIONS if p.startswith('panel.')):
         return redirect('/')
     return send_from_directory('public', 'settings.html')
 
@@ -5243,7 +5912,7 @@ def api_login():
     require_all = mfa_settings.get('requireMfaForAllUsers', False)
     require_admin = mfa_settings.get('requireMfaForAdmins', False)
 
-    if not result.get('isAntiLockout', False) and (require_all or (require_admin and result['role'] == 'admin')):
+    if not result.get('isAntiLockout', False) and (require_all or (require_admin and group_manager.is_admin_group(result.get('groupId')))):
         if not result.get('mfaEnabled', False):
             return jsonify({
                 'error': 'MFA is required for your account. Please contact an administrator.',
@@ -5255,14 +5924,15 @@ def api_login():
     session.permanent = True
     session['user_id'] = user_id
     session['username'] = result['username']
-    session['role'] = result['role']
-    
+    session['group_id'] = result.get('groupId')
+
     return jsonify({
         'success': True,
         'user': {
             'id': user_id,
             'username': result['username'],
-            'role': result['role']
+            'groupId': result.get('groupId'),
+            'groupName': result.get('groupName'),
         }
     })
 
@@ -5308,9 +5978,11 @@ def api_current_user():
         'id': user_id,
         'username': user['username'],
         'name': user.get('name', ''),
-        'displayName': user.get('name', ''),  # Alias for frontend compatibility
+        'displayName': user.get('name', ''),
         'email': user.get('email', ''),
-        'role': user['role'],
+        'groupId': user.get('groupId'),
+        'groupName': user.get('groupName'),
+        'permissions': user_manager.get_user_permissions(user),
         'mfaEnabled': user.get('mfaEnabled', False)
     })
 
@@ -5543,15 +6215,16 @@ def api_mfa_verify_login():
         session.permanent = True
         session['user_id'] = temp_user_id
         session['username'] = user['username']
-        session['role'] = user['role']
-        
+        session['group_id'] = user.get('groupId')
+
         return jsonify({
             'success': True,
             'message': message,
             'user': {
                 'id': temp_user_id,
                 'username': user['username'],
-                'role': user['role']
+                'groupId': user.get('groupId'),
+                'groupName': user.get('groupName'),
             }
         })
     
@@ -5561,7 +6234,7 @@ def api_mfa_verify_login():
 # ==================== Admin API ====================
 
 @app.route('/api/admin/users', methods=['GET'])
-@admin_required
+@permission_required('panel.users.view')
 def api_get_users():
     """Get all users (admin only). The hidden anti-lockout admin is only included
     when the requester IS that account."""
@@ -5570,22 +6243,22 @@ def api_get_users():
     return jsonify({'users': user_manager.get_all_users(include_anti_lockout=include_hidden)})
 
 @app.route('/api/admin/users', methods=['POST'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_create_user():
     """Create a new user (admin only)"""
     data = request.get_json()
     username = data.get('username', '').strip()
     password = data.get('password', '')
-    role = data.get('role', 'user')
+    group_id = data.get('groupId', group_manager.get_default_group_id())
     email = data.get('email', '').strip()
-    
+
     if not username or not password:
         return jsonify({'error': 'Username and password required'}), 400
-    
-    if role not in ['admin', 'user', 'public']:
-        return jsonify({'error': 'Invalid role'}), 400
-    
-    user_id, message = user_manager.create_user(username, password, role, email)
+
+    if not group_manager.get_group(group_id):
+        return jsonify({'error': 'Invalid group'}), 400
+
+    user_id, message = user_manager.create_user(username, password, group_id, email)
     
     if not user_id:
         return jsonify({'error': message}), 400
@@ -5593,33 +6266,32 @@ def api_create_user():
     return jsonify({'success': True, 'userId': user_id, 'message': message})
 
 @app.route('/api/admin/users/<user_id>/approve', methods=['POST'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_approve_user(user_id):
     """Approve a pending user"""
     if user_manager.approve_user(user_id):
         return jsonify({'success': True})
     return jsonify({'error': 'User not found'}), 404
 
-@app.route('/api/admin/users/<user_id>/role', methods=['PUT'])
-@admin_required
-def api_update_user_role(user_id):
-    """Update user role"""
+@app.route('/api/admin/users/<user_id>/group', methods=['PUT'])
+@permission_required('panel.users.manage')
+def api_update_user_group(user_id):
+    """Update user group"""
     data = request.get_json()
-    role = data.get('role')
-    
-    if not role:
-        return jsonify({'error': 'Role required'}), 400
-    
-    # Prevent changing own role (for safety)
+    group_id = data.get('groupId')
+
+    if not group_id:
+        return jsonify({'error': 'Group ID required'}), 400
+
     if user_id == session.get('user_id'):
-        return jsonify({'error': 'Cannot change your own role'}), 400
-    
-    if user_manager.update_user_role(user_id, role):
+        return jsonify({'error': 'Cannot change your own group'}), 400
+
+    if user_manager.update_user_group(user_id, group_id):
         return jsonify({'success': True})
-    return jsonify({'error': 'Invalid role or user not found'}), 400
+    return jsonify({'error': 'Invalid group or user not found'}), 400
 
 @app.route('/api/admin/users/<user_id>/password', methods=['POST'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_reset_user_password(user_id):
     """Reset user password (admin only)"""
     data = request.get_json()
@@ -5639,7 +6311,7 @@ def api_reset_user_password(user_id):
     return jsonify({'error': 'User not found'}), 404
 
 @app.route('/api/admin/users/<user_id>/mfa', methods=['DELETE'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_clear_user_mfa(user_id):
     """Clear user MFA (admin only)"""
     # Prevent clearing own MFA
@@ -5652,7 +6324,7 @@ def api_clear_user_mfa(user_id):
     return jsonify({'error': message}), 404
 
 @app.route('/api/admin/users/<user_id>/enable', methods=['POST'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_enable_user_account(user_id):
     """Enable a disabled user account (admin only)"""
     success, message = user_manager.enable_account(user_id)
@@ -5661,7 +6333,7 @@ def api_enable_user_account(user_id):
     return jsonify({'error': message}), 404
 
 @app.route('/api/admin/users/<user_id>', methods=['GET'])
-@admin_required
+@permission_required('panel.users.view')
 def api_get_user(user_id):
     """Get a specific user's details (admin only)"""
     user = user_manager.get_user_by_id(user_id)
@@ -5670,7 +6342,7 @@ def api_get_user(user_id):
     return jsonify({'error': 'User not found'}), 404
 
 @app.route('/api/admin/users/<user_id>/username', methods=['PUT'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_admin_update_username(user_id):
     """Update a user's username (admin only)"""
     data = request.get_json()
@@ -5685,7 +6357,7 @@ def api_admin_update_username(user_id):
     return jsonify({'error': message}), 400
 
 @app.route('/api/admin/users/<user_id>/name', methods=['PUT'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_admin_update_name(user_id):
     """Update a user's display name (admin only)"""
     data = request.get_json()
@@ -5697,7 +6369,7 @@ def api_admin_update_name(user_id):
     return jsonify({'error': message}), 400
 
 @app.route('/api/admin/users/<user_id>/email', methods=['PUT'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_admin_update_email(user_id):
     """Update a user's email address (admin only)"""
     data = request.get_json()
@@ -5709,7 +6381,7 @@ def api_admin_update_email(user_id):
     return jsonify({'error': message}), 400
 
 @app.route('/api/admin/users/<user_id>', methods=['DELETE'])
-@admin_required
+@permission_required('panel.users.manage')
 def api_delete_user(user_id):
     """Delete a user"""
     # Prevent deleting self
@@ -5724,7 +6396,7 @@ def api_delete_user(user_id):
 # ==================== Admin Server Approval API ====================
 
 @app.route('/api/admin/servers/pending', methods=['GET'])
-@admin_required
+@permission_required('panel.approvals.manage')
 def api_get_pending_servers():
     """Get list of servers pending approval"""
     pending = server_manager.get_pending_servers()
@@ -5737,7 +6409,7 @@ def api_get_pending_servers():
     return jsonify({'servers': pending})
 
 @app.route('/api/admin/servers/<server_id>/approve', methods=['POST'])
-@admin_required
+@permission_required('panel.approvals.manage')
 def api_approve_server(server_id):
     """Approve a pending server"""
     if server_manager.approve_server(server_id):
@@ -5745,7 +6417,7 @@ def api_approve_server(server_id):
     return jsonify({'error': 'Server not found'}), 404
 
 @app.route('/api/admin/servers/<server_id>/reject', methods=['DELETE'])
-@admin_required
+@permission_required('panel.approvals.manage')
 def api_reject_server(server_id):
     """Reject (delete) a pending server"""
     if server_manager.reject_server(server_id):
@@ -5753,20 +6425,348 @@ def api_reject_server(server_id):
     return jsonify({'error': 'Server not found'}), 404
 
 
+# ==================== Group Management API ====================
+
+@app.route('/api/admin/groups', methods=['GET'])
+@permission_required('panel.groups.view')
+def api_get_groups():
+    """List all permission groups."""
+    groups = group_manager.get_all_groups()
+    for g in groups:
+        g['userCount'] = group_manager.get_user_count(g['id'])
+    return jsonify({'groups': groups})
+
+@app.route('/api/admin/groups/permissions', methods=['GET'])
+@permission_required('panel.groups.view')
+def api_get_permissions_catalog():
+    """Return the full permission catalog for UI rendering."""
+    return jsonify({
+        'permissions': group_manager.ALL_PERMISSIONS,
+        'categories': group_manager.PERMISSION_CATEGORIES,
+        'labels': group_manager.PERMISSION_LABELS,
+    })
+
+@app.route('/api/admin/groups', methods=['POST'])
+@permission_required('panel.groups.manage')
+def api_create_group():
+    """Create a new permission group."""
+    data = request.get_json()
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'Group name is required'}), 400
+    permissions = data.get('permissions', [])
+    is_default = bool(data.get('isDefault', False))
+    try:
+        group_id = group_manager.create_group(name, permissions, is_default)
+    except Exception as e:
+        if 'UNIQUE' in str(e).upper():
+            return jsonify({'error': 'A group with that name already exists'}), 400
+        raise
+    return jsonify({'success': True, 'groupId': group_id})
+
+@app.route('/api/admin/groups/<group_id>', methods=['GET'])
+@permission_required('panel.groups.view')
+def api_get_group(group_id):
+    """Get a single group's details."""
+    group = group_manager.get_group(group_id)
+    if not group:
+        return jsonify({'error': 'Group not found'}), 404
+    group = dict(group)
+    group['userCount'] = group_manager.get_user_count(group_id)
+    return jsonify({'group': group})
+
+@app.route('/api/admin/groups/<group_id>', methods=['PUT'])
+@permission_required('panel.groups.manage')
+def api_update_group(group_id):
+    """Update a permission group."""
+    data = request.get_json()
+    ok, msg = group_manager.update_group(
+        group_id,
+        name=data.get('name'),
+        permissions=data.get('permissions'),
+        is_default=data.get('isDefault'),
+        priority=data.get('priority'),
+    )
+    if not ok:
+        return jsonify({'error': msg}), 400
+    return jsonify({'success': True, 'message': msg})
+
+@app.route('/api/admin/groups/<group_id>', methods=['DELETE'])
+@permission_required('panel.groups.manage')
+def api_delete_group(group_id):
+    """Delete a custom permission group."""
+    ok, msg = group_manager.delete_group(group_id)
+    if not ok:
+        return jsonify({'error': msg}), 400
+    return jsonify({'success': True, 'message': msg})
+
+@app.route('/api/admin/groups/<group_id>/default', methods=['POST'])
+@permission_required('panel.groups.manage')
+def api_set_default_group(group_id):
+    """Set a group as the default for new registrations."""
+    if group_manager.set_default_group(group_id):
+        return jsonify({'success': True})
+    return jsonify({'error': 'Group not found'}), 404
+
+
+# ==================== Server Sharing API ====================
+
+@app.route('/api/servers/<server_id>/access', methods=['GET'])
+@server_access_required
+def api_get_server_access(server_id):
+    """Get server access info: owner and shared groups."""
+    server_config = server_manager.get_server_config(server_id)
+    owner_id = server_config.get('owner') if server_config else None
+    owner = user_manager.get_user_by_id(owner_id) if owner_id else None
+    shared_groups = group_manager.get_server_groups(server_id)
+    return jsonify({
+        'owner': {'id': owner_id, 'username': owner['username'], 'name': owner.get('name', '')} if owner else None,
+        'sharedGroups': shared_groups,
+    })
+
+@app.route('/api/servers/<server_id>/access', methods=['PUT'])
+@server_access_required
+def api_update_server_access(server_id):
+    """Update server sharing — set which groups have access."""
+    user_id, user = get_current_user()
+    server_config = server_manager.get_server_config(server_id)
+    if not user_manager.user_has_permission(user, 'servers.access.all'):
+        if not server_config or server_config.get('owner') != user_id:
+            return jsonify({'error': 'Only the server owner can change sharing'}), 403
+    data = request.get_json()
+    group_ids = data.get('groupIds', [])
+    group_manager.set_server_groups(server_id, group_ids)
+    return jsonify({'success': True})
+
+
+# ==================== Notification API ====================
+
+@app.route('/api/notifications', methods=['GET'])
+@login_required
+def api_get_notifications():
+    user_id, _ = get_current_user()
+    include_dismissed = request.args.get('includeDismissed', 'false').lower() == 'true'
+    limit = min(int(request.args.get('limit', 50)), 200)
+    return jsonify({
+        'notifications': notification_manager.get_for_user(user_id, include_dismissed, limit),
+        'unreadCount': notification_manager.unread_count(user_id)
+    })
+
+@app.route('/api/notifications/unread-count', methods=['GET'])
+@login_required
+def api_notification_unread_count():
+    user_id, _ = get_current_user()
+    return jsonify({'unreadCount': notification_manager.unread_count(user_id)})
+
+@app.route('/api/notifications/<notification_id>/read', methods=['POST'])
+@login_required
+def api_notification_read(notification_id):
+    user_id, _ = get_current_user()
+    notification_manager.mark_read(notification_id, user_id)
+    return jsonify({'success': True})
+
+@app.route('/api/notifications/<notification_id>/dismiss', methods=['POST'])
+@login_required
+def api_notification_dismiss(notification_id):
+    user_id, _ = get_current_user()
+    notification_manager.dismiss(notification_id, user_id)
+    return jsonify({'success': True})
+
+@app.route('/api/notifications/read-all', methods=['POST'])
+@login_required
+def api_notifications_read_all():
+    user_id, _ = get_current_user()
+    notification_manager.mark_all_read(user_id)
+    return jsonify({'success': True})
+
+@app.route('/api/notifications/dismiss-all', methods=['POST'])
+@login_required
+def api_notifications_dismiss_all():
+    user_id, _ = get_current_user()
+    notification_manager.dismiss_all(user_id)
+    return jsonify({'success': True})
+
+
+# ==================== Pending Action Approval API ====================
+
+@app.route('/api/admin/pending-actions', methods=['GET'])
+@permission_required('panel.approvals.manage')
+def api_get_pending_actions():
+    pending = pending_action_manager.get_pending()
+    for action in pending:
+        user = user_manager.get_user_by_id(action.get('userId'))
+        action['username'] = user.get('username', 'Unknown') if user else 'Unknown'
+        action['actionLabel'] = POLICY_ACTION_LABELS.get(action['actionType'], action['actionType'])
+    return jsonify({'actions': pending})
+
+@app.route('/api/admin/pending-actions/<action_id>/approve', methods=['POST'])
+@permission_required('panel.approvals.manage')
+def api_approve_pending_action(action_id):
+    admin_id, _ = get_current_user()
+    data = request.get_json(silent=True) or {}
+    note = data.get('note', '')
+
+    action = pending_action_manager.approve(action_id, admin_id, note)
+    if not action:
+        return jsonify({'error': 'Pending action not found'}), 404
+
+    result = _execute_approved_action(action)
+    return jsonify({'success': True, 'executionResult': result})
+
+@app.route('/api/admin/pending-actions/<action_id>/reject', methods=['POST'])
+@permission_required('panel.approvals.manage')
+def api_reject_pending_action(action_id):
+    admin_id, _ = get_current_user()
+    data = request.get_json(silent=True) or {}
+    note = data.get('note', '')
+
+    action = pending_action_manager.reject(action_id, admin_id, note)
+    if not action:
+        return jsonify({'error': 'Pending action not found'}), 404
+    return jsonify({'success': True})
+
+
+def _execute_approved_action(action):
+    """Execute the deferred action after admin approval."""
+    action_type = action['actionType']
+    payload = action['payload']
+    user_id = action['userId']
+    target_id = action.get('targetId')
+
+    try:
+        if action_type == 'serverDelete':
+            sid = payload.get('server_id', target_id)
+            job_id = job_manager.submit(
+                'delete_server', f'Delete: {payload.get("server_name", sid)}',
+                params={'server_id': sid, 'delete_files': payload.get('delete_files', False)},
+                created_by=user_id, server_id=sid)
+            return {'jobId': job_id}
+
+        if action_type == 'serverEdit':
+            safe = {k: v for k, v in payload.items()
+                    if k not in ('id', 'created', 'owner', 'serverPath')}
+            server_manager.update_server(target_id, **safe)
+            return {'updated': True}
+
+        if action_type == 'serverLifecycle':
+            act = payload.get('action', 'start')
+            sid = payload.get('server_id', target_id)
+            if act == 'start':
+                ok, msg = server_manager.start_server(sid)
+            elif act == 'stop':
+                ok, msg = server_manager.stop_server(sid)
+            elif act == 'kill':
+                ok, msg = server_manager.kill_server(sid)
+            else:
+                return {'error': f'Unknown lifecycle action: {act}'}
+            return {'success': ok, 'message': msg}
+
+        if action_type == 'backupCreate':
+            sid = payload.get('server_id', target_id)
+            job_params = {k: v for k, v in payload.items() if k != 'server_name'}
+            cfg = server_manager.get_server_config(sid) or {}
+            job_id = job_manager.submit(
+                'backup', f'Backup: {cfg.get("name", sid)}',
+                params=job_params, created_by=user_id, server_id=sid)
+            return {'jobId': job_id}
+
+        if action_type == 'backupDelete':
+            sid = payload.get('server_id', target_id)
+            backup_name = payload.get('backup_name', '')
+            backup_path = (BACKUPS_DIR / sid / backup_name).resolve()
+            if str(backup_path).startswith(str(BACKUPS_DIR.resolve())) and backup_path.exists():
+                backup_path.unlink()
+                return {'deleted': True}
+            return {'error': 'Backup not found or invalid path'}
+
+        if action_type == 'fileUpload':
+            return {'note': 'File uploads must be re-submitted after approval.'}
+
+        if action_type == 'modManagement':
+            sid = payload.get('server_id', target_id)
+            act = payload.get('action')
+            mod_type = payload.get('mod_type', 'plugins')
+            fname = payload.get('filename', '')
+            server_path = server_manager.get_server_path(sid)
+            mod_dir = server_path / mod_type
+
+            if act == 'enable':
+                disabled_path = mod_dir / fname
+                enabled_name = fname.rsplit('.disabled', 1)[0]
+                if disabled_path.exists():
+                    disabled_path.rename(mod_dir / enabled_name)
+                    return {'enabled': enabled_name}
+            elif act == 'disable':
+                mod_path = mod_dir / fname
+                if mod_path.exists():
+                    mod_path.rename(mod_dir / (fname + '.disabled'))
+                    return {'disabled': fname + '.disabled'}
+            elif act == 'delete':
+                mod_path = mod_dir / fname
+                if mod_path.exists():
+                    mod_path.unlink()
+                    return {'deleted': True}
+            elif act == 'upload':
+                return {'note': 'Mod uploads must be re-submitted after approval.'}
+            return {'error': f'Mod action {act} could not be completed'}
+
+        if action_type == 'playerManagement':
+            return {'note': 'Player management actions must be re-submitted after approval.'}
+
+        return {'note': f'Action type {action_type} executed.'}
+
+    except Exception as e:
+        app.logger.error(f'Error executing approved action {action["id"]}: {e}')
+        return {'error': str(e)}
+
+
+# ==================== Policy Settings API ====================
+
+@app.route('/api/settings/policies', methods=['GET'])
+@permission_required('panel.settings.manage')
+def api_get_policies():
+    return jsonify({'policies': settings_manager.get_policies()})
+
+@app.route('/api/settings/policies', methods=['PUT'])
+@permission_required('panel.settings.manage')
+def api_update_policies():
+    data = request.get_json()
+    if not data or not isinstance(data, dict):
+        return jsonify({'error': 'Invalid data'}), 400
+    updated = settings_manager.update_policies(data)
+    return jsonify({'policies': updated})
+
+
 # ==================== Public API (No Auth Required) ====================
 
 @app.route('/api/public/servers', methods=['GET'])
 def api_public_servers():
-    """Get server status for public view (limited info)"""
+    """Get server status for public view — name, status, address, owner."""
     servers = server_manager.get_servers_list()
-    # Return only public info (name and running status)
-    public_servers = [
-        {
+    game_hostname = settings_manager.get_branding().get('gameHostname', '')
+    public_servers = []
+    for s in servers:
+        sid = s.get('id', '')
+        server_dir = SERVERS_DIR / sid if sid else None
+        managed = {}
+        if server_dir and server_dir.exists():
+            managed = server_manager._read_managed_conf(server_dir)
+        if managed.get('PublicVisible', 'true').lower() == 'false':
+            continue
+        port = managed.get('Port', '25565')
+        address = f'{game_hostname}:{port}' if game_hostname else ''
+        owner_name = ''
+        owner_id = s.get('owner')
+        if owner_id:
+            owner_user = user_manager.get_user_by_id(owner_id)
+            if owner_user:
+                owner_name = owner_user.get('name') or owner_user.get('username', '')
+        public_servers.append({
             'name': s['name'],
-            'running': s['running']
-        }
-        for s in servers
-    ]
+            'running': s['running'],
+            'address': address,
+            'ownerName': owner_name,
+        })
     return jsonify({'servers': public_servers})
 
 
@@ -5814,13 +6814,17 @@ def get_servers():
     """Get list of servers accessible to the current user"""
     user_id, user = get_current_user()
     all_servers = server_manager.get_servers_list()
-    
-    # Admins see all servers
-    if user.get('role') == 'admin':
+
+    if user_manager.user_has_permission(user, 'servers.access.all'):
         return jsonify({'servers': all_servers})
-    
-    # Users see only their own servers
-    user_servers = [s for s in all_servers if s.get('owner') == user_id]
+
+    user_group_id = user.get('groupId')
+    user_servers = []
+    for s in all_servers:
+        if s.get('owner') == user_id:
+            user_servers.append(s)
+        elif user_group_id and user_group_id in group_manager.get_server_group_ids(s.get('id', '')):
+            user_servers.append(s)
     return jsonify({'servers': user_servers})
 
 
@@ -5899,11 +6903,11 @@ def create_server():
     download_jar = data.get('downloadJar', False)
     server_properties = data.get('serverProperties', {})  # Server properties from form
     
-    # Check if server approval is required (admins are always auto-approved)
-    is_admin = user.get('role') == 'admin'
-    require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
-    approved = is_admin or not require_approval
-    
+    # Check action policy for server creation
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+    policy = settings_manager.get_policy('serverCreate')
+    approved = is_admin or policy != 'require_approval'
+
     # Check for duplicate port if server-port is provided
     if 'server-port' in server_properties:
         new_port = str(server_properties['server-port'])
@@ -5944,7 +6948,11 @@ def create_server():
         if not approved:
             response['pendingApproval'] = True
             response['message'] = 'Server created and pending admin approval'
-
+        if not is_admin and policy == 'notify':
+            notification_manager.notify_admins(
+                'action_notify', f'Server created — {user.get("username", "Unknown")}',
+                f'{user.get("username", "Unknown")} created Bedrock server "{name}".',
+                ref_type='server', ref_id=server_id)
         return jsonify(response)
 
     # Copy JAR from serverexecutables if requested (Java servers only)
@@ -5974,6 +6982,11 @@ def create_server():
     if not approved:
         response['pendingApproval'] = True
         response['message'] = 'Server created and pending admin approval'
+    if not is_admin and policy == 'notify':
+        notification_manager.notify_admins(
+            'action_notify', f'Server created — {user.get("username", "Unknown")}',
+            f'{user.get("username", "Unknown")} created server "{name}".',
+            ref_type='server', ref_id=server_id)
 
     return jsonify(response)
 
@@ -6182,11 +7195,11 @@ def import_server():
     port = request.form.get('port', '25565').strip()
     engine = request.form.get('engine', '').strip() or None
     
-    # Check if server approval is required (admins are always auto-approved)
-    is_admin = user.get('role') == 'admin'
-    require_approval = settings_manager.get_app_settings().get('requireServerApproval', False)
-    approved = is_admin or not require_approval
-    
+    # Check action policy for server creation
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+    policy = settings_manager.get_policy('serverCreate')
+    approved = is_admin or policy != 'require_approval'
+
     # Save uploaded file temporarily
     filename = secure_filename(file.filename)
     temp_path = UPLOADS_DIR / filename
@@ -6209,6 +7222,11 @@ def import_server():
             if not approved:
                 response['pendingApproval'] = True
                 response['message'] = 'Server imported and pending admin approval'
+            if not is_admin and policy == 'notify':
+                notification_manager.notify_admins(
+                    'action_notify', f'Server imported — {user.get("username", "Unknown")}',
+                    f'{user.get("username", "Unknown")} imported server "{name}".',
+                    ref_type='server', ref_id=result)
             return jsonify(response)
         else:
             return jsonify({'error': result}), 400
@@ -6440,36 +7458,53 @@ def get_server(server_id):
 @server_access_required
 def update_server(server_id):
     """Update a server's configuration"""
+    user_id, user = get_current_user()
     data = request.get_json()
-    
+
     # Don't allow updating certain fields
     data.pop('id', None)
     data.pop('created', None)
-    data.pop('owner', None)  # Can't change owner
-    data.pop('serverPath', None)  # Can't repoint the base directory (path-traversal / RCE vector)
-    
-    if server_manager.update_server(server_id, **data):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Server not found'}), 404
+    data.pop('owner', None)
+    data.pop('serverPath', None)
+
+    def do_update():
+        if server_manager.update_server(server_id, **data):
+            return jsonify({'success': True}), 200
+        return jsonify({'error': 'Server not found'}), 404
+
+    cfg = server_manager.get_server_config(server_id)
+    server_name = cfg.get('name', server_id) if cfg else server_id
+    result, status = check_action_policy(
+        'serverEdit', user, data, target_id=server_id,
+        execute_fn=do_update,
+        description=f'{user.get("username","Unknown")} edited server "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>', methods=['DELETE'])
 @server_access_required
 def delete_server(server_id):
     """Queue server deletion on the unified job queue (rmtree can be slow)."""
-    # Check if we should delete files too
+    user_id, user = get_current_user()
     delete_files = request.args.get('deleteFiles', 'false').lower() == 'true'
 
     cfg = server_manager.get_server_config(server_id)
     if not cfg:
         return jsonify({'error': 'Server not found'}), 404
     server_name = cfg.get('name', server_id)
-    job_id = job_manager.submit(
-        'delete_server', f'Delete: {server_name}',
-        params={'server_id': server_id, 'delete_files': delete_files},
-        created_by=get_current_user()[0],
-        server_id=server_id
-    )
-    return jsonify({'started': True, 'jobId': job_id}), 202
+
+    def do_delete():
+        job_id = job_manager.submit(
+            'delete_server', f'Delete: {server_name}',
+            params={'server_id': server_id, 'delete_files': delete_files},
+            created_by=user_id, server_id=server_id)
+        return jsonify({'started': True, 'jobId': job_id}), 202
+
+    result, status = check_action_policy(
+        'serverDelete', user,
+        {'server_id': server_id, 'delete_files': delete_files, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_delete,
+        description=f'{user.get("username","Unknown")} deleted server "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/managed', methods=['GET'])
 @server_access_required
@@ -6763,28 +7798,61 @@ def accept_eula(server_id):
 @server_access_required
 def start_server(server_id):
     """Start a server"""
-    success, message = server_manager.start_server(server_id)
-    if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+    user_id, user = get_current_user()
+    cfg = server_manager.get_server_config(server_id)
+    server_name = cfg.get('name', server_id) if cfg else server_id
+
+    def do_start():
+        success, message = server_manager.start_server(server_id)
+        if success:
+            return jsonify({'success': True, 'message': message}), 200
+        return jsonify({'error': message}), 400
+
+    result, status = check_action_policy(
+        'serverLifecycle', user, {'server_id': server_id, 'action': 'start', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_start,
+        description=f'{user.get("username","Unknown")} started server "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/stop', methods=['POST'])
 @server_access_required
 def stop_server(server_id):
     """Stop a server gracefully"""
-    success, message = server_manager.stop_server(server_id)
-    if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+    user_id, user = get_current_user()
+    cfg = server_manager.get_server_config(server_id)
+    server_name = cfg.get('name', server_id) if cfg else server_id
+
+    def do_stop():
+        success, message = server_manager.stop_server(server_id)
+        if success:
+            return jsonify({'success': True, 'message': message}), 200
+        return jsonify({'error': message}), 400
+
+    result, status = check_action_policy(
+        'serverLifecycle', user, {'server_id': server_id, 'action': 'stop', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_stop,
+        description=f'{user.get("username","Unknown")} stopped server "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/kill', methods=['POST'])
 @server_access_required
 def kill_server(server_id):
     """Forcefully kill a server process"""
-    success, message = server_manager.kill_server(server_id)
-    if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+    user_id, user = get_current_user()
+    cfg = server_manager.get_server_config(server_id)
+    server_name = cfg.get('name', server_id) if cfg else server_id
+
+    def do_kill():
+        success, message = server_manager.kill_server(server_id)
+        if success:
+            return jsonify({'success': True, 'message': message}), 200
+        return jsonify({'error': message}), 400
+
+    result, status = check_action_policy(
+        'serverLifecycle', user, {'server_id': server_id, 'action': 'kill', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_kill,
+        description=f'{user.get("username","Unknown")} killed server "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/command', methods=['POST'])
 @server_access_required
@@ -7409,6 +8477,7 @@ def get_operators(server_id):
 @server_access_required
 def add_operator(server_id):
     """Add a player as operator"""
+    user_id, user = get_current_user()
     data = request.get_json()
     player_name = data.get('name', '').strip()
     player_uuid = data.get('uuid', '').strip()
@@ -7418,11 +8487,10 @@ def add_operator(server_id):
     server_path = server_manager.get_server_path(server_id)
     ops_file = server_path / 'ops.json'
 
-    uuid = None
+    resolved_uuid = None
     actual_name = None
 
     if player_uuid:
-        # UUID provided directly — look up name from usercache.json
         usercache_file = server_path / 'usercache.json'
         if usercache_file.exists():
             try:
@@ -7431,47 +8499,48 @@ def add_operator(server_id):
                 for entry in cache:
                     if entry.get('uuid') == player_uuid:
                         actual_name = entry.get('name', player_uuid)
-                        uuid = player_uuid
+                        resolved_uuid = player_uuid
                         break
             except Exception:
                 pass
-        if not uuid:
-            # Not in usercache — use the UUID as-is with whatever name was supplied
-            uuid = player_uuid
+        if not resolved_uuid:
+            resolved_uuid = player_uuid
             actual_name = player_name or player_uuid
     elif player_name:
-        # Name provided — look up UUID from Mojang API
-        uuid, actual_name = get_player_uuid(player_name)
-        if not uuid:
+        resolved_uuid, actual_name = get_player_uuid(player_name)
+        if not resolved_uuid:
             return jsonify({'error': f'Could not find player "{player_name}". Make sure the name is correct.'}), 404
     else:
         return jsonify({'error': 'Player name or UUID is required'}), 400
-    
-    try:
-        ops = []
-        if ops_file.exists():
-            with open(ops_file, 'r') as f:
-                ops = json.load(f)
-        
-        # Check if player already exists
-        for op in ops:
-            if op.get('uuid') == uuid:
-                return jsonify({'error': f'{actual_name} is already an operator'}), 400
-        
-        # Add new operator
-        ops.append({
-            'uuid': uuid,
-            'name': actual_name,
-            'level': int(level),
-            'bypassesPlayerLimit': bool(bypass_limit)
-        })
-        
-        with open(ops_file, 'w') as f:
-            json.dump(ops, f, indent=2)
-        
-        return jsonify({'success': True, 'message': f'{actual_name} added as operator'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_add_op():
+        try:
+            ops = []
+            if ops_file.exists():
+                with open(ops_file, 'r') as f:
+                    ops = json.load(f)
+            for op in ops:
+                if op.get('uuid') == resolved_uuid:
+                    return jsonify({'error': f'{actual_name} is already an operator'}), 400
+            ops.append({
+                'uuid': resolved_uuid, 'name': actual_name,
+                'level': int(level), 'bypassesPlayerLimit': bool(bypass_limit)
+            })
+            with open(ops_file, 'w') as f:
+                json.dump(ops, f, indent=2)
+            return jsonify({'success': True, 'message': f'{actual_name} added as operator'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'add_op', 'player': actual_name, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_add_op,
+        description=f'{user.get("username","Unknown")} added operator "{actual_name}" on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['PUT'])
 @server_access_required
@@ -7513,28 +8582,34 @@ def update_operator(server_id, uuid):
 @server_access_required
 def remove_operator(server_id, uuid):
     """Remove an operator"""
+    user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     ops_file = server_path / 'ops.json'
-    
-    try:
-        if not ops_file.exists():
-            return jsonify({'error': 'Ops file not found'}), 404
-        
-        with open(ops_file, 'r') as f:
-            ops = json.load(f)
-        
-        original_len = len(ops)
-        ops = [op for op in ops if op.get('uuid') != uuid]
-        
-        if len(ops) == original_len:
-            return jsonify({'error': 'Operator not found'}), 404
-        
-        with open(ops_file, 'w') as f:
-            json.dump(ops, f, indent=2)
-        
-        return jsonify({'success': True, 'message': 'Operator removed'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_remove():
+        try:
+            if not ops_file.exists():
+                return jsonify({'error': 'Ops file not found'}), 404
+            with open(ops_file, 'r') as f:
+                ops = json.load(f)
+            original_len = len(ops)
+            ops = [op for op in ops if op.get('uuid') != uuid]
+            if len(ops) == original_len:
+                return jsonify({'error': 'Operator not found'}), 404
+            with open(ops_file, 'w') as f:
+                json.dump(ops, f, indent=2)
+            return jsonify({'success': True, 'message': 'Operator removed'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'remove_op', 'uuid': uuid, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_remove,
+        description=f'{user.get("username","Unknown")} removed operator on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/players/whitelist', methods=['GET'])
 @server_access_required
@@ -7556,6 +8631,7 @@ def get_whitelist(server_id):
 @server_access_required
 def add_to_whitelist(server_id):
     """Add a player to whitelist"""
+    user_id, user = get_current_user()
     data = request.get_json()
     player_name = data.get('name', '').strip()
     player_uuid = data.get('uuid', '').strip()
@@ -7563,10 +8639,9 @@ def add_to_whitelist(server_id):
     server_path = server_manager.get_server_path(server_id)
     whitelist_file = server_path / 'whitelist.json'
 
-    uuid = actual_name = None
+    resolved_uuid = actual_name = None
 
     if player_uuid:
-        # UUID provided directly — look up name from usercache.json
         usercache_file = server_path / 'usercache.json'
         if usercache_file.exists():
             try:
@@ -7575,65 +8650,78 @@ def add_to_whitelist(server_id):
                 for entry in cache:
                     if entry.get('uuid') == player_uuid:
                         actual_name = entry.get('name', player_uuid)
-                        uuid = player_uuid
+                        resolved_uuid = player_uuid
                         break
             except Exception:
                 pass
-        if not uuid:
-            uuid = player_uuid
+        if not resolved_uuid:
+            resolved_uuid = player_uuid
             actual_name = player_name or player_uuid
     elif player_name:
-        uuid, actual_name = get_player_uuid(player_name)
-        if not uuid:
+        resolved_uuid, actual_name = get_player_uuid(player_name)
+        if not resolved_uuid:
             return jsonify({'error': f'Could not find player "{player_name}"'}), 404
     else:
         return jsonify({'error': 'Player name or UUID is required'}), 400
-    
-    try:
-        whitelist = []
-        if whitelist_file.exists():
-            with open(whitelist_file, 'r') as f:
-                whitelist = json.load(f)
-        
-        for player in whitelist:
-            if player.get('uuid') == uuid:
-                return jsonify({'error': f'{actual_name} is already whitelisted'}), 400
-        
-        whitelist.append({'uuid': uuid, 'name': actual_name})
-        
-        with open(whitelist_file, 'w') as f:
-            json.dump(whitelist, f, indent=2)
-        
-        return jsonify({'success': True, 'message': f'{actual_name} added to whitelist'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_add():
+        try:
+            whitelist = []
+            if whitelist_file.exists():
+                with open(whitelist_file, 'r') as f:
+                    whitelist = json.load(f)
+            for player in whitelist:
+                if player.get('uuid') == resolved_uuid:
+                    return jsonify({'error': f'{actual_name} is already whitelisted'}), 400
+            whitelist.append({'uuid': resolved_uuid, 'name': actual_name})
+            with open(whitelist_file, 'w') as f:
+                json.dump(whitelist, f, indent=2)
+            return jsonify({'success': True, 'message': f'{actual_name} added to whitelist'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'whitelist_add', 'player': actual_name, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_add,
+        description=f'{user.get("username","Unknown")} whitelisted "{actual_name}" on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/players/whitelist/<uuid>', methods=['DELETE'])
 @server_access_required
 def remove_from_whitelist(server_id, uuid):
     """Remove a player from whitelist"""
+    user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     whitelist_file = server_path / 'whitelist.json'
-    
-    try:
-        if not whitelist_file.exists():
-            return jsonify({'error': 'Whitelist file not found'}), 404
-        
-        with open(whitelist_file, 'r') as f:
-            whitelist = json.load(f)
-        
-        original_len = len(whitelist)
-        whitelist = [p for p in whitelist if p.get('uuid') != uuid]
-        
-        if len(whitelist) == original_len:
-            return jsonify({'error': 'Player not found in whitelist'}), 404
-        
-        with open(whitelist_file, 'w') as f:
-            json.dump(whitelist, f, indent=2)
-        
-        return jsonify({'success': True, 'message': 'Player removed from whitelist'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_remove():
+        try:
+            if not whitelist_file.exists():
+                return jsonify({'error': 'Whitelist file not found'}), 404
+            with open(whitelist_file, 'r') as f:
+                whitelist = json.load(f)
+            original_len = len(whitelist)
+            whitelist = [p for p in whitelist if p.get('uuid') != uuid]
+            if len(whitelist) == original_len:
+                return jsonify({'error': 'Player not found in whitelist'}), 404
+            with open(whitelist_file, 'w') as f:
+                json.dump(whitelist, f, indent=2)
+            return jsonify({'success': True, 'message': 'Player removed from whitelist'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'whitelist_remove', 'uuid': uuid, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_remove,
+        description=f'{user.get("username","Unknown")} removed player from whitelist on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/players/banned', methods=['GET'])
 @server_access_required
@@ -7655,19 +8743,19 @@ def get_banned_players(server_id):
 @server_access_required
 def ban_player(server_id):
     """Ban a player"""
+    user_id, user = get_current_user()
     data = request.get_json()
     player_name = data.get('name', '').strip()
     player_uuid = data.get('uuid', '').strip()
     reason = data.get('reason', 'Banned By Admin')
-    expires = data.get('expires', 'forever')  # 'forever' or ISO datetime string
+    expires = data.get('expires', 'forever')
 
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
 
-    uuid = actual_name = None
+    resolved_uuid = actual_name = None
 
     if player_uuid:
-        # UUID provided directly — look up name from usercache.json
         usercache_file = server_path / 'usercache.json'
         if usercache_file.exists():
             try:
@@ -7676,72 +8764,82 @@ def ban_player(server_id):
                 for entry in cache:
                     if entry.get('uuid') == player_uuid:
                         actual_name = entry.get('name', player_uuid)
-                        uuid = player_uuid
+                        resolved_uuid = player_uuid
                         break
             except Exception:
                 pass
-        if not uuid:
-            uuid = player_uuid
+        if not resolved_uuid:
+            resolved_uuid = player_uuid
             actual_name = player_name or player_uuid
     elif player_name:
-        uuid, actual_name = get_player_uuid(player_name)
-        if not uuid:
+        resolved_uuid, actual_name = get_player_uuid(player_name)
+        if not resolved_uuid:
             return jsonify({'error': f'Could not find player "{player_name}"'}), 404
     else:
         return jsonify({'error': 'Player name or UUID is required'}), 400
-    
-    try:
-        banned = []
-        if banned_file.exists():
-            with open(banned_file, 'r') as f:
-                banned = json.load(f)
-        
-        for player in banned:
-            if player.get('uuid') == uuid:
-                return jsonify({'error': f'{actual_name} is already banned'}), 400
-        
-        banned.append({
-            'uuid': uuid,
-            'name': actual_name,
-            'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S +0000'),
-            'source': 'MServerController',
-            'expires': expires,
-            'reason': reason
-        })
-        
-        with open(banned_file, 'w') as f:
-            json.dump(banned, f, indent=2)
-        
-        return jsonify({'success': True, 'message': f'{actual_name} has been banned'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_ban():
+        try:
+            banned = []
+            if banned_file.exists():
+                with open(banned_file, 'r') as f:
+                    banned = json.load(f)
+            for player in banned:
+                if player.get('uuid') == resolved_uuid:
+                    return jsonify({'error': f'{actual_name} is already banned'}), 400
+            banned.append({
+                'uuid': resolved_uuid, 'name': actual_name,
+                'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S +0000'),
+                'source': 'MServerController', 'expires': expires, 'reason': reason
+            })
+            with open(banned_file, 'w') as f:
+                json.dump(banned, f, indent=2)
+            return jsonify({'success': True, 'message': f'{actual_name} has been banned'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'ban', 'player': actual_name, 'reason': reason, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_ban,
+        description=f'{user.get("username","Unknown")} banned "{actual_name}" on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/players/banned/<uuid>', methods=['DELETE'])
 @server_access_required
 def unban_player(server_id, uuid):
     """Unban a player"""
+    user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
-    
-    try:
-        if not banned_file.exists():
-            return jsonify({'error': 'Banned players file not found'}), 404
-        
-        with open(banned_file, 'r') as f:
-            banned = json.load(f)
-        
-        original_len = len(banned)
-        banned = [p for p in banned if p.get('uuid') != uuid]
-        
-        if len(banned) == original_len:
-            return jsonify({'error': 'Player not found in ban list'}), 404
-        
-        with open(banned_file, 'w') as f:
-            json.dump(banned, f, indent=2)
-        
-        return jsonify({'success': True, 'message': 'Player unbanned'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_unban():
+        try:
+            if not banned_file.exists():
+                return jsonify({'error': 'Banned players file not found'}), 404
+            with open(banned_file, 'r') as f:
+                banned = json.load(f)
+            original_len = len(banned)
+            banned = [p for p in banned if p.get('uuid') != uuid]
+            if len(banned) == original_len:
+                return jsonify({'error': 'Player not found in ban list'}), 404
+            with open(banned_file, 'w') as f:
+                json.dump(banned, f, indent=2)
+            return jsonify({'success': True, 'message': 'Player unbanned'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'unban', 'uuid': uuid, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_unban,
+        description=f'{user.get("username","Unknown")} unbanned a player on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/players/whitelist-status', methods=['GET'])
 @server_access_required
@@ -7945,26 +9043,37 @@ def zip_server_folder(server_id):
 @server_access_required
 def upload_server_file(server_id):
     """Upload a file"""
+    user_id, user = get_current_user()
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
-    
+
     file = request.files['file']
     target_path = request.form.get('path', '')
     server_path = server_manager.get_server_path(server_id)
-    
+
     if not is_safe_path(server_path, target_path):
         return jsonify({'error': 'Access denied'}), 403
-    
+
     filename = secure_filename(file.filename)
-    dest_dir = server_path / target_path
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest_path = dest_dir / filename
-    
-    try:
-        file.save(str(dest_path))
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_upload():
+        dest_dir = server_path / target_path
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = dest_dir / filename
+        try:
+            file.save(str(dest_path))
+            return jsonify({'success': True}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'fileUpload', user,
+        {'server_id': server_id, 'filename': filename, 'path': target_path, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_upload,
+        description=f'{user.get("username","Unknown")} uploaded "{filename}" to "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 
 # ==================== Mods/Plugins API ====================
@@ -8015,112 +9124,151 @@ def list_mods(server_id):
 @server_access_required
 def upload_mod(server_id):
     """Upload a mod or plugin"""
+    user_id, user = get_current_user()
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
-    
+
     file = request.files['file']
     mod_type = request.form.get('type', 'plugins')
-    
+
     if mod_type not in ['plugins', 'mods']:
         return jsonify({'error': 'Invalid mod type'}), 400
-    
+
     if not file.filename.endswith('.jar'):
         return jsonify({'error': 'File must be a JAR file'}), 400
-    
+
     server_path = server_manager.get_server_path(server_id)
-    target_dir = server_path / mod_type
-    target_dir.mkdir(parents=True, exist_ok=True)
-    
     filename = secure_filename(file.filename)
-    dest_path = target_dir / filename
-    
-    try:
-        file.save(str(dest_path))
-        return jsonify({'success': True, 'filename': filename})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_upload():
+        target_dir = server_path / mod_type
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = target_dir / filename
+        try:
+            file.save(str(dest_path))
+            return jsonify({'success': True, 'filename': filename}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'modManagement', user,
+        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'upload', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_upload,
+        description=f'{user.get("username","Unknown")} uploaded {mod_type[:-1]} "{filename}" to "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>/enable', methods=['POST'])
 @server_access_required
 def enable_mod(server_id, mod_type, filename):
     """Enable a disabled mod"""
+    user_id, user = get_current_user()
     if mod_type not in ['plugins', 'mods']:
         return jsonify({'error': 'Invalid mod type'}), 400
-    
+
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
-    
-    # Security: Validate filename doesn't contain path traversal
-    safe_filename = secure_filename(filename)
-    if safe_filename != filename or '..' in filename or '/' in filename:
+
+    safe_fn = secure_filename(filename)
+    if safe_fn != filename or '..' in filename or '/' in filename:
         return jsonify({'error': 'Invalid filename'}), 400
-    
+
     disabled_path = mod_dir / filename
     if not disabled_path.exists() or not filename.endswith('.disabled'):
         return jsonify({'error': 'Disabled mod not found'}), 404
-    
-    # Enable by removing .disabled extension
+
     enabled_name = filename.rsplit('.disabled', 1)[0]
-    enabled_path = mod_dir / enabled_name
-    
-    try:
-        disabled_path.rename(enabled_path)
-        return jsonify({'success': True, 'filename': enabled_name})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_enable():
+        enabled_path = mod_dir / enabled_name
+        try:
+            disabled_path.rename(enabled_path)
+            return jsonify({'success': True, 'filename': enabled_name}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'modManagement', user,
+        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'enable', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_enable,
+        description=f'{user.get("username","Unknown")} enabled {mod_type[:-1]} "{enabled_name}" on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>/disable', methods=['POST'])
 @server_access_required
 def disable_mod(server_id, mod_type, filename):
     """Disable a mod by renaming it"""
+    user_id, user = get_current_user()
     if mod_type not in ['plugins', 'mods']:
         return jsonify({'error': 'Invalid mod type'}), 400
-    
+
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
-    
-    # Security: Validate filename doesn't contain path traversal
-    safe_filename = secure_filename(filename)
-    if safe_filename != filename or '..' in filename or '/' in filename:
+
+    safe_fn = secure_filename(filename)
+    if safe_fn != filename or '..' in filename or '/' in filename:
         return jsonify({'error': 'Invalid filename'}), 400
-    
+
     mod_path = mod_dir / filename
     if not mod_path.exists():
         return jsonify({'error': 'Mod not found'}), 404
-    
-    # Disable by adding .disabled extension
-    disabled_path = mod_dir / (filename + '.disabled')
-    
-    try:
-        mod_path.rename(disabled_path)
-        return jsonify({'success': True, 'filename': filename + '.disabled'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_disable():
+        disabled_path = mod_dir / (filename + '.disabled')
+        try:
+            mod_path.rename(disabled_path)
+            return jsonify({'success': True, 'filename': filename + '.disabled'}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'modManagement', user,
+        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'disable', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_disable,
+        description=f'{user.get("username","Unknown")} disabled {mod_type[:-1]} "{filename}" on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>', methods=['DELETE'])
 @server_access_required
 def delete_mod(server_id, mod_type, filename):
     """Delete a mod or plugin"""
+    user_id, user = get_current_user()
     if mod_type not in ['plugins', 'mods']:
         return jsonify({'error': 'Invalid mod type'}), 400
-    
+
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
-    
-    # Security: Validate filename doesn't contain path traversal
-    safe_filename = secure_filename(filename)
-    if safe_filename != filename or '..' in filename or '/' in filename:
+
+    safe_fn = secure_filename(filename)
+    if safe_fn != filename or '..' in filename or '/' in filename:
         return jsonify({'error': 'Invalid filename'}), 400
-    
+
     mod_path = mod_dir / filename
     if not mod_path.exists():
         return jsonify({'error': 'Mod not found'}), 404
-    
-    try:
-        mod_path.unlink()
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_delete():
+        try:
+            mod_path.unlink()
+            return jsonify({'success': True}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'modManagement', user,
+        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'delete', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_delete,
+        description=f'{user.get("username","Unknown")} deleted {mod_type[:-1]} "{filename}" from "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 
 # ==================== Modrinth Integration ====================
@@ -8717,12 +9865,8 @@ def list_backups(server_id):
 @limiter.limit("5 per 15 minutes")
 @server_access_required
 def create_backup(server_id):
-    """Queue a manual backup on the unified job queue.
-
-    Stops the server if running, creates the backup, then restarts the server.
-    Returns 202 with the job id; progress/completion are pushed via the job_*
-    socket events and visible in the Tasks panel.
-    """
+    """Queue a manual backup on the unified job queue."""
+    user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
 
     if not server_path.exists():
@@ -8746,13 +9890,19 @@ def create_backup(server_id):
                   'backup_type': backup_type}
     if custom_name:
         job_params['custom_name'] = custom_name
-    job_id = job_manager.submit(
-        'backup', f'Backup: {server_name}',
-        params=job_params,
-        created_by=get_current_user()[0],
-        server_id=server_id
-    )
-    return jsonify({'started': True, 'jobId': job_id}), 202
+
+    def do_backup():
+        job_id = job_manager.submit(
+            'backup', f'Backup: {server_name}',
+            params=job_params, created_by=user_id, server_id=server_id)
+        return jsonify({'started': True, 'jobId': job_id}), 202
+
+    result, status = check_action_policy(
+        'backupCreate', user,
+        {**job_params, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_backup,
+        description=f'{user.get("username","Unknown")} created backup for "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/backups/download', methods=['GET'])
 @server_access_required
@@ -8784,32 +9934,42 @@ def download_backup(server_id):
 @server_access_required
 def delete_backup(server_id):
     """Delete a backup"""
+    user_id, user = get_current_user()
     data = request.get_json()
     backup_name = data.get('name', '')
-    
-    # Security: sanitize filename and prevent path traversal
+
     backup_name = secure_filename(backup_name)
     if not backup_name or '..' in backup_name or '/' in backup_name:
         return jsonify({'error': 'Invalid backup name'}), 400
-    
+
     backup_path = BACKUPS_DIR / server_id / backup_name
-    
-    # Additional security check: ensure path is within backups directory
+
     try:
         backup_path = backup_path.resolve()
         if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
             return jsonify({'error': 'Invalid backup path'}), 400
     except Exception:
         return jsonify({'error': 'Invalid backup path'}), 400
-    
+
     if not backup_path.exists():
         return jsonify({'error': 'Backup not found'}), 404
-    
-    try:
-        backup_path.unlink()
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    def do_delete():
+        try:
+            backup_path.unlink()
+            return jsonify({'success': True}), 200
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    result, status = check_action_policy(
+        'backupDelete', user,
+        {'server_id': server_id, 'backup_name': backup_name, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_delete,
+        description=f'{user.get("username","Unknown")} deleted backup "{backup_name}" from "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/backups/rename', methods=['POST'])
 @server_access_required
@@ -8975,15 +10135,13 @@ def get_all_backup_schedules():
     """Get all backup schedules (admin sees all, users see their own)"""
     user = user_manager.get_user(session['user_id'])
     all_schedules = backup_scheduler.get_all_schedules()
-    
-    if user.get('role') == 'admin':
+
+    if user_manager.user_has_permission(user, 'servers.access.all'):
         return jsonify({'schedules': all_schedules})
-    
-    # Filter to only user's servers
+
     user_schedules = {}
     for server_id, schedule in all_schedules.items():
-        server_config = server_manager.get_server_config(server_id)
-        if server_config and server_config.get('owner') == session['user_id']:
+        if can_access_server(server_id):
             user_schedules[server_id] = schedule
     
     return jsonify({'schedules': user_schedules})
@@ -9000,7 +10158,7 @@ def delete_expired_backups_for_server(server_id):
     return jsonify({'success': True, 'deleted': deleted})
 
 @app.route('/api/backups/delete-expired', methods=['POST'])
-@admin_required
+@permission_required('panel.settings.manage')
 def delete_all_expired_backups():
     """Delete expired backups across all servers (admin only)"""
     max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
@@ -9147,20 +10305,20 @@ def get_branding():
     return jsonify(settings_manager.get_branding())
 
 @app.route('/api/settings/branding', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_branding():
     """Update branding settings (admin only)"""
-    # Extract form data
     site_title = request.form.get('siteTitle', '')
     footer_addition = request.form.get('footerAddition', '')
     base_url = request.form.get('baseUrl', '')
+    game_hostname = request.form.get('gameHostname', '')
     favicon_file = request.files.get('favicon')
-    
-    # Prepare branding data
+
     branding_data = {
         'siteTitle': site_title,
         'footerAddition': footer_addition,
-        'baseUrl': base_url
+        'baseUrl': base_url,
+        'gameHostname': game_hostname,
     }
     
     # Handle favicon file upload
@@ -9194,13 +10352,13 @@ def update_branding():
         return jsonify({'success': False, 'error': f'Failed to update branding: {str(e)}'}), 500
 
 @app.route('/api/settings/app', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_app_settings():
     """Get app settings (admin only)"""
     return jsonify(settings_manager.get_app_settings())
 
 @app.route('/api/settings/app', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_app_settings():
     """Update app settings (admin only)"""
     data = request.get_json()
@@ -9208,14 +10366,14 @@ def update_app_settings():
     return jsonify({'success': True, 'settings': app_settings})
 
 @app.route('/api/settings/mfa', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_mfa_settings():
     """Get MFA settings (admin only)"""
     settings = settings_manager.get_settings().get('mfa', {})
     return jsonify(settings)
 
 @app.route('/api/settings/mfa', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_mfa_settings():
     """Update MFA settings (admin only)"""
     data = request.get_json()
@@ -9229,13 +10387,13 @@ def update_mfa_settings():
     return jsonify({'success': True, 'settings': mfa_settings})
 
 @app.route('/api/settings/smtp', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_smtp_settings():
     """Get SMTP settings (admin only)"""
     return jsonify(settings_manager.get_smtp_settings())
 
 @app.route('/api/settings/smtp', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_smtp_settings():
     """Update SMTP settings (admin only)"""
     data = request.get_json()
@@ -9243,7 +10401,7 @@ def update_smtp_settings():
     return jsonify({'success': True, 'settings': smtp_settings})
 
 @app.route('/api/settings/smtp/test', methods=['POST'])
-@admin_required
+@permission_required('panel.settings.manage')
 def test_smtp_settings():
     """Send a test email to verify SMTP configuration"""
     data = request.get_json()
@@ -9262,13 +10420,13 @@ def test_smtp_settings():
 # ==================== Webhook Settings API ====================
 
 @app.route('/api/settings/webhook', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_webhook_settings_api():
     """Get webhook settings (admin only; secret is masked)"""
     return jsonify(settings_manager.get_webhook_settings())
 
 @app.route('/api/settings/webhook', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_webhook_settings_api():
     """Update webhook settings (admin only)"""
     data = request.get_json()
@@ -9279,7 +10437,7 @@ def update_webhook_settings_api():
     return jsonify({'success': True, 'settings': updated})
 
 @app.route('/api/settings/webhook/test', methods=['POST'])
-@admin_required
+@permission_required('panel.settings.manage')
 def test_webhook_api():
     """Send a test webhook event"""
     success, message = webhook_service.dispatch('test', {
@@ -9293,13 +10451,13 @@ def test_webhook_api():
 # ==================== Email Templates API ====================
 
 @app.route('/api/settings/email-templates', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_email_templates_api():
     """Get all email templates (admin only)"""
     return jsonify(settings_manager.get_email_templates())
 
 @app.route('/api/settings/email-template/<name>', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_email_template_api(name):
     """Override an email template (admin only)"""
     data = request.get_json()
@@ -9309,7 +10467,7 @@ def update_email_template_api(name):
     return jsonify({'error': message}), 400
 
 @app.route('/api/settings/email-template/<name>/reset', methods=['POST'])
-@admin_required
+@permission_required('panel.settings.manage')
 def reset_email_template_api(name):
     """Reset an email template to its built-in default (admin only)"""
     settings_manager.reset_email_template(name)
@@ -9356,7 +10514,7 @@ def _write_env_value(key, value):
     env_path.write_text('\n'.join(new_lines) + '\n')
 
 @app.route('/api/settings/network', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_network_settings():
     """Get network/environment settings (admin only)."""
     env = _read_env_file()
@@ -9369,7 +10527,7 @@ def get_network_settings():
     })
 
 @app.route('/api/settings/network', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_network_settings():
     """Update network/environment settings (admin only).
     Changes are written to .env. A service restart is required for most to take effect."""
@@ -9435,14 +10593,14 @@ def update_notification_prefs_api():
 
 
 @app.route('/api/settings/external-backup', methods=['GET'])
-@admin_required
+@permission_required('panel.settings.view')
 def get_external_backup_settings_api():
     """Get external backup storage settings (admin only)"""
     return jsonify(settings_manager.get_external_backup_settings())
 
 
 @app.route('/api/settings/external-backup', methods=['PUT'])
-@admin_required
+@permission_required('panel.settings.manage')
 def update_external_backup_settings_api():
     """Update external backup storage settings (admin only)"""
     data = request.get_json()
@@ -9451,7 +10609,7 @@ def update_external_backup_settings_api():
 
 
 @app.route('/api/settings/external-backup/test', methods=['POST'])
-@admin_required
+@permission_required('panel.settings.manage')
 def test_external_backup_settings():
     """Test external backup storage connectivity by uploading a tiny probe file"""
     import tempfile
@@ -9483,7 +10641,7 @@ def test_external_backup_settings():
 # ==================== Server Backup/Restore (All Servers) ====================
 
 @app.route('/api/tools/servers/backup-all', methods=['POST'])
-@admin_required
+@permission_required('panel.panel.backup')
 def backup_all_servers():
     """Create a ZIP archive of all server directories and stream it for download.
     Running servers are NOT stopped; their files are snapshotted live.
@@ -9519,7 +10677,7 @@ def backup_all_servers():
 
 
 @app.route('/api/tools/servers/restore-all', methods=['POST'])
-@admin_required
+@permission_required('panel.panel.backup')
 def restore_all_servers():
     """Restore servers from an uploaded backup ZIP.
     Expects a multipart/form-data POST with a 'backup' file field.
@@ -9623,13 +10781,13 @@ def restore_all_servers():
 # ==================== System Stats API ====================
 
 @app.route('/api/stats/current', methods=['GET'])
-@admin_required
+@permission_required('panel.stats.view')
 def get_current_stats():
     """Get current system stats"""
     return jsonify(stats_manager.get_current_stats())
 
 @app.route('/api/stats/history', methods=['GET'])
-@admin_required
+@permission_required('panel.stats.view')
 def get_stats_history():
     """Get stats history"""
     hours = request.args.get('hours', 24, type=int)
@@ -10505,7 +11663,7 @@ jar_bucket = JarBucketManager()
 # ==================== JAR Bucket API Endpoints ====================
 
 @app.route('/api/jar-bucket/types', methods=['GET'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_types():
     """Get available server types organized by category"""
     return jsonify(jar_bucket.get_server_types())
@@ -10534,7 +11692,7 @@ def is_stable_version(version_string):
     return True
 
 @app.route('/api/jar-bucket/versions/<server_type>', methods=['GET'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_versions(server_type):
     """Get available versions for a server type"""
     force_refresh = request.args.get('refresh', 'false').lower() == 'true'
@@ -10559,7 +11717,7 @@ def api_jar_bucket_versions(server_type):
     })
 
 @app.route('/api/jar-bucket/download', methods=['POST'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_download():
     """Download a specific server JAR"""
     data = request.get_json()
@@ -10601,7 +11759,7 @@ def api_jar_bucket_download():
 
 @app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
 @limiter.exempt
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_progress(progress_id):
     """Get download progress"""
     progress = jar_bucket.download_progress.get(progress_id)
@@ -10610,13 +11768,13 @@ def api_jar_bucket_progress(progress_id):
     return jsonify({'status': 'unknown'}), 404
 
 @app.route('/api/jar-bucket/list', methods=['GET'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_list():
     """List all downloaded JAR files"""
     return jsonify({'jars': jar_bucket.list_downloaded_jars()})
 
 @app.route('/api/jar-bucket/delete', methods=['DELETE'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_delete():
     """Delete a downloaded JAR file"""
     data = request.get_json()
@@ -10632,7 +11790,7 @@ def api_jar_bucket_delete():
     return jsonify(result), 400
 
 @app.route('/api/jar-bucket/info/<server_type>/<version>', methods=['GET'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_info(server_type, version):
     """Get download info for a specific version (URL, hash, etc.)"""
     info = jar_bucket.get_download_info(server_type, version)
@@ -10641,7 +11799,7 @@ def api_jar_bucket_info(server_type, version):
     return jsonify({'error': 'Version not found'}), 404
 
 @app.route('/api/jar-bucket/refresh', methods=['POST'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_refresh():
     """Force refresh the version cache for one or all server types"""
     data = request.get_json() or {}
@@ -10656,7 +11814,7 @@ def api_jar_bucket_refresh():
         return jsonify({'message': 'Refreshed all versions'})
 
 @app.route('/api/jar-bucket/refresh-all', methods=['POST'])
-@admin_required
+@permission_required('panel.jars.manage')
 def api_jar_bucket_refresh_all():
     """
     Refresh every upstream API version list AND pre-cache download URLs.
@@ -10767,7 +11925,7 @@ def api_jar_bucket_all_versions(server_type):
 # ==================== Legacy JAR Downloader API (for backward compatibility) ====================
 
 @app.route('/api/tools/jar-downloader/download', methods=['POST'])
-@admin_required
+@permission_required('panel.jars.manage')
 def download_jar_legacy():
     """Download a JAR file to serverexecutables folder (legacy endpoint)"""
     data = request.get_json()
@@ -10824,7 +11982,7 @@ def download_jar_legacy():
         return jsonify({'error': f'Error: {str(e)}'}), 500
 
 @app.route('/api/tools/jar-downloader/list', methods=['GET'])
-@admin_required
+@permission_required('panel.jars.manage')
 def list_downloaded_jars_legacy():
     """List all downloaded JAR files (legacy endpoint)"""
     jars = {}
@@ -10845,7 +12003,7 @@ def list_downloaded_jars_legacy():
     return jsonify({'jars': jars})
 
 @app.route('/api/tools/jar-downloader/delete', methods=['DELETE'])
-@admin_required
+@permission_required('panel.jars.manage')
 def delete_downloaded_jar_legacy():
     """Delete a downloaded JAR file (legacy endpoint)"""
     data = request.get_json()
@@ -10875,7 +12033,7 @@ def delete_downloaded_jar_legacy():
 # ==================== Tools API ====================
 
 @app.route('/api/tools', methods=['GET'])
-@admin_required
+@permission_required('panel.tools.manage')
 def list_tools():
     """List available tools in the tools directory"""
     tools = []
@@ -10913,7 +12071,7 @@ def list_tools():
     return jsonify({'tools': tools})
 
 @app.route('/api/tools/upload', methods=['POST'])
-@admin_required
+@permission_required('panel.tools.manage')
 def upload_tool():
     """Upload a Python tool file"""
     if 'file' not in request.files:
@@ -10968,7 +12126,7 @@ def upload_tool():
 
 
 @app.route('/api/tools/<tool_name>/delete', methods=['DELETE'])
-@admin_required
+@permission_required('panel.tools.manage')
 def delete_tool(tool_name):
     """Delete a tool from the tools directory"""
     tool_path = TOOLS_DIR / f'{tool_name}.py'
@@ -10995,7 +12153,7 @@ def delete_tool(tool_name):
 
 
 @app.route('/api/tools/<tool_name>/run', methods=['POST'])
-@admin_required
+@permission_required('panel.tools.manage')
 def run_tool(tool_name):
     """Run a tool from the tools directory with optional arguments"""
     tool_path = TOOLS_DIR / f'{tool_name}.py'
@@ -11097,7 +12255,7 @@ def can_access_job(job):
     user_id, user = get_current_user()
     if not user:
         return False
-    if user.get('role') == 'admin':
+    if user_manager.user_has_permission(user, 'servers.access.all'):
         return True
     if job.get('createdBy') == user_id:
         return True
@@ -11112,7 +12270,7 @@ def can_access_job(job):
 def list_jobs_route():
     """List background jobs visible to the current user (admins see all)."""
     user_id, user = get_current_user()
-    is_admin = user.get('role') == 'admin'
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
     owned_server_ids = []
     if not is_admin:
         owned_server_ids = [
@@ -11206,7 +12364,7 @@ def handle_connect():
     user_id = session['user_id']
     join_room(f'user_{user_id}')
     user = user_manager.get_user(user_id)
-    if user and user.get('role') == 'admin':
+    if user and group_manager.is_admin_group(user.get('groupId')):
         join_room('admins')
     print(f'Client connected to WebSocket (user: {session.get("username", "unknown")})')
 
@@ -11239,7 +12397,7 @@ def handle_command(data):
             return
         
         # Check access: admin can access all, users can only access owned servers
-        if user.get('role') != 'admin' and server_config.get('owner') != session['user_id']:
+        if not user_manager.user_has_permission(user, 'servers.access.all') and server_config.get('owner') != session['user_id'] and user.get('groupId') not in group_manager.get_server_group_ids(server_id):
             emit('message', {'type': 'error', 'data': 'Access denied\n'})
             return
         
@@ -11266,7 +12424,7 @@ def handle_subscribe(data):
             return
         
         # Check access
-        if user.get('role') != 'admin' and server_config.get('owner') != session['user_id']:
+        if not user_manager.user_has_permission(user, 'servers.access.all') and server_config.get('owner') != session['user_id'] and user.get('groupId') not in group_manager.get_server_group_ids(server_id):
             return
         
         instance = server_manager.servers.get(server_id)
