@@ -2166,14 +2166,20 @@ class GroupManager:
     }
 
     def __init__(self):
-        self._cache = {}
+        self._cache = None
         self._lock = threading.Lock()
-        self._load_cache()
+
+    def _ensure_cache(self):
+        if self._cache is None:
+            self._load_cache()
 
     def _load_cache(self):
-        conn = get_db()
-        rows = conn.execute('SELECT * FROM groups').fetchall()
-        self._cache = {r['id']: self._row_to_dict(r) for r in rows}
+        try:
+            conn = get_db()
+            rows = conn.execute('SELECT * FROM groups').fetchall()
+            self._cache = {r['id']: self._row_to_dict(r) for r in rows}
+        except Exception:
+            self._cache = {}
 
     def _invalidate(self):
         with self._lock:
@@ -2201,6 +2207,7 @@ class GroupManager:
     # ── Permission checking ──────────────────────────────────────────────────
 
     def has_permission(self, group_id, permission):
+        self._ensure_cache()
         if not group_id:
             return False
         group = self._cache.get(group_id)
@@ -2219,12 +2226,14 @@ class GroupManager:
         return False
 
     def is_admin_group(self, group_id):
+        self._ensure_cache()
         if not group_id:
             return False
         group = self._cache.get(group_id)
         return group is not None and '*' in group.get('permissions', [])
 
     def get_permissions_for_group(self, group_id):
+        self._ensure_cache()
         group = self._cache.get(group_id)
         if not group:
             return []
@@ -2247,9 +2256,11 @@ class GroupManager:
     # ── CRUD ─────────────────────────────────────────────────────────────────
 
     def get_group(self, group_id):
+        self._ensure_cache()
         return self._cache.get(group_id)
 
     def get_all_groups(self):
+        self._ensure_cache()
         return sorted(self._cache.values(), key=lambda g: -g['priority'])
 
     def create_group(self, name, permissions, is_default=False):
@@ -2315,6 +2326,7 @@ class GroupManager:
         return True, 'Group deleted'
 
     def get_default_group_id(self):
+        self._ensure_cache()
         for gid, g in self._cache.items():
             if g.get('isDefault'):
                 return gid
@@ -2324,6 +2336,7 @@ class GroupManager:
         return 'builtin-admin'
 
     def set_default_group(self, group_id):
+        self._ensure_cache()
         if group_id not in self._cache:
             return False
         conn = get_db()
@@ -2342,6 +2355,7 @@ class GroupManager:
     # ── Server group access (sharing) ────────────────────────────────────────
 
     def get_server_groups(self, server_id):
+        self._ensure_cache()
         conn = get_db()
         rows = conn.execute(
             'SELECT group_id FROM server_group_access WHERE server_id=?',
@@ -2357,6 +2371,7 @@ class GroupManager:
         return [r['group_id'] for r in rows]
 
     def set_server_groups(self, server_id, group_ids):
+        self._ensure_cache()
         conn = get_db()
         conn.execute('DELETE FROM server_group_access WHERE server_id=?',
                      (server_id,))
