@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-MServerController (v3.3.1) is a self-hosted web control panel for managing **Minecraft servers** (Java + Bedrock). It is a Python/Flask backend with a real-time websocket layer and a vanilla-JS multi-page frontend. A single operator host runs the panel; the panel launches, monitors, and manages multiple Minecraft server processes as subprocesses on the same machine.
+MServer (v3.3.1) is a self-hosted web control panel for managing **Minecraft servers** (Java + Bedrock). It is a Python/Flask backend with a real-time websocket layer and a vanilla-JS multi-page frontend. A single operator host runs the panel; the panel launches, monitors, and manages multiple Minecraft server processes as subprocesses on the same machine.
 
 ## Commands
 
@@ -23,14 +23,14 @@ python3 -m py_compile server.py db.py api_manager.py
 node --check public/app.js       # if node is present; for JS files
 
 # --- Installer / lifecycle (Debian/Ubuntu, run as root) ---
-sudo ./install.sh install        # full install to /opt/mservercontroller + systemd (HTTP only; put your own reverse proxy in front)
+sudo ./install.sh install        # full install to /opt/mserver + systemd (HTTP only; put your own reverse proxy in front)
 sudo ./install.sh update         # pull/update an existing install
 sudo ./install.sh status         # health/status report
 sudo ./install.sh uninstall
 
-# --- Production service (systemd unit name: mservercontroller) ---
-sudo systemctl {start,stop,restart,status} mservercontroller
-journalctl -u mservercontroller -f
+# --- Production service (systemd unit name: mserver) ---
+sudo systemctl {start,stop,restart,status} mserver
+journalctl -u mserver -f
 ```
 
 ## Architecture
@@ -84,8 +84,8 @@ Multi-page, classic (non-module) scripts — top-level `function` declarations a
 ## Deployment
 
 - **Connection details for the prod hosts are in `docs/servers.md`** (App Server + nginx reverse proxy). The nginx panel config on the proxy lives at `/etc/nginx/live/twistar.org/panel.mc.conf`.
-- Production install dir: `/opt/mservercontroller`, owned by `www-data`, run by the `mservercontroller` systemd service using its own `venv`. The live DB (`msc.db`) sits in that directory — **never overwrite it during a deploy**.
-- **Prod is NOT a git checkout** — it is plain files. Deploying = copy changed files into `/opt/mservercontroller`, `chown www-data:www-data`, `py_compile` to sanity-check, then `systemctl restart mservercontroller`. Back up the files you replace first (e.g. to `/root/msc_deploy_backup_<ts>`). Verify with `systemctl is-active`, `journalctl`, and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/` (expect `302` → login).
+- Production install dir: `/opt/mserver`, owned by `www-data`, run by the `mserver` systemd service using its own `venv`. The live DB (`msc.db`) sits in that directory — **never overwrite it during a deploy**.
+- **Prod is NOT a git checkout** — it is plain files. Deploying = copy changed files into `/opt/mserver`, `chown www-data:www-data`, `py_compile` to sanity-check, then `systemctl restart mserver`. Back up the files you replace first (e.g. to `/root/msc_deploy_backup_<ts>`). Verify with `systemctl is-active`, `journalctl`, and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/` (expect `302` → login).
 - Deploying the working tree can ship more than your latest change if prod is behind — diff the remote file against `git show HEAD:<file>` before overwriting.
 
 ## Conventions / gotchas

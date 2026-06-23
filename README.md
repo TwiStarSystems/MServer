@@ -1,8 +1,8 @@
-# MServerController
+# MServer
 
 A Web-Based Multi-Server Minecraft Manager
 
-MServerController is a modern, feature-rich web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python/Flask and Socket.IO, it provides a responsive dark-themed interface with real-time monitoring, role-based access control, automated backups, task scheduling, and a full public REST API.
+MServer is a modern, feature-rich web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python/Flask and Socket.IO, it provides a responsive dark-themed interface with real-time monitoring, role-based access control, automated backups, task scheduling, and a full public REST API.
 
 ![Version](https://img.shields.io/badge/Version-3.3.1-purple.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
@@ -173,8 +173,8 @@ MServerController is a modern, feature-rich web application for creating, runnin
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/TwiStarSystems/MServerController.git
-cd MServerController
+git clone https://github.com/TwiStarSystems/MServer.git
+cd MServer
 ```
 
 2. Run the installation script as root:
@@ -188,7 +188,7 @@ This will show an interactive menu with options:
 - **Quick Update** - Update files only (fast, ideal for dev testing)
 - **Development Mode** - Run locally without installing
 - **Status** - Show installation status
-- **Uninstall** - Remove MServerController
+- **Uninstall** - Remove MServer
 
 You can also use command-line arguments:
 ```bash
@@ -203,7 +203,7 @@ sudo ./install.sh uninstall      # Remove completely
 The script will:
 - Install all required dependencies (Python, Nginx, Java)
 - Create a Python virtual environment
-- Set up the application in `/opt/mservercontroller`
+- Set up the application in `/opt/mserver`
 - Configure Nginx as a reverse proxy
 - Create and enable a systemd service
 - Start the application automatically
@@ -225,8 +225,8 @@ sudo apt-get install -y python3 python3-pip python3-venv nginx openjdk-17-jre-he
 
 2. **Clone and setup**:
 ```bash
-git clone https://github.com/TwiStarSystems/MServerController.git
-cd MServerController
+git clone https://github.com/TwiStarSystems/MServer.git
+cd MServer
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -234,8 +234,8 @@ pip install -r requirements.txt
 
 3. **Configure Nginx** (optional, for production):
 ```bash
-sudo cp nginx.conf /etc/nginx/sites-available/mservercontroller
-sudo ln -s /etc/nginx/sites-available/mservercontroller /etc/nginx/sites-enabled/
+sudo cp nginx.conf /etc/nginx/sites-available/mserver
+sudo ln -s /etc/nginx/sites-available/mserver /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -319,7 +319,7 @@ Each server stores its configuration in `config.json`:
   "servers": {
     "abc12345": {
       "name": "Survival Server",
-      "serverPath": "/opt/mservercontroller/servers/abc12345",
+      "serverPath": "/opt/mserver/servers/abc12345",
       "executable": "server.jar",
       "javaArgs": "-Xmx4G -Xms2G",
       "autoStart": false,
@@ -342,23 +342,23 @@ pip install boto3>=1.34.0
 
 ## Service Management
 
-If installed via the installation script, MServerController runs as a systemd service:
+If installed via the installation script, MServer runs as a systemd service:
 
 ```bash
 # Start the service
-sudo systemctl start mservercontroller
+sudo systemctl start mserver
 
 # Stop the service
-sudo systemctl stop mservercontroller
+sudo systemctl stop mserver
 
 # Restart the service
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 
 # Check service status
-sudo systemctl status mservercontroller
+sudo systemctl status mserver
 
 # View logs
-sudo journalctl -u mservercontroller -f
+sudo journalctl -u mserver -f
 ```
 
 ## Updating
@@ -368,7 +368,7 @@ sudo journalctl -u mservercontroller -f
 To update an existing installation:
 
 ```bash
-cd MServerController
+cd MServer
 git pull origin main
 sudo ./install.sh update
 ```
@@ -577,7 +577,7 @@ This only copies the application files (server.py, public/) without reinstalling
 ### Service won't start
 ```bash
 # Check logs
-sudo journalctl -u mservercontroller -xe
+sudo journalctl -u mserver -xe
 
 # Verify Python is installed
 python3 --version
@@ -586,7 +586,7 @@ python3 --version
 sudo netstat -tlnp | grep 3000
 
 # Test manually
-cd /opt/mservercontroller
+cd /opt/mserver
 source venv/bin/activate
 python server.py
 ```
@@ -610,7 +610,7 @@ sudo tail -f /var/log/nginx/error.log
 ## Directory Structure
 
 ```
-MServerController/
+MServer/
 ├── server.py                 # Main Python/Flask backend (API, WebSocket, managers)
 ├── db.py                     # SQLite database layer (schema, connections, queries)
 ├── api_manager.py            # Public API v1 blueprint (key auth endpoints)
@@ -663,4 +663,4 @@ MIT License - see [LICENSE](LICENSE) file for details
 ## Support
 
 For issues, questions, or suggestions, please open an issue on GitHub:
-https://github.com/TwiStarSystems/MServerController/issues
+https://github.com/TwiStarSystems/MServer/issues

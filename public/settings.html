@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>Settings - MServerController</title>
+  <title>Settings - MServer</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -15,7 +15,7 @@
     <!-- Top Bar -->
     <header class="top-bar">
       <div class="top-bar-left">
-        <h1 id="site-title">🎮 MServerController</h1>
+        <h1 id="site-title">🎮 MServer</h1>
       </div>
       <div class="top-bar-right">
         <nav class="top-nav">
@@ -116,7 +116,7 @@
           <form id="branding-form" class="branding-form">
             <div class="form-group">
               <label for="branding-site-title">Site Title</label>
-              <input type="text" id="branding-site-title" name="siteTitle" placeholder="MServerController">
+              <input type="text" id="branding-site-title" name="siteTitle" placeholder="MServer">
               <small>This will appear in the browser tab and header</small>
             </div>
             
@@ -146,7 +146,7 @@
             <h4>Preview</h4>
             <div class="preview-header">
               <div class="preview-icon" id="preview-icon">🎮</div>
-              <span class="preview-title" id="preview-title">MServerController</span>
+              <span class="preview-title" id="preview-title">MServer</span>
             </div>
             <div class="preview-footer">
               <span id="preview-footer-addition"></span>
@@ -239,7 +239,7 @@
               <button class="btn btn-success btn-small" onclick="openCreateApiKeyModal()">+ Create Key</button>
             </div>
             <div class="api-keys-info">
-              <small class="help-text">API keys allow external applications to interact with MServerController. Each key can have specific permissions and rate limits.</small>
+              <small class="help-text">API keys allow external applications to interact with MServer. Each key can have specific permissions and rate limits.</small>
             </div>
             <div id="api-keys-list" class="api-keys-list">
               <div class="loading-text">Loading API keys...</div>
@@ -276,7 +276,7 @@
           <div class="api-card">
             <h3>📚 API Documentation</h3>
             <div class="api-docs-info">
-              <p>View the full API documentation to learn how to integrate with MServerController.</p>
+              <p>View the full API documentation to learn how to integrate with MServer.</p>
               <a href="/api/v1/docs" target="_blank" class="btn btn-primary">📖 View API Docs</a>
             </div>
           </div>
@@ -473,7 +473,7 @@
                 </div>
                 <div class="form-group half">
                   <label for="smtp-from-name">From Name</label>
-                  <input type="text" id="smtp-from-name" class="form-control" placeholder="MServerController">
+                  <input type="text" id="smtp-from-name" class="form-control" placeholder="MServer">
                 </div>
               </div>
               
@@ -546,11 +546,13 @@
             <h3>📤 Upload Backups to External Storage</h3>
             <p class="settings-description">Automatically upload each backup to an S3 bucket or FTP server after it is created.</p>
 
-            <div class="form-group">
-              <label class="toggle-label">
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Enable External Backup Upload</label>
+              </div>
+              <label class="toggle-switch">
                 <input type="checkbox" id="ext-backup-enabled" onchange="saveExternalBackupSettings()">
                 <span class="toggle-slider"></span>
-                Enable External Backup Upload
               </label>
             </div>
 
@@ -642,7 +644,7 @@
           <div class="tool-panel">
             <div class="tool-panel-header">
               <h3>ℹ️ Version Info</h3>
-              <span class="tool-description">Current MServerController version information</span>
+              <span class="tool-description">Current MServer version information</span>
             </div>
             <div class="tool-panel-body">
               <div class="update-tool-container">

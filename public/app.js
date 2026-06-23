@@ -1,4 +1,4 @@
-// MServerController - Multi-Server Frontend Application
+// MServer - Multi-Server Frontend Application
 
 // Note: CSRF token management is in utils.js (window.csrfToken and fetchCSRFToken)
 
@@ -1306,12 +1306,12 @@ function showManagementModal() {
         <button class="close-btn" onclick="closeManagementModal()">&times;</button>
       </div>
       <div class="management-content">
-        <p>The server <strong>"${escapeHtml(server?.name || 'this server')}"</strong> is not yet fully managed by MServerController.</p>
+        <p>The server <strong>"${escapeHtml(server?.name || 'this server')}"</strong> is not yet fully managed by MServer.</p>
         <div class="management-notice">
           <p>Enabling management will:</p>
           <ul>
             <li>Create a <code>managed.conf</code> file in the server directory</li>
-            <li>Allow MServerController to track server settings and status</li>
+            <li>Allow MServer to track server settings and status</li>
             <li>Enable EULA acceptance and other management features</li>
           </ul>
         </div>

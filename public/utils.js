@@ -1,5 +1,5 @@
 /**
- * MServerController - Shared Utility Functions
+ * MServer - Shared Utility Functions
  *
  * This file contains common utility functions used across multiple pages.
  * Include this file before page-specific JavaScript files.

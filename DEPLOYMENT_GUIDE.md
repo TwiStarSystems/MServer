@@ -22,7 +22,7 @@
 ### Step 1: Commit Changes to Git
 
 ```bash
-cd "/home/twistar/VSC Repos/TwiStarSystems/MServerController"
+cd "/home/twistar/VSC Repos/TwiStarSystems/MServer"
 
 # Check what files have changed
 git status
@@ -52,16 +52,16 @@ If you're running this on a server with the installed version:
 ssh user@your-server
 
 # Navigate to installation directory
-cd /opt/mservercontroller
+cd /opt/mserver
 
 # Pull latest changes
 sudo git pull origin main
 
 # Restart the service
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 
 # Check if service is running
-sudo systemctl status mservercontroller
+sudo systemctl status mserver
 ```
 
 OR use the install.sh update command:
@@ -117,20 +117,20 @@ If changes don't appear after deployment:
 
 1. **Verify files were copied**:
    ```bash
-   sudo ls -la /opt/mservercontroller/public/app.js
-   sudo cat /opt/mservercontroller/public/app.js | grep "displayName"
+   sudo ls -la /opt/mserver/public/app.js
+   sudo cat /opt/mserver/public/app.js | grep "displayName"
    ```
 
 2. **Check service is running**:
    ```bash
-   sudo systemctl status mservercontroller
-   sudo journalctl -u mservercontroller -n 50
+   sudo systemctl status mserver
+   sudo journalctl -u mserver -n 50
    ```
 
 3. **Verify permissions**:
    ```bash
-   sudo chown -R www-data:www-data /opt/mservercontroller
-   sudo chmod -R 755 /opt/mservercontroller
+   sudo chown -R www-data:www-data /opt/mserver
+   sudo chmod -R 755 /opt/mserver
    ```
 
 4. **Force browser cache clear**:
@@ -148,15 +148,15 @@ Check browser console (F12) for errors:
 ```
 
 If you see errors, check:
-1. Is the service running? `sudo systemctl status mservercontroller`
+1. Is the service running? `sudo systemctl status mserver`
 2. Are you logged in? Try logging out and back in
-3. Check server logs: `sudo journalctl -u mservercontroller -f`
+3. Check server logs: `sudo journalctl -u mserver -f`
 
 ### Paper Download Still Failing
 
 If older Paper versions still fail:
 1. Check if the version actually exists: `curl -s "https://api.papermc.io/v2/projects/paper/versions/1.19.4"`
-2. Check server logs during download: `sudo journalctl -u mservercontroller -f`
+2. Check server logs during download: `sudo journalctl -u mserver -f`
 3. Verify the error message has changed (should not be "JSON.parse" anymore)
 
 ## Development Mode Testing
@@ -164,7 +164,7 @@ If older Paper versions still fail:
 If you want to test locally before deploying:
 
 ```bash
-cd "/home/twistar/VSC Repos/TwiStarSystems/MServerController"
+cd "/home/twistar/VSC Repos/TwiStarSystems/MServer"
 
 # Create virtual environment if needed
 python3 -m venv venv
@@ -186,10 +186,10 @@ Then test the fixes locally before pushing to production.
 If something goes wrong, you can rollback:
 
 ```bash
-cd /opt/mservercontroller
+cd /opt/mserver
 sudo git log --oneline  # Find the previous commit hash
 sudo git reset --hard <previous-commit-hash>
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 ```
 
 ## Cache-Control Headers
@@ -204,6 +204,6 @@ The fixes include cache-control headers to prevent future caching issues:
 
 If issues persist after following this guide:
 1. Check browser console (F12) for JavaScript errors
-2. Check server logs: `sudo journalctl -u mservercontroller -xe`
+2. Check server logs: `sudo journalctl -u mserver -xe`
 3. Verify all files were updated correctly
 4. Try completely clearing browser data (nuclear option)

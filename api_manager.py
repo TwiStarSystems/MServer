@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MServerController - Public API Manager
+MServer - Public API Manager
 Handles API key management, authentication, rate limiting, and public API endpoints.
 """
 
@@ -387,9 +387,9 @@ def api_get_stats():
 def api_docs():
     """Return API documentation."""
     docs = {
-        'name': 'MServerController API',
+        'name': 'MServer API',
         'version': 'v1',
-        'description': 'Public API for MServerController',
+        'description': 'Public API for MServer',
         'authentication': {
             'method': 'API Key',
             'header': 'X-API-Key',
@@ -405,7 +405,7 @@ def api_docs():
         },
         'endpoints': {
             'GET /api/v1/status': {
-                'description': 'Get MServerController status',
+                'description': 'Get MServer status',
                 'permissions': ['read'],
                 'response': {'status': 'string', 'version': 'string', 'uptime': 'number'}
             },
@@ -461,7 +461,7 @@ def api_docs():
 @api_v1.route('/status', methods=['GET'])
 @require_api_key(permissions=[APIPermission.READ])
 def api_status():
-    """Get MServerController status."""
+    """Get MServer status."""
     from server import read_version_file
     
     version = read_version_file() or 'unknown'

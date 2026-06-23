@@ -158,7 +158,7 @@ print_success "  Updated: version file"
    (fetches new code + updated version file)
    ↓
 3. install.sh copies version file
-   cp version /opt/mservercontroller/
+   cp version /opt/mserver/
    ↓
 4. Service restarts
    ↓
@@ -261,7 +261,7 @@ The git-release script already:
   "version": "v3.2-abc1234",
   "commit_date": "2026-01-26",
   "deployment_mode": "master",
-  "installed_at": "/opt/mservercontroller"
+  "installed_at": "/opt/mserver"
 }
 ```
 
@@ -272,7 +272,7 @@ The git-release script already:
   "version_source": "file",
   "commit_date": "2026-01-26",
   "deployment_mode": "master",
-  "installed_at": "/opt/mservercontroller"
+  "installed_at": "/opt/mserver"
 }
 ```
 
@@ -353,8 +353,8 @@ The git-release script already:
 
 **Solution:**
 ```bash
-echo "version=3.2.1" > /opt/mservercontroller/version
-sudo systemctl restart mservercontroller
+echo "version=3.2.1" > /opt/mserver/version
+sudo systemctl restart mserver
 ```
 
 ### Update Check Shows No Update
@@ -363,7 +363,7 @@ sudo systemctl restart mservercontroller
 
 **Solution:**
 ```bash
-cd /opt/mservercontroller
+cd /opt/mserver
 git fetch origin main
 git show origin/main:version
 # Should show newer version
@@ -376,7 +376,7 @@ git show origin/main:version
 **Solution:**
 ```bash
 # Run update again
-sudo /opt/mservercontroller/install.sh quick-update --non-interactive
+sudo /opt/mserver/install.sh quick-update --non-interactive
 ```
 
 ---

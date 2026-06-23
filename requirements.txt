@@ -1,4 +1,4 @@
-# MServerController - Python Dependencies
+# MServer - Python Dependencies
 
 # Web framework
 Flask>=3.0.0

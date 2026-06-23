@@ -1,10 +1,10 @@
 # BlueMap Integration Guide
 
-This document explains how BlueMap is integrated into MServerController for the **World Map** feature, and how to update or troubleshoot it.
+This document explains how BlueMap is integrated into MServer for the **World Map** feature, and how to update or troubleshoot it.
 
 ## Overview
 
-[BlueMap](https://github.com/BlueMap-Minecraft/BlueMap) is an open-source tool that reads Minecraft world files and generates interactive 3D maps viewable in a browser. MServerController uses the **BlueMap CLI** (standalone mode, no plugin required) to render maps on demand and serves the output through the Flask backend.
+[BlueMap](https://github.com/BlueMap-Minecraft/BlueMap) is an open-source tool that reads Minecraft world files and generates interactive 3D maps viewable in a browser. MServer uses the **BlueMap CLI** (standalone mode, no plugin required) to render maps on demand and serves the output through the Flask backend.
 
 - **Project Website:** https://bluecolored.de/bluemap/
 - **Documentation:** https://bluemap.bluecolored.de/
@@ -16,7 +16,7 @@ This document explains how BlueMap is integrated into MServerController for the 
 ### Architecture
 
 ```
-MServerController
+MServer
 ├── tools/bluemap/
 │   └── bluemap-cli.jar          ← Shared JAR (downloaded once)
 └── servers/<server-id>/

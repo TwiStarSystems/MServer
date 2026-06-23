@@ -8,7 +8,7 @@
 
 ## Overview
 
-The `version` file in the project root stores the current version of MServerController. This file is used by:
+The `version` file in the project root stores the current version of MServer. This file is used by:
 - The auto-update system to detect new versions
 - The web UI to display current version
 - The API endpoints for version information
@@ -36,7 +36,7 @@ Both formats are automatically detected and parsed correctly.
 
 ## Version Scheme
 
-MServerController uses semantic versioning with three components:
+MServer uses semantic versioning with three components:
 
 ```
 MAJOR.MINOR.BUILD
@@ -91,7 +91,7 @@ The Settings → Tools → Auto-Update page shows:
   "version_source": "file",
   "commit_date": "2026-01-26 10:30:00 +0000",
   "deployment_mode": "master",
-  "installed_at": "/opt/mservercontroller"
+  "installed_at": "/opt/mserver"
 }
 ```
 
@@ -124,7 +124,7 @@ The `git-release.sh` script automatically:
 ### Fresh Installation
 ```bash
 # During installation
-cd /opt/mservercontroller
+cd /opt/mserver
 # version file is copied from repository
 cat version
 # Output: version=3.2.1
@@ -151,7 +151,7 @@ cat version
 echo "version=3.3.0" > version
 
 # Restart service
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 
 # Version is now 3.3.0
 ```
@@ -163,7 +163,7 @@ sudo systemctl restart mservercontroller
 ### Fresh Install (`install.sh install`)
 ```bash
 # Copies entire repository including version file
-cp -r /path/to/repo/* /opt/mservercontroller/
+cp -r /path/to/repo/* /opt/mserver/
 ```
 
 ### Full Update (`install.sh update`)
@@ -171,13 +171,13 @@ cp -r /path/to/repo/* /opt/mservercontroller/
 # Updates application files including version file
 git pull origin main
 # OR
-cp /path/to/repo/version /opt/mservercontroller/
+cp /path/to/repo/version /opt/mserver/
 ```
 
 ### Quick Update (`install.sh quick-update`)
 ```bash
 # Updates application files including version file
-cp /path/to/repo/version /opt/mservercontroller/
+cp /path/to/repo/version /opt/mserver/
 ```
 
 **Important:** The version file is NOT preserved during updates - it's intentionally updated to reflect the new version.
@@ -220,10 +220,10 @@ The API response includes `version_source` to indicate where the version came fr
 **Solution:**
 ```bash
 # Create version file
-echo "version=3.2.1" > /opt/mservercontroller/version
+echo "version=3.2.1" > /opt/mserver/version
 
 # Restart service
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 ```
 
 ### Wrong Version Displayed
@@ -233,10 +233,10 @@ sudo systemctl restart mservercontroller
 **Solution:**
 ```bash
 # Check version file
-cat /opt/mservercontroller/version
+cat /opt/mserver/version
 
 # If incorrect, verify git pulled correctly
-cd /opt/mservercontroller
+cd /opt/mserver
 git log -1
 git status
 
@@ -244,7 +244,7 @@ git status
 git pull origin main
 
 # Restart service
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 ```
 
 ### Version File Format Error
@@ -254,13 +254,13 @@ sudo systemctl restart mservercontroller
 **Solution:**
 ```bash
 # Check file content
-cat /opt/mservercontroller/version
+cat /opt/mserver/version
 
 # Fix format (should be X.X.X)
-echo "version=3.2.1" > /opt/mservercontroller/version
+echo "version=3.2.1" > /opt/mserver/version
 
 # Restart service
-sudo systemctl restart mservercontroller
+sudo systemctl restart mserver
 ```
 
 ### Auto-Update Not Detecting New Version
@@ -270,7 +270,7 @@ sudo systemctl restart mservercontroller
 **Solution:**
 ```bash
 # Check if git can fetch remote
-cd /opt/mservercontroller
+cd /opt/mserver
 git fetch origin main
 
 # Check remote version file

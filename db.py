@@ -1,5 +1,5 @@
 """
-db.py — SQLite connection management and schema for MServerController.
+db.py — SQLite connection management and schema for MServer.
 
 Usage:
     from db import get_db, init_db

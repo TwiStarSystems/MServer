@@ -214,7 +214,7 @@ async function loadPageBranding() {
       const branding = await response.json();
       
       // Update page title
-      const siteTitle = branding.siteTitle || '🎮 MServerController';
+      const siteTitle = branding.siteTitle || '🎮 MServer';
       document.getElementById('site-title').textContent = siteTitle;
       document.title = `Settings - ${siteTitle.replace(/^🎮\s*/, '')}`;
       
@@ -787,7 +787,7 @@ function handleFaviconSelect(e) {
 }
 
 function updateBrandingPreview() {
-  const title = document.getElementById('branding-site-title').value || 'MServerController';
+  const title = document.getElementById('branding-site-title').value || 'MServer';
   const footerAddition = document.getElementById('footer-addition').value;
   const faviconFile = document.getElementById('site-icon').files[0];
   
@@ -846,7 +846,7 @@ async function saveBranding(e) {
       await loadBranding();
       
       // Update page title and header
-      const displayTitle = siteTitle || '🎮 MServerController';
+      const displayTitle = siteTitle || '🎮 MServer';
       document.getElementById('site-title').textContent = displayTitle;
       document.title = `Settings - ${displayTitle.replace(/^🎮\s*/, '')}`;
     } else {
