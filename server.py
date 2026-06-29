@@ -40,6 +40,10 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
+# Load environment variables from .env *before* importing local modules, so any
+# module-level env reads in them (e.g. db.py's DB_PATH) see the configured values.
+load_dotenv()
+
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, make_response
 from flask_socketio import SocketIO, emit, join_room
 from flask_limiter import Limiter
@@ -51,8 +55,38 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from db import get_db, init_db
 
-# Load environment variables from .env file
-load_dotenv()
+
+# ── Typed environment-variable helpers ────────────────────────────────────────
+# Keep every os.environ read consistent and validated. Empty/unset always falls
+# back to the code default, so an existing install with no extra .env keys is
+# unchanged. (_env_path is defined below, after BASE_DIR, since it needs it.)
+def _env_str(key, default):
+    """Return a stripped string env var, or `default` if unset/blank."""
+    val = os.environ.get(key)
+    val = val.strip() if val is not None else ''
+    return val if val else default
+
+def _env_int(key, default):
+    """Return an int env var; warn and fall back to `default` on a bad value."""
+    raw = os.environ.get(key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        import warnings
+        warnings.warn(f"{key}={raw!r} is not a valid integer; using default {default}.", stacklevel=2)
+        return default
+
+def _env_bool(key, default=False):
+    """Return a bool env var. True set: 1/true/yes/on (case-insensitive)."""
+    raw = os.environ.get(key)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# Load environment variables from .env file (loaded above, before local imports)
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -78,19 +112,20 @@ elif len(_raw_secret) < 32:
 app.config['SECRET_KEY'] = _raw_secret
 
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
-    seconds=int(os.environ.get('PERMANENT_SESSION_LIFETIME', 604800))
+    seconds=_env_int('PERMANENT_SESSION_LIFETIME', 604800)
 )
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 # Set to True when serving over HTTPS (SESSION_COOKIE_SECURE=true in .env)
-app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+app.config['SESSION_COOKIE_SECURE'] = _env_bool('SESSION_COOKIE_SECURE', False)
 # Optional: scope session cookie to a domain (e.g. .twistar.org for subdomain sharing)
-_cookie_domain = os.environ.get('SESSION_COOKIE_DOMAIN', '').strip()
+_cookie_domain = _env_str('SESSION_COOKIE_DOMAIN', '')
 if _cookie_domain:
     app.config['SESSION_COOKIE_DOMAIN'] = _cookie_domain
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0  # Disable caching for development
 app.config['WTF_CSRF_TIME_LIMIT'] = None     # Token valid for full session lifetime
-app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024 * 1024  # 25 GB upload limit (large world ZIPs)
+# Max upload size (large world ZIPs). Override with MAX_UPLOAD_SIZE_GB in .env.
+app.config['MAX_CONTENT_LENGTH'] = _env_int('MAX_UPLOAD_SIZE_GB', 25) * 1024 * 1024 * 1024
 
 # Configure ProxyFix for reverse proxy (e.g., Nginx) headers
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
@@ -116,15 +151,15 @@ def handle_csrf_error(e):
 # CORS: set CORS_ORIGINS in .env to a comma-separated list of allowed origins,
 # e.g. CORS_ORIGINS=https://panel.example.com,https://example.com
 # Leave unset (or set to *) only for local/dev use.
-_cors_env = os.environ.get('CORS_ORIGINS', '').strip()
+_cors_env = _env_str('CORS_ORIGINS', '')
 _socketio_cors: object = [o.strip() for o in _cors_env.split(',') if o.strip()] if _cors_env and _cors_env != '*' else '*'
 
 socketio = SocketIO(
     app,
     manage_session=False,
     async_mode='threading',
-    ping_interval=25,
-    ping_timeout=60,
+    ping_interval=_env_int('SOCKETIO_PING_INTERVAL', 25),
+    ping_timeout=_env_int('SOCKETIO_PING_TIMEOUT', 60),
     cors_allowed_origins=_socketio_cors
 )
 
@@ -132,23 +167,46 @@ socketio = SocketIO(
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
-    default_limits=["100 per 15 minutes"],
+    default_limits=[_env_str('RATE_LIMIT_DEFAULT', '100 per 15 minutes')],
     storage_uri="memory://"
 )
 
 # Configuration
-PORT = int(os.environ.get('PORT', 3000))
+PORT = _env_int('PORT', 3000)
 BASE_DIR = Path(__file__).parent.absolute()
-SERVERS_DIR = BASE_DIR / 'servers'
-BACKUPS_DIR = BASE_DIR / 'backups'
+
+def _env_path(key, default):
+    """Return a resolved absolute Path from an env var, or `default` (a Path).
+    Relative values are resolved against BASE_DIR; `~` is expanded."""
+    raw = os.environ.get(key)
+    if raw is None or not raw.strip():
+        return Path(default).resolve()
+    p = Path(raw.strip()).expanduser()
+    if not p.is_absolute():
+        p = BASE_DIR / p
+    return p.resolve()
+
+# Core directories. SERVERS_DIR / BACKUPS_DIR / DB_PATH are operator-overridable
+# via .env (e.g. to put servers/backups/db on a separate volume). SERVERS_DIR is
+# also the trusted containment base for per-server file routes — see
+# is_server_path_allowed(); _env_path always returns a resolved absolute path so
+# that containment re-pins cleanly to the configured location.
+SERVERS_DIR = _env_path('SERVERS_DIR', BASE_DIR / 'servers')
+BACKUPS_DIR = _env_path('BACKUPS_DIR', BASE_DIR / 'backups')
 UPLOADS_DIR = BASE_DIR / 'uploads'
 JOBS_TMP_DIR = UPLOADS_DIR / 'jobs'   # prepared zip-download artifacts produced by JobManager
 RESOURCEPACKS_DIR = BASE_DIR / 'public' / 'resourcepacks'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
-DB_PATH = BASE_DIR / 'msc.db'
+DB_PATH = _env_path('DB_PATH', BASE_DIR / 'msc.db')
 JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 TOOLS_DIR = BASE_DIR / 'tools'
 VERSION_FILE = BASE_DIR / 'version'
+
+# ── Tunable configuration (env-overridable) ───────────────────────────────────
+DEFAULT_JAVA_ARGS = _env_str('DEFAULT_JAVA_ARGS', '-Xmx4G -Xms1G')  # default JVM args for new servers
+JAVA_BINARY = _env_str('JAVA_BINARY', 'java')                        # java executable (name on PATH or absolute path)
+MFA_TIMEOUT_SECONDS = _env_int('MFA_TIMEOUT_SECONDS', 300)           # pending-MFA login window
+MAX_RESOURCEPACK_SIZE_MB = _env_int('MAX_RESOURCEPACK_SIZE_MB', 100) # per-server resource pack upload cap
 
 # Ensure directories exist
 for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, JOBS_TMP_DIR, TOOLS_DIR, RESOURCEPACKS_DIR]:
@@ -858,7 +916,7 @@ class WebhookService:
 class StatsManager:
     """Manages system statistics collection and storage — backed by SQLite."""
 
-    RETENTION_DAYS = 7
+    RETENTION_DAYS = _env_int('STATS_RETENTION_DAYS', 7)
 
     def __init__(self):
         self._start_collection()
@@ -4187,7 +4245,7 @@ class ServerManager:
                 'name':       server_config.get('name', 'Unnamed Server'),
                 'serverPath': server_config.get('serverPath', ''),
                 'executable': server_config.get('executable', 'server.jar'),
-                'javaArgs':   server_config.get('javaArgs', '-Xmx4G -Xms1G'),
+                'javaArgs':   server_config.get('javaArgs', DEFAULT_JAVA_ARGS),
                 'autoStart':  server_config.get('autoStart', False),
                 'serverType': engine_from_conf,
                 'version':    version_from_conf,
@@ -4229,7 +4287,7 @@ class ServerManager:
         return self.delete_server(server_id)
 
     def create_server(self, name, server_path='', executable='server.jar',
-                      java_args='-Xmx4G -Xms1G', server_type=None, version=None,
+                      java_args=DEFAULT_JAVA_ARGS, server_type=None, version=None,
                       owner=None, approved=True, category='unmodded', port=None):
         """Create a new server configuration."""
         server_id = str(uuid.uuid4())[:8]
@@ -4529,7 +4587,7 @@ class ServerManager:
         except Exception as e:
             return False, f"Failed to write eula.txt: {e}"
     
-    def import_server_from_zip(self, name, zip_path, java_args='-Xmx4G -Xms1G',
+    def import_server_from_zip(self, name, zip_path, java_args=DEFAULT_JAVA_ARGS,
                                executable_name=None, owner=None, approved=True,
                                category='unmodded', port=None, engine=None):
         """Import a server from a ZIP file."""
@@ -4630,7 +4688,7 @@ class ServerManager:
             
             server_path = Path(server_config.get('serverPath', ''))
             executable = server_config.get('executable', 'server.jar')
-            java_args = server_config.get('javaArgs', '-Xmx4G -Xms1G')
+            java_args = server_config.get('javaArgs', DEFAULT_JAVA_ARGS)
             is_bedrock = server_config.get('category') == 'bedrock'
             
             if not server_path.exists():
@@ -4806,7 +4864,7 @@ class ServerInstance:
             args = ['bash', str(executable_path)]
         else:
             # Java server: run java -jar
-            args = ['java'] + self.java_args.split() + ['-jar', self.executable, 'nogui']
+            args = [JAVA_BINARY] + self.java_args.split() + ['-jar', self.executable, 'nogui']
         
         self.process = subprocess.Popen(
             args,
@@ -6204,10 +6262,10 @@ def api_mfa_verify_login():
     if not temp_user_id:
         return jsonify({'error': 'No pending MFA verification'}), 400
     
-    # Check for MFA timeout (5 minutes)
+    # Check for MFA timeout (default 5 minutes; MFA_TIMEOUT_SECONDS in .env)
     if mfa_timestamp:
         mfa_age = time.time() - mfa_timestamp
-        if mfa_age > 300:  # 5 minutes
+        if mfa_age > MFA_TIMEOUT_SECONDS:
             session.pop('temp_user_id', None)
             session.pop('mfa_required', None)
             session.pop('mfa_timestamp', None)
@@ -6929,7 +6987,7 @@ def create_server():
     # would let the per-server file routes read/write anywhere on disk (RCE).
     if server_path and not is_server_path_allowed(server_path):
         return jsonify({'error': 'Invalid server path: must be within the servers directory'}), 400
-    java_args = data.get('javaArgs', '-Xmx4G -Xms1G')
+    java_args = data.get('javaArgs', DEFAULT_JAVA_ARGS)
     category = data.get('category', 'unmodded')
     executable = 'server.sh' if category == 'bedrock' else 'server.jar'
     server_engine = data.get('serverEngine')  # New: engine (paper, folia, etc.)
@@ -7225,7 +7283,7 @@ def import_server():
     
     name = request.form.get('name', 'Imported Server')
     executable_name = request.form.get('executableName', '').strip()
-    java_args = request.form.get('javaArgs', '-Xmx4G -Xms1G')
+    java_args = request.form.get('javaArgs', DEFAULT_JAVA_ARGS)
     category = request.form.get('category', 'unmodded')
     port = request.form.get('port', '25565').strip()
     engine = request.form.get('engine', '').strip() or None
@@ -9922,14 +9980,14 @@ def upload_resourcepack(server_id):
     if not file.filename.lower().endswith('.zip'):
         return jsonify({'error': 'File must be a .zip file'}), 400
     
-    # Check file size (100MB limit)
-    MAX_SIZE = 100 * 1024 * 1024  # 100MB in bytes
+    # Check file size (default 100MB; MAX_RESOURCEPACK_SIZE_MB in .env)
+    MAX_SIZE = MAX_RESOURCEPACK_SIZE_MB * 1024 * 1024
     file.seek(0, os.SEEK_END)
     file_size = file.tell()
     file.seek(0)
-    
+
     if file_size > MAX_SIZE:
-        return jsonify({'error': f'File size exceeds 100MB limit (size: {file_size / (1024*1024):.2f}MB)'}), 400
+        return jsonify({'error': f'File size exceeds {MAX_RESOURCEPACK_SIZE_MB}MB limit (size: {file_size / (1024*1024):.2f}MB)'}), 400
     
     try:
         # Save the file
