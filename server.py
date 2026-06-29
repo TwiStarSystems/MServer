@@ -6308,6 +6308,11 @@ def api_approve_user(user_id):
         return jsonify({'success': True})
     return jsonify({'error': 'User not found'}), 404
 
+def _actor_is_admin():
+    """True if the current session user belongs to an admin (wildcard) group."""
+    _, actor = get_current_user()
+    return bool(actor and group_manager.is_admin_group(actor.get('groupId')))
+
 @app.route('/api/admin/users/<user_id>/group', methods=['PUT'])
 @permission_required('panel.users.manage')
 def api_update_user_group(user_id):
@@ -6320,6 +6325,11 @@ def api_update_user_group(user_id):
 
     if user_id == session.get('user_id'):
         return jsonify({'error': 'Cannot change your own group'}), 400
+
+    # Only an admin may grant an admin (wildcard) group, so a delegated
+    # user-manager can't mint new admins through another account.
+    if group_manager.is_admin_group(group_id) and not _actor_is_admin():
+        return jsonify({'error': 'Only an administrator can assign an admin group'}), 403
 
     if user_manager.update_user_group(user_id, group_id):
         return jsonify({'success': True})
@@ -6491,6 +6501,9 @@ def api_create_group():
         return jsonify({'error': 'Group name is required'}), 400
     permissions = data.get('permissions', [])
     is_default = bool(data.get('isDefault', False))
+    # Only an admin may author an admin (wildcard) group.
+    if '*' in (permissions or []) and not _actor_is_admin():
+        return jsonify({'error': 'Only an administrator can create an admin group'}), 403
     try:
         group_id = group_manager.create_group(name, permissions, is_default)
     except Exception as e:
@@ -6515,10 +6528,14 @@ def api_get_group(group_id):
 def api_update_group(group_id):
     """Update a permission group."""
     data = request.get_json()
+    permissions = data.get('permissions')
+    # Only an admin may grant a group admin (wildcard) permissions.
+    if permissions is not None and '*' in permissions and not _actor_is_admin():
+        return jsonify({'error': 'Only an administrator can grant admin permissions'}), 403
     ok, msg = group_manager.update_group(
         group_id,
         name=data.get('name'),
-        permissions=data.get('permissions'),
+        permissions=permissions,
         is_default=data.get('isDefault'),
         priority=data.get('priority'),
     )
