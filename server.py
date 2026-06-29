@@ -4540,13 +4540,9 @@ class ServerManager:
             server_dir.mkdir(parents=True, exist_ok=True)
 
             with zipfile.ZipFile(zip_path, 'r') as zipf:
-                # Security: reject path traversal and symlinks before extracting
-                for _info in zipf.infolist():
-                    if '..' in _info.filename or _info.filename.startswith('/'):
-                        raise ValueError(f'Unsafe path in ZIP: {_info.filename!r}')
-                    if (_info.external_attr >> 16) & 0o170000 == 0o120000:
-                        raise ValueError('ZIP contains symbolic links')
-                zipf.extractall(server_dir)
+                # Rejects path-traversal/absolute/symlink members and verifies
+                # every member resolves inside server_dir before extracting.
+                safe_extractall(zipf, server_dir)
 
             subdirs = [d for d in server_dir.iterdir() if d.is_dir()]
             if len(subdirs) == 1 and not any(server_dir.glob('*.jar')):
@@ -4680,7 +4676,25 @@ class ServerManager:
             
             instance.stop()
             return True, "Server stopping..."
-    
+
+    def restart_server(self, server_id):
+        """Restart a server: stop it (if running), wait for the process to exit,
+        then start it again. Runs in a background thread so the request returns
+        immediately. Returns (True, message)."""
+        def _worker():
+            cur = self.servers.get(server_id)
+            if cur and cur.is_running():
+                self.stop_server(server_id)
+                # stop_server force-kills after 30s; wait up to ~35s for exit.
+                for _ in range(70):
+                    inst = self.servers.get(server_id)
+                    if not inst or not inst.is_running():
+                        break
+                    time.sleep(0.5)
+            self.start_server(server_id)
+        threading.Thread(target=_worker, daemon=True).start()
+        return True, "Server restarting"
+
     def kill_server(self, server_id):
         """Forcefully kill a Minecraft server process"""
         with self.lock:
