@@ -8131,6 +8131,54 @@ def get_player_uuid(player_name):
     except:
         return None, None
 
+
+def _running_instance(server_id):
+    """Return the live ServerInstance if the server is running, else None.
+
+    Player-management actions (op/ban/whitelist/...) must be applied through the
+    server console while it is running: this makes them take effect immediately
+    AND lets the server persist its own ops.json/whitelist.json/banned-*.json.
+    Editing those files directly behind a running server's back doesn't apply
+    live and gets overwritten from the server's in-memory state on its next
+    change. Direct file editing is therefore only correct while the server is
+    stopped."""
+    inst = server_manager.servers.get(server_id)
+    return inst if (inst and inst.is_running()) else None
+
+
+def _safe_player_token(name):
+    """Sanitize a player name for use in a single console command line.
+
+    Returns the trimmed name, or None if it isn't a single safe token. Java
+    usernames are [A-Za-z0-9_]{1,16}; rejecting anything else stops a name with
+    whitespace/newlines from smuggling a second console command."""
+    if not name:
+        return None
+    name = name.strip()
+    if not re.match(r'^[A-Za-z0-9_]{1,16}$', name):
+        return None
+    return name
+
+
+def _safe_console_text(text):
+    """Collapse newlines so free text (e.g. a ban reason) stays on one console line."""
+    return re.sub(r'[\r\n]+', ' ', str(text or '')).strip()
+
+
+def _name_from_json_by_uuid(server_path, filename, uuid):
+    """Resolve a player's name from a Minecraft list file (ops/whitelist/banned) by uuid."""
+    f = server_path / filename
+    if f.exists():
+        try:
+            with open(f, 'r') as fh:
+                for entry in json.load(fh):
+                    if entry.get('uuid') == uuid:
+                        return entry.get('name')
+        except Exception:
+            pass
+    return None
+
+
 @app.route('/api/servers/<server_id>/players/online', methods=['GET'])
 @server_access_required
 def get_online_players(server_id):
@@ -8269,6 +8317,14 @@ def ban_ip(server_id):
     server_path = server_manager.get_server_path(server_id)
     banned_ips_file = server_path / 'banned-ips.json'
 
+    # Running server: ban-ip live via console (kicks matching players and lets the
+    # server persist banned-ips.json itself; a file edit wouldn't apply until restart).
+    inst = _running_instance(server_id)
+    if inst:
+        cmd = f'ban-ip {ip_address} {_safe_console_text(reason)}'.strip()
+        inst.send_command(cmd)
+        return jsonify({'success': True, 'message': f'{ip_address} has been banned (applied live)'})
+
     try:
         banned_ips = []
         if banned_ips_file.exists():
@@ -8300,6 +8356,12 @@ def unban_ip(server_id, ip_address):
     """Unban an IP address"""
     server_path = server_manager.get_server_path(server_id)
     banned_ips_file = server_path / 'banned-ips.json'
+
+    # Running server: pardon-ip live via console (server persists banned-ips.json itself).
+    inst = _running_instance(server_id)
+    if inst and re.match(r'^[\d\.\:a-fA-F\*]+$', ip_address or ''):
+        inst.send_command(f'pardon-ip {ip_address}')
+        return jsonify({'success': True, 'message': f'{ip_address} has been unbanned (applied live)'})
 
     try:
         if not banned_ips_file.exists():
@@ -8501,6 +8563,28 @@ def add_operator(server_id):
 
     server_path = server_manager.get_server_path(server_id)
     ops_file = server_path / 'ops.json'
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    # Running server: apply live via console so it takes effect immediately and
+    # the server persists ops.json itself. Uses only the name, so this also works
+    # on offline-mode servers where Mojang UUID lookup would fail.
+    inst = _running_instance(server_id)
+    if inst:
+        live_name = _safe_player_token(player_name)
+        if not live_name:
+            return jsonify({'error': 'A valid player name is required to op a player on a running server'}), 400
+
+        def do_add_op_live():
+            inst.send_command(f'op {live_name}')
+            return jsonify({'success': True, 'message': f'{live_name} granted operator (applied live)'}), 200
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'add_op', 'player': live_name, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_add_op_live,
+            description=f'{user.get("username","Unknown")} added operator "{live_name}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     resolved_uuid = None
     actual_name = None
@@ -8527,9 +8611,6 @@ def add_operator(server_id):
             return jsonify({'error': f'Could not find player "{player_name}". Make sure the name is correct.'}), 404
     else:
         return jsonify({'error': 'Player name or UUID is required'}), 400
-
-    cfg = server_manager.get_server_config(server_id) or {}
-    server_name = cfg.get('name', server_id)
 
     def do_add_op():
         try:
@@ -8603,6 +8684,21 @@ def remove_operator(server_id, uuid):
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
 
+    # Running server: deop live via console (server persists ops.json itself).
+    inst = _running_instance(server_id)
+    live_name = _safe_player_token(_name_from_json_by_uuid(server_path, 'ops.json', uuid)) if inst else None
+    if inst and live_name:
+        def do_remove_live():
+            inst.send_command(f'deop {live_name}')
+            return jsonify({'success': True, 'message': f'{live_name} removed from operators (applied live)'}), 200
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'remove_op', 'uuid': uuid, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_remove_live,
+            description=f'{user.get("username","Unknown")} removed operator "{live_name}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
+
     def do_remove():
         try:
             if not ops_file.exists():
@@ -8653,6 +8749,27 @@ def add_to_whitelist(server_id):
 
     server_path = server_manager.get_server_path(server_id)
     whitelist_file = server_path / 'whitelist.json'
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    # Running server: apply live via console (server persists whitelist.json
+    # itself and reloads enforcement). Name-only, so offline-mode works too.
+    inst = _running_instance(server_id)
+    if inst:
+        live_name = _safe_player_token(player_name)
+        if not live_name:
+            return jsonify({'error': 'A valid player name is required to whitelist a player on a running server'}), 400
+
+        def do_add_live():
+            inst.send_command(f'whitelist add {live_name}')
+            return jsonify({'success': True, 'message': f'{live_name} added to whitelist (applied live)'}), 200
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'whitelist_add', 'player': live_name, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_add_live,
+            description=f'{user.get("username","Unknown")} whitelisted "{live_name}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     resolved_uuid = actual_name = None
 
@@ -8678,9 +8795,6 @@ def add_to_whitelist(server_id):
             return jsonify({'error': f'Could not find player "{player_name}"'}), 404
     else:
         return jsonify({'error': 'Player name or UUID is required'}), 400
-
-    cfg = server_manager.get_server_config(server_id) or {}
-    server_name = cfg.get('name', server_id)
 
     def do_add():
         try:
@@ -8714,6 +8828,21 @@ def remove_from_whitelist(server_id, uuid):
     whitelist_file = server_path / 'whitelist.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Running server: remove live via console (server persists whitelist.json itself).
+    inst = _running_instance(server_id)
+    live_name = _safe_player_token(_name_from_json_by_uuid(server_path, 'whitelist.json', uuid)) if inst else None
+    if inst and live_name:
+        def do_remove_live():
+            inst.send_command(f'whitelist remove {live_name}')
+            return jsonify({'success': True, 'message': f'{live_name} removed from whitelist (applied live)'}), 200
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'whitelist_remove', 'uuid': uuid, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_remove_live,
+            description=f'{user.get("username","Unknown")} removed "{live_name}" from whitelist on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     def do_remove():
         try:
@@ -8767,6 +8896,31 @@ def ban_player(server_id):
 
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    # Running server: ban live via console. This kicks the player immediately,
+    # blocks reconnection, and lets the server persist banned-players.json itself
+    # (a direct file edit would not take effect until restart). Name-only, so
+    # offline-mode servers work too.
+    inst = _running_instance(server_id)
+    if inst:
+        live_name = _safe_player_token(player_name)
+        if not live_name:
+            return jsonify({'error': 'A valid player name is required to ban a player on a running server'}), 400
+        live_reason = _safe_console_text(reason)
+        cmd = f'ban {live_name} {live_reason}'.strip()
+
+        def do_ban_live():
+            inst.send_command(cmd)
+            return jsonify({'success': True, 'message': f'{live_name} has been banned (applied live)'}), 200
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'ban', 'player': live_name, 'reason': reason, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_ban_live,
+            description=f'{user.get("username","Unknown")} banned "{live_name}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     resolved_uuid = actual_name = None
 
@@ -8792,9 +8946,6 @@ def ban_player(server_id):
             return jsonify({'error': f'Could not find player "{player_name}"'}), 404
     else:
         return jsonify({'error': 'Player name or UUID is required'}), 400
-
-    cfg = server_manager.get_server_config(server_id) or {}
-    server_name = cfg.get('name', server_id)
 
     def do_ban():
         try:
@@ -8832,6 +8983,21 @@ def unban_player(server_id, uuid):
     banned_file = server_path / 'banned-players.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Running server: pardon live via console (server persists banned-players.json itself).
+    inst = _running_instance(server_id)
+    live_name = _safe_player_token(_name_from_json_by_uuid(server_path, 'banned-players.json', uuid)) if inst else None
+    if inst and live_name:
+        def do_unban_live():
+            inst.send_command(f'pardon {live_name}')
+            return jsonify({'success': True, 'message': f'{live_name} unbanned (applied live)'}), 200
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'unban', 'uuid': uuid, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_unban_live,
+            description=f'{user.get("username","Unknown")} unbanned "{live_name}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     def do_unban():
         try:
@@ -8897,7 +9063,13 @@ def toggle_whitelist_setting(server_id):
                     lines.append(line)
         with open(properties_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
-        return jsonify({'success': True, 'enabled': not current})
+        new_enabled = not current
+        # server.properties isn't re-read by a running server, so also toggle
+        # enforcement live. (The file edit above keeps it persistent across restarts.)
+        inst = _running_instance(server_id)
+        if inst:
+            inst.send_command('whitelist on' if new_enabled else 'whitelist off')
+        return jsonify({'success': True, 'enabled': new_enabled})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
