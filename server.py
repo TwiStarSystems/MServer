@@ -4948,8 +4948,14 @@ class ServerInstance:
             pass
 
     def _broadcast(self, data):
-        """Broadcast message to all clients"""
-        socketio.emit('message', data, namespace='/')
+        """Push a message to clients subscribed to THIS server's room.
+
+        Emitting globally would leak one server's live console/player events and
+        status to every authenticated client (the frontend only filters by
+        serverId client-side). Clients join 'server_<id>' on connect/subscribe
+        only after the same access check used by the HTTP routes, so scoping the
+        emit to that room enforces per-server access on the realtime stream too."""
+        socketio.emit('message', data, to=f'server_{self.server_id}', namespace='/')
     
     def _add_to_buffer(self, line):
         """Add line to output buffer"""
@@ -12368,6 +12374,24 @@ def download_job_route(job_id):
                      mimetype='application/zip')
 
 
+def _accessible_server_ids(user, user_id):
+    """Return the server ids the user may access (admin-all ∨ owner ∨ group-share).
+
+    Mirrors can_access_server() but in bulk, for deciding which 'server_<id>'
+    realtime rooms a socket client should join."""
+    if user_manager.user_has_permission(user, 'servers.access.all'):
+        return [s.get('id') for s in server_manager.get_servers_list()]
+    gid = user.get('groupId')
+    ids = []
+    for s in server_manager.get_servers_list():
+        sid = s.get('id')
+        if s.get('owner') == user_id:
+            ids.append(sid)
+        elif gid and gid in group_manager.get_server_group_ids(sid):
+            ids.append(sid)
+    return ids
+
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
@@ -12381,6 +12405,13 @@ def handle_connect():
     user = user_manager.get_user(user_id)
     if user and group_manager.is_admin_group(user.get('groupId')):
         join_room('admins')
+    # Join a room per accessible server so live console/status (emitted via
+    # ServerInstance._broadcast to 'server_<id>') reaches this client for every
+    # server it may access — including the dashboard's multi-server status list —
+    # without leaking servers it cannot access.
+    if user:
+        for sid in _accessible_server_ids(user, user_id):
+            join_room(f'server_{sid}')
     print(f'Client connected to WebSocket (user: {session.get("username", "unknown")})')
 
 @socketio.on('disconnect')
@@ -12441,7 +12472,12 @@ def handle_subscribe(data):
         # Check access
         if not user_manager.user_has_permission(user, 'servers.access.all') and server_config.get('owner') != session['user_id'] and user.get('groupId') not in group_manager.get_server_group_ids(server_id):
             return
-        
+
+        # Join this server's realtime room so live output reaches the client.
+        # (connect already joins accessible servers; this covers ones created
+        # after connect, e.g. a server the user just made.)
+        join_room(f'server_{server_id}')
+
         instance = server_manager.servers.get(server_id)
         if instance:
             # Only send recent output if server is running to avoid stale log spam
