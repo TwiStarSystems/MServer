@@ -5,15 +5,22 @@ Handles API key management, authentication, rate limiting, and public API endpoi
 """
 
 import json
+import time
 import secrets
 import hashlib
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, after_this_request
 
-# Create Blueprint for API v1
+# Create Blueprint for API v1 (public, API-key authenticated)
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
+
+# Separate blueprint for the session-authenticated admin/management routes.
+# These live under /api/v1 too but must NOT be CSRF-exempt (unlike api_v1),
+# since they are driven by the operator's browser session, not an API key.
+api_v1_admin = Blueprint('api_v1_admin', __name__, url_prefix='/api/v1')
 
 # Configuration
 BASE_DIR = Path(__file__).parent.absolute()
@@ -233,6 +240,50 @@ def list_api_keys():
     return result
 
 
+# ==================== Admin session gate ====================
+
+def _require_admin_session():
+    """Session-auth admin gate for the management routes.
+
+    RBAC is group-based (there is no 'role' field on the user dict), so admin
+    status is determined by group_manager.is_admin_group(). Returns (user, None)
+    on success, or (None, (response, status)) to short-circuit the caller."""
+    from server import get_current_user, group_manager
+    user_id, user = get_current_user()
+    if not user:
+        return None, (jsonify({'error': 'Authentication required'}), 401)
+    if not group_manager.is_admin_group(user.get('groupId')):
+        return None, (jsonify({'error': 'Admin access required'}), 403)
+    return user, None
+
+
+# ==================== Per-key rate limiting ====================
+
+_RATE_LOCK = threading.Lock()
+_RATE_HITS = {}          # key_id -> list[float] request timestamps within the window
+_RATE_WINDOW = 60.0      # seconds
+
+
+def _check_rate_limit(key_id, limit):
+    """Sliding-window rate check. Returns (allowed, remaining, reset_epoch)."""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 60
+    if limit <= 0:
+        limit = 60
+    now = time.time()
+    with _RATE_LOCK:
+        hits = [t for t in _RATE_HITS.get(key_id, []) if now - t < _RATE_WINDOW]
+        reset = int((hits[0] if hits else now) + _RATE_WINDOW)
+        if len(hits) >= limit:
+            _RATE_HITS[key_id] = hits
+            return False, 0, reset
+        hits.append(now)
+        _RATE_HITS[key_id] = hits
+        return True, limit - len(hits), reset
+
+
 # ==================== Authentication Decorator ====================
 
 def require_api_key(permissions=None):
@@ -274,13 +325,31 @@ def require_api_key(permissions=None):
                             'error': 'Insufficient permissions',
                             'message': f'This endpoint requires one of: {permissions}'
                         }), 403
-            
+
+            # Enforce the per-key rate limit and advertise the documented headers.
+            limit = key_data.get('rate_limit') or 60
+            allowed, remaining, reset_ts = _check_rate_limit(key_data['id'], limit)
+
+            @after_this_request
+            def _add_rate_headers(resp):
+                resp.headers['X-RateLimit-Limit'] = str(limit)
+                resp.headers['X-RateLimit-Remaining'] = str(max(0, remaining))
+                resp.headers['X-RateLimit-Reset'] = str(reset_ts)
+                return resp
+
+            if not allowed:
+                increment_api_stats(key_id=key_data['id'], endpoint=request.path, success=False)
+                return jsonify({
+                    'error': 'Rate limit exceeded',
+                    'message': f'API key is limited to {limit} requests per minute'
+                }), 429
+
             # Store key data in request context
             g.api_key = key_data
-            
+
             # Track stats
             increment_api_stats(key_id=key_data['id'], endpoint=request.path, success=True)
-            
+
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -288,30 +357,24 @@ def require_api_key(permissions=None):
 
 # ==================== API Key Management Routes (Admin) ====================
 
-@api_v1.route('/keys', methods=['GET'])
+@api_v1_admin.route('/keys', methods=['GET'])
 def api_list_keys():
     """List all API keys (requires admin session)."""
-    # This endpoint uses session auth, not API key auth
-    # Import here to avoid circular imports
-    from server import get_current_user
-    
-    user_id, user = get_current_user()
-    if not user or user.get('role') != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    
+    user, err = _require_admin_session()
+    if err:
+        return err
+
     keys = list_api_keys()
     return jsonify({'keys': keys})
 
 
-@api_v1.route('/keys', methods=['POST'])
+@api_v1_admin.route('/keys', methods=['POST'])
 def api_create_key():
     """Create a new API key (requires admin session)."""
-    from server import get_current_user
-    
-    user_id, user = get_current_user()
-    if not user or user.get('role') != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    
+    user, err = _require_admin_session()
+    if err:
+        return err
+
     data = request.get_json() or {}
     name = data.get('name', 'Unnamed Key')
     permissions = data.get('permissions', [APIPermission.READ])
@@ -335,48 +398,42 @@ def api_create_key():
     }), 201
 
 
-@api_v1.route('/keys/<key_id>', methods=['PATCH'])
+@api_v1_admin.route('/keys/<key_id>', methods=['PATCH'])
 def api_update_key(key_id):
     """Update an API key (requires admin session)."""
-    from server import get_current_user
-    
-    user_id, user = get_current_user()
-    if not user or user.get('role') != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    
+    user, err = _require_admin_session()
+    if err:
+        return err
+
     data = request.get_json() or {}
     updated = update_api_key(key_id, data)
-    
+
     if not updated:
         return jsonify({'error': 'API key not found'}), 404
-    
+
     return jsonify({'message': 'API key updated', 'key': updated})
 
 
-@api_v1.route('/keys/<key_id>', methods=['DELETE'])
+@api_v1_admin.route('/keys/<key_id>', methods=['DELETE'])
 def api_delete_key(key_id):
     """Delete an API key (requires admin session)."""
-    from server import get_current_user
-    
-    user_id, user = get_current_user()
-    if not user or user.get('role') != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    
+    user, err = _require_admin_session()
+    if err:
+        return err
+
     if delete_api_key(key_id):
         return jsonify({'message': 'API key deleted'})
-    
+
     return jsonify({'error': 'API key not found'}), 404
 
 
-@api_v1.route('/stats', methods=['GET'])
+@api_v1_admin.route('/stats', methods=['GET'])
 def api_get_stats():
     """Get API usage statistics (requires admin session)."""
-    from server import get_current_user
-    
-    user_id, user = get_current_user()
-    if not user or user.get('role') != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    
+    user, err = _require_admin_session()
+    if err:
+        return err
+
     stats = load_api_stats()
     return jsonify(stats)
 
@@ -473,27 +530,35 @@ def api_status():
     })
 
 
+def _api_server_view(server_id):
+    """Return the runtime-status dict for one server (or None), as exposed by
+    ServerManager.get_servers_list()."""
+    from server import server_manager
+    for s in server_manager.get_servers_list():
+        if s.get('id') == server_id:
+            return s
+    return None
+
+
 @api_v1.route('/servers', methods=['GET'])
 @require_api_key(permissions=[APIPermission.READ])
 def api_list_servers():
     """List all servers."""
     from server import server_manager
-    
-    servers = server_manager.list_servers()
-    
-    # Return basic info for each server
+
     result = []
-    for server in servers:
+    for server in server_manager.get_servers_list():
         result.append({
             'id': server.get('id'),
             'name': server.get('name'),
-            'type': server.get('type'),
+            'type': server.get('serverType'),
             'version': server.get('version'),
             'status': server.get('status', 'stopped'),
+            'running': server.get('running', False),
             'port': server.get('port'),
-            'players': server.get('players', {'online': 0, 'max': 0})
+            'category': server.get('category'),
         })
-    
+
     return jsonify({'servers': result, 'count': len(result)})
 
 
@@ -501,12 +566,10 @@ def api_list_servers():
 @require_api_key(permissions=[APIPermission.READ])
 def api_get_server(server_id):
     """Get server details."""
-    from server import server_manager
-    
-    server = server_manager.get_server(server_id)
+    server = _api_server_view(server_id)
     if not server:
         return jsonify({'error': 'Server not found'}), 404
-    
+
     return jsonify({'server': server})
 
 
@@ -515,17 +578,20 @@ def api_get_server(server_id):
 def api_server_status(server_id):
     """Get server status."""
     from server import server_manager
-    
-    server = server_manager.get_server(server_id)
+
+    server = _api_server_view(server_id)
     if not server:
         return jsonify({'error': 'Server not found'}), 404
-    
+
+    instance = server_manager.servers.get(server_id)
+    online = list(instance.online_players.keys()) if (instance and instance.is_running()) else []
+
     return jsonify({
         'id': server_id,
         'status': server.get('status', 'stopped'),
-        'players': server.get('players', {'online': 0, 'max': 0}),
-        'uptime': server.get('uptime'),
-        'last_started': server.get('last_started')
+        'running': server.get('running', False),
+        'port': server.get('port'),
+        'players': {'online': len(online), 'list': online},
     })
 
 
@@ -534,26 +600,18 @@ def api_server_status(server_id):
 def api_send_command(server_id):
     """Send a command to the server console."""
     from server import server_manager
-    
-    server = server_manager.get_server(server_id)
-    if not server:
+
+    if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
-    
-    if server.get('status') != 'running':
-        return jsonify({'error': 'Server is not running'}), 400
-    
+
     data = request.get_json() or {}
     command = data.get('command')
-    
+
     if not command:
         return jsonify({'error': 'Command is required'}), 400
-    
-    success = server_manager.send_command(server_id, command)
-    
-    return jsonify({
-        'success': success,
-        'message': 'Command sent' if success else 'Failed to send command'
-    })
+
+    success, message = server_manager.send_command(server_id, command)
+    return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
 @api_v1.route('/servers/<server_id>/start', methods=['POST'])
@@ -561,20 +619,12 @@ def api_send_command(server_id):
 def api_start_server(server_id):
     """Start a server."""
     from server import server_manager
-    
-    server = server_manager.get_server(server_id)
-    if not server:
+
+    if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
-    
-    if server.get('status') == 'running':
-        return jsonify({'error': 'Server is already running'}), 400
-    
-    success = server_manager.start_server(server_id)
-    
-    return jsonify({
-        'success': success,
-        'message': 'Server starting' if success else 'Failed to start server'
-    })
+
+    success, message = server_manager.start_server(server_id)
+    return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
 @api_v1.route('/servers/<server_id>/stop', methods=['POST'])
@@ -582,20 +632,12 @@ def api_start_server(server_id):
 def api_stop_server(server_id):
     """Stop a server."""
     from server import server_manager
-    
-    server = server_manager.get_server(server_id)
-    if not server:
+
+    if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
-    
-    if server.get('status') != 'running':
-        return jsonify({'error': 'Server is not running'}), 400
-    
-    success = server_manager.stop_server(server_id)
-    
-    return jsonify({
-        'success': success,
-        'message': 'Server stopping' if success else 'Failed to stop server'
-    })
+
+    success, message = server_manager.stop_server(server_id)
+    return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
 @api_v1.route('/servers/<server_id>/restart', methods=['POST'])
@@ -603,17 +645,12 @@ def api_stop_server(server_id):
 def api_restart_server(server_id):
     """Restart a server."""
     from server import server_manager
-    
-    server = server_manager.get_server(server_id)
-    if not server:
+
+    if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
-    
-    success = server_manager.restart_server(server_id)
-    
-    return jsonify({
-        'success': success,
-        'message': 'Server restarting' if success else 'Failed to restart server'
-    })
+
+    success, message = server_manager.restart_server(server_id)
+    return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
 # ==================== Utility Functions ====================
@@ -621,4 +658,5 @@ def api_restart_server(server_id):
 def init_api_manager(app):
     """Initialize the API manager with the Flask app."""
     app.register_blueprint(api_v1)
+    app.register_blueprint(api_v1_admin)
     print(f"[API Manager] Public API v1 initialized at /api/v1/")
