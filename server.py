@@ -5949,10 +5949,19 @@ def api_login():
 
     if not result.get('isAntiLockout', False) and (require_all or (require_admin and group_manager.is_admin_group(result.get('groupId')))):
         if not result.get('mfaEnabled', False):
+            # MFA is mandatory but this user hasn't enrolled yet. Instead of locking
+            # them out, grant a limited "enrollment" session that can ONLY complete
+            # MFA setup (see api_mfa_enroll_setup/verify). It carries no user_id, so
+            # it grants no access to the panel; it is promoted to a full session only
+            # once MFA is successfully verified.
+            session.clear()
+            session['mfa_enroll_user_id'] = user_id
+            session['mfa_enroll_timestamp'] = time.time()
             return jsonify({
-                'error': 'MFA is required for your account. Please contact an administrator.',
-                'code': 'MFA_REQUIRED'
-            }), 403
+                'success': True,
+                'mfaSetupRequired': True,
+                'message': 'MFA is required for your account. Set it up now to continue.'
+            })
     
     # Regenerate session before setting auth data (prevents session fixation)
     session.clear()
@@ -6264,6 +6273,97 @@ def api_mfa_verify_login():
         })
     
     return jsonify({'error': 'Verification failed'}), 401
+
+
+# Forced MFA enrollment at login. When a policy (requireMfaForAll/Admins) mandates
+# MFA but the user has none, api_login hands out a limited enrollment session
+# (session['mfa_enroll_user_id']) instead of rejecting them. These two endpoints
+# are the only thing that session can do, and a successful verify promotes it to a
+# full authenticated session.
+MFA_ENROLL_TIMEOUT = 600  # 10 minutes
+
+def _get_mfa_enroll_user():
+    """Resolve the user behind a pending forced-enrollment session, or (None, error_response)."""
+    user_id = session.get('mfa_enroll_user_id')
+    ts = session.get('mfa_enroll_timestamp')
+    if not user_id:
+        return None, (jsonify({'error': 'No pending MFA enrollment'}), 400)
+    if ts and time.time() - ts > MFA_ENROLL_TIMEOUT:
+        session.pop('mfa_enroll_user_id', None)
+        session.pop('mfa_enroll_timestamp', None)
+        return None, (jsonify({'error': 'Enrollment timed out. Please log in again.'}), 400)
+    user = user_manager.get_user(user_id)
+    if not user:
+        return None, (jsonify({'error': 'User not found'}), 404)
+    return (user_id, user), None
+
+@app.route('/api/auth/mfa/enroll/setup', methods=['POST'])
+@csrf.exempt
+@limiter.limit("10 per minute")
+def api_mfa_enroll_setup():
+    """Generate a TOTP secret + QR for a user completing forced MFA enrollment at login."""
+    resolved, err = _get_mfa_enroll_user()
+    if err:
+        return err
+    user_id, user = resolved
+
+    secret, _ = user_manager.generate_mfa_secret(user_id)
+    app_name = settings_manager.get_branding().get('siteTitle', 'MServer')
+    totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=user['username'], issuer_name=app_name)
+
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(totp_uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    img_buffer = io.BytesIO()
+    img.save(img_buffer, format='PNG')
+    img_buffer.seek(0)
+    import base64
+    img_base64 = 'data:image/png;base64,' + base64.b64encode(img_buffer.getvalue()).decode()
+
+    return jsonify({
+        'success': True,
+        'secret': secret,
+        'qrCode': img_base64,
+        'manualEntry': secret
+    })
+
+@app.route('/api/auth/mfa/enroll/verify', methods=['POST'])
+@csrf.exempt
+@limiter.limit("10 per minute")
+def api_mfa_enroll_verify():
+    """Verify the TOTP code during forced enrollment, enable MFA, and promote to a full session."""
+    resolved, err = _get_mfa_enroll_user()
+    if err:
+        return err
+    user_id, user = resolved
+
+    data = request.get_json() or {}
+    secret = data.get('secret', '')
+    code = data.get('code', '')
+    if not secret or not code:
+        return jsonify({'error': 'Secret and code are required'}), 400
+    if not user_manager.verify_totp(secret, code):
+        return jsonify({'error': 'Invalid verification code'}), 400
+
+    recovery_code = user_manager.generate_recovery_code()
+    success, message = user_manager.enable_mfa(user_id, secret, recovery_code)
+    if not success:
+        return jsonify({'error': message}), 400
+
+    # Promote the limited enrollment session into a full authenticated session.
+    session.clear()
+    session.permanent = True
+    session['user_id'] = user_id
+    session['username'] = user['username']
+    session['group_id'] = user.get('groupId')
+
+    return jsonify({
+        'success': True,
+        'message': 'MFA enabled successfully',
+        'recoveryCode': recovery_code
+    })
 
 
 # ==================== Admin API ====================
@@ -10499,12 +10599,6 @@ def delete_server_task(server_id, task_id):
 
 
 # ==================== Settings API ====================
-
-@app.route('/api/settings', methods=['GET'])
-@login_required
-def get_settings():
-    """Get application settings"""
-    return jsonify(settings_manager.get_settings())
 
 @app.route('/api/settings/branding', methods=['GET'])
 def get_branding():

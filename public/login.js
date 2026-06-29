@@ -79,6 +79,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     showMFAVerification();
                     submitBtn.disabled = false;
                     submitBtn.textContent = 'Sign In';
+                } else if (data.mfaSetupRequired) {
+                    // MFA is mandatory for this account but not yet set up — force enrollment now.
+                    showMFAEnrollment();
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Sign In';
                 } else {
                     showSuccess('Login successful! Redirecting...');
                     setTimeout(() => {
@@ -183,10 +188,18 @@ function hideMessages() {
 
 // ==================== MFA Verification ====================
 
+// Hide the base login UI (tabs + login/register forms + messages) so a full-card
+// MFA screen can take over. There is no single wrapper element to toggle, so hide
+// the pieces that actually exist.
+function hideLoginBase() {
+    document.querySelectorAll('.tabs, .tab-content').forEach(el => { el.style.display = 'none'; });
+    hideMessages();
+}
+
 function showMFAVerification() {
     // Hide login/register forms
-    document.querySelector('.auth-container').style.display = 'none';
-    
+    hideLoginBase();
+
     // Create MFA verification UI
     const mfaContainer = document.createElement('div');
     mfaContainer.id = 'mfa-container';
@@ -304,9 +317,121 @@ function showMFAError(message) {
 }
 
 function cancelMFAVerification() {
-    const mfaContainer = document.getElementById('mfa-container');
-    if (mfaContainer) {
-        mfaContainer.remove();
+    // Simplest reliable reset back to the login form.
+    window.location.reload();
+}
+
+// ==================== Forced MFA Enrollment ====================
+
+async function showMFAEnrollment() {
+    // Hide login/register forms
+    hideLoginBase();
+
+    const enrollContainer = document.createElement('div');
+    enrollContainer.id = 'mfa-enroll-container';
+    enrollContainer.className = 'auth-container';
+    enrollContainer.innerHTML = `
+        <div class="auth-card">
+            <h1>🔐 Set Up Two-Factor Authentication</h1>
+            <p class="auth-subtitle">Your administrator requires MFA on this account. Scan the QR code with your authenticator app, then enter the 6-digit code to finish.</p>
+
+            <div id="mfa-enroll-error" class="error-message"></div>
+
+            <div id="mfa-enroll-loading" style="text-align:center;">Generating your secret…</div>
+
+            <div id="mfa-enroll-body" style="display:none;">
+                <div style="text-align:center; margin: 10px 0;">
+                    <img id="mfa-enroll-qr" alt="MFA QR code" style="max-width:200px; background:#fff; padding:8px; border-radius:8px;">
+                </div>
+                <div class="form-group">
+                    <label>Can't scan? Enter this key manually</label>
+                    <input type="text" id="mfa-enroll-secret" readonly>
+                </div>
+                <form id="mfa-enroll-form">
+                    <div class="form-group">
+                        <label for="mfa-enroll-code">Verification Code</label>
+                        <input type="text" id="mfa-enroll-code" placeholder="123456" maxlength="6" pattern="[0-9]{6}" required autofocus>
+                    </div>
+                    <button type="submit" class="btn-primary">Enable MFA &amp; Continue</button>
+                </form>
+
+                <div id="mfa-enroll-recovery" style="display:none; margin-top:15px;">
+                    <div class="error-message show" style="background:#16213e;">
+                        <strong>Save your recovery code</strong><br>
+                        <code id="mfa-enroll-recovery-code" style="font-size:14px;"></code><br>
+                        <small>Store it somewhere safe — it lets you regain access if you lose your authenticator.</small>
+                    </div>
+                    <button type="button" class="btn-primary" onclick="window.location.href='/'">I've saved it — Continue</button>
+                </div>
+            </div>
+
+            <button type="button" class="btn-text" onclick="window.location.reload()">Back to Login</button>
+        </div>
+    `;
+    document.querySelector('.login-container').appendChild(enrollContainer);
+
+    document.getElementById('mfa-enroll-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await verifyMFAEnrollment();
+    });
+
+    // Kick off secret/QR generation
+    try {
+        const response = await csrfPost('/api/auth/mfa/enroll/setup', {});
+        const data = await response.json();
+        if (response.ok) {
+            document.getElementById('mfa-enroll-qr').src = data.qrCode;
+            document.getElementById('mfa-enroll-secret').value = data.manualEntry;
+            window._mfaEnrollSecret = data.secret;
+            document.getElementById('mfa-enroll-loading').style.display = 'none';
+            document.getElementById('mfa-enroll-body').style.display = 'block';
+        } else {
+            showMFAEnrollError(data.error || 'Failed to start MFA setup');
+        }
+    } catch (err) {
+        showMFAEnrollError('Network error. Please try again.');
     }
-    document.querySelector('.auth-container').style.display = 'block';
+}
+
+async function verifyMFAEnrollment() {
+    const code = document.getElementById('mfa-enroll-code').value.trim();
+    const submitBtn = document.querySelector('#mfa-enroll-form button[type="submit"]');
+
+    if (!code || code.length !== 6) {
+        showMFAEnrollError('Please enter a 6-digit code');
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Verifying...';
+
+    try {
+        const response = await csrfPost('/api/auth/mfa/enroll/verify', {
+            secret: window._mfaEnrollSecret,
+            code
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            // Show the recovery code and require acknowledgement before entering the app.
+            document.getElementById('mfa-enroll-form').style.display = 'none';
+            document.getElementById('mfa-enroll-recovery-code').textContent = data.recoveryCode;
+            document.getElementById('mfa-enroll-recovery').style.display = 'block';
+        } else {
+            showMFAEnrollError(data.error || 'Invalid verification code');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Enable MFA & Continue';
+        }
+    } catch (err) {
+        showMFAEnrollError('Network error. Please try again.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Enable MFA & Continue';
+    }
+}
+
+function showMFAEnrollError(message) {
+    const el = document.getElementById('mfa-enroll-error');
+    el.textContent = message;
+    el.classList.add('show');
+    el.style.display = 'block';
 }
