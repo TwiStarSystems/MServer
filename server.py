@@ -10700,6 +10700,12 @@ def _read_env_file():
 def _write_env_value(key, value):
     """Update a single key in the .env file, preserving comments and order.
     If the key doesn't exist, append it."""
+    # Guard against .env injection: a newline in the value (e.g. a crafted
+    # corsOrigins/sessionCookieDomain) could otherwise smuggle extra env lines
+    # such as FLASK_ENV or SECRET_KEY past the intended settings surface.
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', str(key)):
+        raise ValueError(f'Invalid .env key: {key!r}')
+    value = str(value).replace('\r', '').replace('\n', '')
     env_path = BASE_DIR / '.env'
     if not env_path.exists():
         env_path.write_text(f'{key}={value}\n')
