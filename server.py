@@ -11109,6 +11109,7 @@ SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
 JAR_CACHE_FILE = BASE_DIR / 'jar_cache.json'
 JAR_CACHE_MAX_AGE_HOURS = 6  # Refresh cache every 6 hours
 JAR_URL_CACHE_MAX_AGE_HOURS = 12  # How long to keep cached download URLs (hours)
+JAR_BUCKET_LINKS_FILE = BASE_DIR / 'configs' / 'jar_bucket_links.json'  # Per-type upstream link overrides
 
 class JarBucketManager:
     """
@@ -11183,10 +11184,72 @@ class JarBucketManager:
             'icon': '🔨'
         }
     }
-    
+
+    # Editable upstream link fields per server type. Operators can override any of
+    # these via /api/jar-bucket/links (persisted to configs/jar_bucket_links.json);
+    # unset overrides fall back to the defaults below. Fields with 'placeholders'
+    # are str.format templates and must keep every listed placeholder.
+    LINK_FIELDS = {
+        'vanilla': {
+            'api_url': {'label': 'Version manifest URL', 'default': SERVER_TYPES['vanilla']['api_url']},
+        },
+        'bedrock': {
+            'api_url': {'label': 'Download links API URL', 'default': SERVER_TYPES['bedrock']['api_url']},
+        },
+        'paper': {
+            'api_url': {'label': 'PaperMC API base URL', 'default': SERVER_TYPES['paper']['api_url']},
+        },
+        'purpur': {
+            'api_url': {'label': 'Purpur API base URL', 'default': SERVER_TYPES['purpur']['api_url']},
+        },
+        'folia': {
+            'api_url': {'label': 'PaperMC API base URL', 'default': SERVER_TYPES['folia']['api_url']},
+        },
+        'spigot': {
+            'api_url': {'label': 'Version listing URL', 'default': SERVER_TYPES['spigot']['api_url']},
+            'buildtools_url': {
+                'label': 'BuildTools JAR URL',
+                'default': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
+            },
+        },
+        'fabric': {
+            'api_url': {'label': 'Fabric meta API base URL', 'default': SERVER_TYPES['fabric']['api_url']},
+            'download_template': {
+                'label': 'Server JAR URL template',
+                'default': 'https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/{installer_version}/server/jar',
+                'placeholders': ['game_version', 'loader_version', 'installer_version'],
+            },
+        },
+        'forge': {
+            'api_url': {'label': 'Maven base URL', 'default': SERVER_TYPES['forge']['api_url']},
+            'metadata_url': {
+                'label': 'Maven metadata XML URL',
+                'default': 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml'
+            },
+            'installer_template': {
+                'label': 'Installer URL template',
+                'default': 'https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar',
+                'placeholders': ['mc_version', 'forge_version'],
+            },
+        },
+        'neoforge': {
+            'api_url': {'label': 'Maven base URL', 'default': SERVER_TYPES['neoforge']['api_url']},
+            'metadata_url': {
+                'label': 'Maven metadata XML URL',
+                'default': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml'
+            },
+            'installer_template': {
+                'label': 'Installer URL template',
+                'default': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/{neoforge_version}/neoforge-{neoforge_version}-installer.jar',
+                'placeholders': ['neoforge_version'],
+            },
+        },
+    }
+
     def __init__(self):
         self.cache = self._load_cache()
         self.download_progress = {}  # Track download progress by ID
+        self.link_overrides = self._load_link_overrides()
     
     def _load_cache(self):
         """Load cached version data from file"""
@@ -11205,7 +11268,153 @@ class JarBucketManager:
                 json.dump(self.cache, f, indent=2)
         except Exception as e:
             print(f"[JarBucket] Error saving cache: {e}")
-    
+
+    def _load_link_overrides(self):
+        """Load per-type link overrides from configs/jar_bucket_links.json (unknown keys dropped)"""
+        if not JAR_BUCKET_LINKS_FILE.exists():
+            return {}
+        try:
+            with open(JAR_BUCKET_LINKS_FILE, 'r') as f:
+                data = json.load(f)
+            overrides = {}
+            for server_type, fields in (data or {}).items():
+                if server_type not in self.LINK_FIELDS or not isinstance(fields, dict):
+                    continue
+                for field, value in fields.items():
+                    if field in self.LINK_FIELDS[server_type] and isinstance(value, str) and value.strip():
+                        overrides.setdefault(server_type, {})[field] = value.strip()
+            return overrides
+        except Exception as e:
+            print(f"[JarBucket] Error loading link overrides: {e}")
+            return {}
+
+    def get_link(self, server_type, field='api_url'):
+        """Effective link for a type/field: operator override if set, else built-in default"""
+        override = self.link_overrides.get(server_type, {}).get(field)
+        if override:
+            return override
+        return self.LINK_FIELDS[server_type][field]['default']
+
+    def get_links_config(self):
+        """Full link configuration for the admin UI: defaults, overrides and effective values"""
+        config = {}
+        for server_type, fields in self.LINK_FIELDS.items():
+            type_info = self.SERVER_TYPES.get(server_type, {})
+            config[server_type] = {
+                'name': type_info.get('name', server_type.title()),
+                'icon': type_info.get('icon', '📦'),
+                'fields': {}
+            }
+            for field, meta in fields.items():
+                override = self.link_overrides.get(server_type, {}).get(field)
+                config[server_type]['fields'][field] = {
+                    'label': meta['label'],
+                    'default': meta['default'],
+                    'override': override,
+                    'effective': override or meta['default'],
+                    'placeholders': meta.get('placeholders', [])
+                }
+        return config
+
+    def _validate_link_value(self, server_type, field, value):
+        """Validate one override value. Returns an error string or None if valid."""
+        meta = self.LINK_FIELDS[server_type][field]
+        if len(value) > 500:
+            return f'{server_type}.{field}: URL too long (max 500 characters)'
+        if not (value.startswith('http://') or value.startswith('https://')):
+            return f'{server_type}.{field}: URL must start with http:// or https://'
+        placeholders = meta.get('placeholders', [])
+        for ph in placeholders:
+            if '{' + ph + '}' not in value:
+                return f'{server_type}.{field}: template must contain {{{ph}}}'
+        if placeholders:
+            try:
+                value.format(**{ph: 'x' for ph in placeholders})
+            except (KeyError, IndexError, ValueError) as e:
+                return f'{server_type}.{field}: invalid template ({e})'
+        return None
+
+    def save_link_overrides(self, updates):
+        """
+        Validate and persist link overrides. `updates` maps server_type -> {field: url}.
+        Only the provided types are touched; an empty/blank value resets that field
+        to its default. Applies immediately (no restart) and clears the version/URL
+        cache so stale upstream data isn't served for the new links.
+        Returns {'success': bool, 'errors': [..]}.
+        """
+        errors = []
+        validated = {}
+        for server_type, fields in updates.items():
+            if server_type not in self.LINK_FIELDS:
+                errors.append(f'Unknown server type: {server_type}')
+                continue
+            if not isinstance(fields, dict):
+                errors.append(f'{server_type}: expected an object of field values')
+                continue
+            validated[server_type] = {}
+            for field, value in fields.items():
+                if field not in self.LINK_FIELDS[server_type]:
+                    errors.append(f'{server_type}: unknown field {field}')
+                    continue
+                if not isinstance(value, str):
+                    errors.append(f'{server_type}.{field}: value must be a string')
+                    continue
+                value = value.strip()
+                if not value or value == self.LINK_FIELDS[server_type][field]['default']:
+                    continue  # blank or explicit default = no override
+                error = self._validate_link_value(server_type, field, value)
+                if error:
+                    errors.append(error)
+                    continue
+                validated[server_type][field] = value
+
+        if errors:
+            return {'success': False, 'errors': errors}
+
+        for server_type, fields in validated.items():
+            if fields:
+                self.link_overrides[server_type] = fields
+            else:
+                self.link_overrides.pop(server_type, None)
+
+        try:
+            JAR_BUCKET_LINKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(JAR_BUCKET_LINKS_FILE, 'w') as f:
+                json.dump(self.link_overrides, f, indent=2)
+        except Exception as e:
+            return {'success': False, 'errors': [f'Failed to save overrides: {e}']}
+
+        # Drop cached version lists and resolved download URLs — they were fetched
+        # from the old links and may be stale or wrong for the new ones.
+        self.cache = {'last_updated': None, 'versions': {}, 'download_urls': {}}
+        self._save_cache()
+        return {'success': True, 'errors': []}
+
+    def test_links(self, server_type):
+        """Network-test the effective links for one server type (used by the admin UI)"""
+        if server_type not in self.LINK_FIELDS:
+            return {'success': False, 'error': 'Unknown server type'}
+        try:
+            if server_type == 'bedrock':
+                url, _ = self._fetch_bedrock_download_url()
+                if url:
+                    return {'success': True, 'message': 'Resolved Bedrock download URL'}
+                return {'success': False, 'error': 'Could not resolve a Bedrock download URL'}
+            if server_type == 'spigot':
+                # _fetch_spigot_versions falls back to a static list on failure,
+                # so probe the listing URL directly to get an honest result.
+                response = requests.get(self.get_link('spigot'), timeout=15)
+                if response.status_code == 200:
+                    return {'success': True, 'message': 'Version listing reachable (note: Spigot JARs still require BuildTools)'}
+                return {'success': False, 'error': f'Version listing returned HTTP {response.status_code}'}
+            versions = self.get_versions(server_type, force_refresh=True)
+            if versions:
+                return {'success': True, 'message': f'Fetched {len(versions)} versions'}
+            return {'success': False, 'error': 'No versions returned — check the URLs'}
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+
     def _is_cache_valid(self, server_type=None):
         """Check if cache is still valid (not too old)"""
         if not self.cache.get('last_updated'):
@@ -11231,17 +11440,17 @@ class JarBucketManager:
             category = info.get('category', 'java')
             if category == 'proxies':
                 continue
-            types_by_category.setdefault(category, []).append({
-                'id': type_id,
-                **info
-            })
+            entry = {'id': type_id, **info}
+            if type_id in self.LINK_FIELDS:
+                entry['api_url'] = self.get_link(type_id)  # reflect operator overrides
+            types_by_category.setdefault(category, []).append(entry)
 
         return types_by_category
     
     def _fetch_paper_versions(self, project='paper'):
         """Fetch versions from Paper API (Paper, Folia)"""
         try:
-            url = f"{self.SERVER_TYPES[project]['api_url']}projects/{project}"
+            url = f"{self.get_link(project)}projects/{project}"
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
@@ -11254,7 +11463,7 @@ class JarBucketManager:
         """Get download URL for Paper-based project"""
         try:
             # Get builds for version
-            base = self.SERVER_TYPES[project]['api_url']
+            base = self.get_link(project)
             url = f"{base}projects/{project}/versions/{version}"
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
@@ -11300,7 +11509,7 @@ class JarBucketManager:
     def _fetch_purpur_versions(self):
         """Fetch versions from Purpur API"""
         try:
-            response = requests.get(self.SERVER_TYPES['purpur']['api_url'], timeout=15)
+            response = requests.get(self.get_link('purpur'), timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 return list(reversed(data.get('versions', [])))
@@ -11311,7 +11520,7 @@ class JarBucketManager:
     def _fetch_purpur_download_url(self, version):
         """Get download URL for Purpur"""
         try:
-            base = self.SERVER_TYPES['purpur']['api_url']
+            base = self.get_link('purpur')
             url = f"{base}{version}"
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
@@ -11327,7 +11536,7 @@ class JarBucketManager:
     def _fetch_vanilla_versions(self):
         """Fetch versions from Mojang manifest"""
         try:
-            response = requests.get(self.SERVER_TYPES['vanilla']['api_url'], timeout=15)
+            response = requests.get(self.get_link('vanilla'), timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 versions = []
@@ -11358,7 +11567,7 @@ class JarBucketManager:
         """Fetch Fabric loader versions and game versions"""
         try:
             # Get supported game versions
-            game_url = f"{self.SERVER_TYPES['fabric']['api_url']}game"
+            game_url = f"{self.get_link('fabric')}game"
             response = requests.get(game_url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
@@ -11374,7 +11583,7 @@ class JarBucketManager:
     def _get_fabric_loader_version(self):
         """Get latest stable Fabric loader version"""
         try:
-            url = f"{self.SERVER_TYPES['fabric']['api_url']}loader"
+            url = f"{self.get_link('fabric')}loader"
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
@@ -11388,7 +11597,7 @@ class JarBucketManager:
     def _get_fabric_installer_version(self):
         """Get latest stable Fabric installer version"""
         try:
-            url = f"{self.SERVER_TYPES['fabric']['api_url']}installer"
+            url = f"{self.get_link('fabric')}installer"
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
@@ -11407,7 +11616,11 @@ class JarBucketManager:
             if not loader_version or not installer_version:
                 print(f"[JarBucket] Could not resolve Fabric loader/installer versions from API")
                 return None, None
-            download_url = f"https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/{installer_version}/server/jar"
+            download_url = self.get_link('fabric', 'download_template').format(
+                game_version=game_version,
+                loader_version=loader_version,
+                installer_version=installer_version
+            )
             return download_url, None
         except Exception as e:
             print(f"[JarBucket] Error getting Fabric download URL: {e}")
@@ -11417,7 +11630,7 @@ class JarBucketManager:
         """Get the latest Bedrock server download URL from Minecraft services API"""
         try:
             response = requests.get(
-                self.SERVER_TYPES['bedrock']['api_url'],
+                self.get_link('bedrock'),
                 headers={
                     'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
                 },
@@ -11458,7 +11671,7 @@ class JarBucketManager:
         import re
         import xml.etree.ElementTree as ET
         try:
-            url = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml'
+            url = self.get_link('forge', 'metadata_url')
             response = requests.get(url, timeout=20)
             if response.status_code == 200:
                 root = ET.fromstring(response.text)
@@ -11497,7 +11710,7 @@ class JarBucketManager:
         """Dynamically fetch NeoForge versions from Maven metadata (mc_version -> neoforge_version map)"""
         import xml.etree.ElementTree as ET
         try:
-            url = 'https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml'
+            url = self.get_link('neoforge', 'metadata_url')
             response = requests.get(url, timeout=20)
             if response.status_code == 200:
                 root = ET.fromstring(response.text)
@@ -11527,7 +11740,7 @@ class JarBucketManager:
         """Fetch available Spigot build versions from hub.spigotmc.org directory listing"""
         import re
         try:
-            response = requests.get(self.SERVER_TYPES['spigot']['api_url'], timeout=15)
+            response = requests.get(self.get_link('spigot'), timeout=15)
             if response.status_code == 200:
                 # Parse HTML directory listing for version JSON file links (e.g. "1.21.5.json")
                 matches = re.findall(r'href="(\d+\.\d+(?:\.\d+)?)\.json"', response.text)
@@ -11651,7 +11864,7 @@ class JarBucketManager:
             return {
                 'requires_build': True,
                 'message': 'Spigot requires BuildTools to compile. Download BuildTools and run: java -jar BuildTools.jar --rev ' + version,
-                'buildtools_url': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
+                'buildtools_url': self.get_link('spigot', 'buildtools_url')
             }
 
         # Return cached URL if still fresh
@@ -11690,13 +11903,15 @@ class JarBucketManager:
             forge_map = self.cache.get('versions', {}).get('forge', {}).get('forge_map') or self._fetch_forge_versions()
             forge_ver = forge_map.get(version) if forge_map else None
             if forge_ver:
-                download_url = f"{self.SERVER_TYPES['forge']['api_url']}{version}-{forge_ver}/forge-{version}-{forge_ver}-installer.jar"
+                download_url = self.get_link('forge', 'installer_template').format(
+                    mc_version=version, forge_version=forge_ver)
                 filename = f"forge-{version}-{forge_ver}-installer.jar"
         elif server_type == 'neoforge':
             neo_map = self.cache.get('versions', {}).get('neoforge', {}).get('neoforge_map') or self._fetch_neoforge_versions()
             neo_ver = neo_map.get(version) if neo_map else None
             if neo_ver:
-                download_url = f"{self.SERVER_TYPES['neoforge']['api_url']}{neo_ver}/neoforge-{neo_ver}-installer.jar"
+                download_url = self.get_link('neoforge', 'installer_template').format(
+                    neoforge_version=neo_ver)
                 filename = f"neoforge-{neo_ver}-installer.jar"
         elif server_type == 'bedrock':
             download_url, file_hash = self._fetch_bedrock_download_url()
@@ -12072,6 +12287,41 @@ def api_jar_bucket_info(server_type, version):
     if info:
         return jsonify(info)
     return jsonify({'error': 'Version not found'}), 404
+
+@app.route('/api/jar-bucket/links', methods=['GET'])
+@admin_required
+def api_jar_bucket_links_get():
+    """Get the per-type download link configuration (defaults, overrides, effective)"""
+    return jsonify({'types': jar_bucket.get_links_config()})
+
+@app.route('/api/jar-bucket/links', methods=['PUT'])
+@admin_required
+def api_jar_bucket_links_update():
+    """
+    Update per-type download link overrides.
+    Body: {"overrides": {"<type>": {"<field>": "<url or '' to reset>"}}}
+    Only the provided types are touched; blank values reset that field to default.
+    """
+    data = request.get_json(silent=True) or {}
+    overrides = data.get('overrides')
+    if not isinstance(overrides, dict):
+        return jsonify({'error': 'Missing or invalid "overrides" object'}), 400
+
+    result = jar_bucket.save_link_overrides(overrides)
+    if not result['success']:
+        return jsonify({'error': 'Validation failed', 'errors': result['errors']}), 400
+    return jsonify({
+        'message': 'Download links updated',
+        'types': jar_bucket.get_links_config()
+    })
+
+@app.route('/api/jar-bucket/links/test/<server_type>', methods=['POST'])
+@admin_required
+def api_jar_bucket_links_test(server_type):
+    """Network-test the effective links for one server type"""
+    result = jar_bucket.test_links(server_type)
+    status = 200 if result.get('success') else 400
+    return jsonify(result), status
 
 @app.route('/api/jar-bucket/refresh', methods=['POST'])
 @permission_required('panel.jars.manage')

@@ -7793,3 +7793,82 @@ select.form-control:disabled {
 .perm-checkbox input[type="checkbox"] {
   margin: 0;
 }
+
+/* JAR Download Sources (Settings -> Tools) */
+.jar-links-hint {
+  color: #8b949e;
+  font-size: 0.9rem;
+  margin-bottom: 15px;
+}
+
+.jar-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.jar-links-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px 15px;
+}
+
+.jar-links-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.jar-links-card-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.jar-links-note {
+  color: #d29922;
+  font-size: 0.8rem;
+}
+
+.jar-links-fields .form-group {
+  margin-bottom: 10px;
+}
+
+.jar-links-fields label {
+  font-size: 0.85rem;
+  color: #8b949e;
+}
+
+.jar-links-placeholders {
+  color: #58a6ff;
+}
+
+.jar-links-test-result {
+  font-size: 0.85rem;
+  min-height: 0;
+}
+
+.jar-links-test-result.success {
+  color: #7ee787;
+}
+
+.jar-links-test-result.error {
+  color: #f85149;
+}
+
+.jar-links-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.jar-status.success {
+  color: #7ee787;
+}
+
+.jar-status.error {
+  color: #f85149;
+}

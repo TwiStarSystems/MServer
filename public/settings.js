@@ -91,6 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadVersionInfo();
         loadJarBucketTypes();
         loadJarBucketDownloaded();
+        initJarLinksPanel();
       }
     });
   });
@@ -135,6 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTools();
   loadJarBucketTypes();
   loadJarBucketDownloaded();
+  initJarLinksPanel();
   
   // Time range change handler
   document.getElementById('time-range').addEventListener('change', loadStatsHistory);
@@ -1790,6 +1792,161 @@ async function deleteJarBucket(serverType, filename) {
     }
   } catch (err) {
     alert('Error: ' + err.message);
+  }
+}
+
+// ==================== JAR Download Sources (admin) ====================
+
+// Escape a string for use inside an HTML attribute value (escapeHtml leaves quotes alone)
+function escapeAttr(text) {
+  return escapeHtml(text ?? '').replace(/"/g, '&quot;');
+}
+
+function initJarLinksPanel() {
+  const panel = document.getElementById('jar-links-panel');
+  if (!panel) return;
+  // Backend endpoints are admin-only (wildcard permission group)
+  if (!window.currentUser || !currentUser.permissions || !currentUser.permissions.includes('*')) return;
+  panel.style.display = '';
+  loadJarLinks();
+}
+
+async function loadJarLinks() {
+  const container = document.getElementById('jar-links-list');
+  if (!container) return;
+  try {
+    const response = await fetch('/api/jar-bucket/links');
+    if (!response.ok) throw new Error('Failed to load link configuration');
+    const data = await response.json();
+    renderJarLinks(data.types || {});
+    setJarLinksStatus('');
+  } catch (err) {
+    container.innerHTML = `<div class="error-text">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderJarLinks(types) {
+  const container = document.getElementById('jar-links-list');
+  container.innerHTML = Object.keys(types).map(typeId => {
+    const type = types[typeId];
+    const fields = Object.entries(type.fields).map(([field, info]) => {
+      const placeholders = (info.placeholders && info.placeholders.length)
+        ? ` <small class="jar-links-placeholders">(must contain ${info.placeholders.map(p => '{' + p + '}').join(', ')})</small>`
+        : '';
+      return `
+        <div class="form-group">
+          <label>${escapeHtml(info.label)}${placeholders}</label>
+          <input type="text" class="form-control jar-link-input" data-type="${escapeAttr(typeId)}" data-field="${escapeAttr(field)}"
+                 value="${escapeAttr(info.override || '')}" placeholder="${escapeAttr(info.default)}">
+        </div>
+      `;
+    }).join('');
+    const spigotNote = typeId === 'spigot'
+      ? '<span class="jar-links-note">⚠️ Cannot be auto-downloaded — JARs must be compiled with BuildTools</span>'
+      : '';
+    return `
+      <div class="jar-links-card">
+        <div class="jar-links-card-header">
+          <span class="type-icon">${type.icon || '📦'}</span>
+          <strong>${escapeHtml(type.name)}</strong>
+          ${spigotNote}
+          <div class="jar-links-card-actions">
+            <button class="btn btn-small" onclick="testJarLinks('${escapeAttr(typeId)}')" title="Test the saved links against upstream">🧪 Test</button>
+            <button class="btn btn-small" onclick="resetJarLinks('${escapeAttr(typeId)}')" title="Remove all overrides for this type">↩️ Reset to Default</button>
+          </div>
+        </div>
+        <div class="jar-links-fields">${fields}</div>
+        <div class="jar-links-test-result" id="jar-links-test-${escapeAttr(typeId)}"></div>
+      </div>
+    `;
+  }).join('') || '<div class="no-data">No configurable server types</div>';
+}
+
+function setJarLinksStatus(message, isError = false) {
+  const status = document.getElementById('jar-links-status');
+  if (!status) return;
+  status.textContent = message;
+  status.className = 'jar-status' + (message ? (isError ? ' error' : ' success') : '');
+}
+
+async function saveJarLinks() {
+  const overrides = {};
+  document.querySelectorAll('.jar-link-input').forEach(input => {
+    const type = input.dataset.type;
+    const field = input.dataset.field;
+    if (!overrides[type]) overrides[type] = {};
+    overrides[type][field] = input.value.trim(); // empty = reset to default
+  });
+
+  try {
+    const response = await fetch('/api/jar-bucket/links', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ overrides })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const detail = (data.errors && data.errors.length) ? data.errors.join('; ') : (data.error || 'Save failed');
+      setJarLinksStatus(detail, true);
+      return;
+    }
+    renderJarLinks(data.types || {});
+    setJarLinksStatus('Download links saved. Version cache cleared.');
+    showNotification('JAR download links updated', 'success');
+    loadJarBucketTypes(); // type cards show the effective api_url
+  } catch (err) {
+    setJarLinksStatus('Error: ' + err.message, true);
+  }
+}
+
+async function resetJarLinks(typeId) {
+  if (!confirm(`Reset all ${typeId} download links to their built-in defaults?`)) return;
+  const overrides = { [typeId]: {} };
+  document.querySelectorAll(`.jar-link-input[data-type="${typeId}"]`).forEach(input => {
+    overrides[typeId][input.dataset.field] = '';
+  });
+  try {
+    const response = await fetch('/api/jar-bucket/links', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ overrides })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setJarLinksStatus(data.error || 'Reset failed', true);
+      return;
+    }
+    renderJarLinks(data.types || {});
+    setJarLinksStatus(`${typeId} links reset to defaults.`);
+    loadJarBucketTypes();
+  } catch (err) {
+    setJarLinksStatus('Error: ' + err.message, true);
+  }
+}
+
+async function testJarLinks(typeId) {
+  const resultEl = document.getElementById(`jar-links-test-${typeId}`);
+  if (resultEl) {
+    resultEl.textContent = '⏳ Testing saved links against upstream...';
+    resultEl.className = 'jar-links-test-result';
+  }
+  try {
+    const response = await fetch(`/api/jar-bucket/links/test/${encodeURIComponent(typeId)}`, { method: 'POST' });
+    const data = await response.json();
+    if (resultEl) {
+      if (response.ok && data.success) {
+        resultEl.textContent = '✅ ' + (data.message || 'Links working');
+        resultEl.className = 'jar-links-test-result success';
+      } else {
+        resultEl.textContent = '❌ ' + (data.error || 'Test failed');
+        resultEl.className = 'jar-links-test-result error';
+      }
+    }
+  } catch (err) {
+    if (resultEl) {
+      resultEl.textContent = '❌ ' + err.message;
+      resultEl.className = 'jar-links-test-result error';
+    }
   }
 }
 
