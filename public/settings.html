@@ -736,6 +736,26 @@
             </div>
           </div>
           
+          <!-- JAR Download Sources (admin only; shown via JS) -->
+          <div class="tool-panel collapsed" id="jar-links-panel" style="display: none;">
+            <div class="tool-panel-header collapsible" onclick="toggleToolPanel(this)">
+              <h3>🔗 JAR Download Sources</h3>
+              <span class="tool-description">Override upstream download links per server type (admin)</span>
+              <span class="collapse-indicator">▼</span>
+            </div>
+            <div class="tool-panel-body" style="display: none;">
+              <p class="jar-links-hint">Leave a field empty to use the built-in default (shown as placeholder). Changes apply immediately — no restart needed — and clear the cached version lists.</p>
+              <div id="jar-links-list" class="jar-links-list">
+                <div class="loading-text">Loading...</div>
+              </div>
+              <div class="jar-links-actions">
+                <button class="btn btn-primary" onclick="saveJarLinks()">💾 Save Changes</button>
+                <button class="btn" onclick="loadJarLinks()">↩️ Discard Changes</button>
+              </div>
+              <div id="jar-links-status" class="jar-status"></div>
+            </div>
+          </div>
+
           <!-- Manual JAR Downloader (Legacy) -->
           <div class="tool-panel collapsed">
             <div class="tool-panel-header collapsible" onclick="toggleToolPanel(this)">
