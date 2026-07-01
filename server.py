@@ -11734,8 +11734,12 @@ class JarBucketManager:
         filepath = type_dir / filename
         
         try:
-            # Download with progress tracking
-            response = requests.get(url, stream=True, timeout=300)
+            # Download with progress tracking. Send a browser User-Agent: the
+            # Bedrock CDN (www.minecraft.net) blocks the default python-requests
+            # UA, and it is harmless for the other (Maven/PaperMC/etc.) hosts.
+            response = requests.get(url, stream=True, timeout=300, headers={
+                'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+            })
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
