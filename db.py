@@ -18,12 +18,25 @@ Usage:
 """
 
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.absolute() / 'msc.db'
+# DB location is operator-overridable via the DB_PATH env var (e.g. to put the
+# SQLite file on a separate volume). server.py calls load_dotenv() before
+# importing this module, so a value set in .env is visible here. Relative values
+# resolve against this file's directory; `~` is expanded.
+_db_default = Path(__file__).parent.absolute() / 'msc.db'
+_db_env = os.environ.get('DB_PATH', '').strip()
+if _db_env:
+    _db_path = Path(_db_env).expanduser()
+    if not _db_path.is_absolute():
+        _db_path = Path(__file__).parent.absolute() / _db_path
+    DB_PATH = _db_path.resolve()
+else:
+    DB_PATH = _db_default.resolve()
 
 # ── Thread-local storage for per-thread connections ──────────────────────────
 _local = threading.local()
