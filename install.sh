@@ -97,6 +97,19 @@ generate_secret_key() {
     python3 -c "import secrets; print(secrets.token_hex(32))"
 }
 
+# Read PORT out of the (authoritative) .env file into $SERVER_PORT, so the
+# systemd service and post-install messages always match what's actually
+# configured — even when PORT was customized in .env.example/.env rather than
+# entered interactively (there is no port prompt anymore).
+read_env_port() {
+    local env_file="$INSTALL_DIR/.env"
+    SERVER_PORT=""
+    if [ -f "$env_file" ]; then
+        SERVER_PORT=$(grep -E '^PORT=' "$env_file" | tail -n1 | cut -d= -f2-)
+    fi
+    SERVER_PORT="${SERVER_PORT:-3000}"
+}
+
 # Set (replace or append) a KEY=VALUE line in an env file, in place.
 # awk's index()==1 match avoids sed metacharacter issues in keys/values.
 set_env_key() {
@@ -478,13 +491,18 @@ do_install() {
         print_info "Cloning from GitHub..."
         git clone "$REPO_URL" "$INSTALL_DIR"
         print_success "Repository cloned"
+        # Files (including .env.example) now live in $INSTALL_DIR, not the
+        # original invocation directory — repoint SCRIPT_DIR so create_env_file
+        # (and anything else keyed off it) finds them.
+        SCRIPT_DIR="$INSTALL_DIR"
     fi
     
     cd "$INSTALL_DIR"
     
     # Create .env file with user configuration
     create_env_file
-    
+    read_env_port
+
     setup_python_env
     create_directories
     set_permissions
@@ -634,6 +652,10 @@ do_update() {
             git reset --hard origin/main
             print_success "Application files updated from GitHub (hard reset)"
         fi
+        # Updated files (including .env.example) now live in $INSTALL_DIR, not
+        # the original invocation directory — repoint SCRIPT_DIR so
+        # create_env_file (and anything else keyed off it) finds them.
+        SCRIPT_DIR="$INSTALL_DIR"
     fi
     
     # Restore all critical files from backup
@@ -658,7 +680,8 @@ do_update() {
         prompt_env_config
         create_env_file
     fi
-    
+    read_env_port
+
     # Update Python virtual environment
     print_info "Updating Python virtual environment..."
     setup_python_env
