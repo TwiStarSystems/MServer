@@ -45,6 +45,9 @@ Thumbs.db
 # temp files
 docs/TEMP FILES/*
 
+# Test artifacts
+test-results/
+
 # Claude stuff
 .claude/
 
