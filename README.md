@@ -4,7 +4,7 @@ A Web-Based Multi-Server Minecraft Manager
 
 MServer is a modern, feature-rich web application for creating, running, and managing **multiple Minecraft servers** simultaneously. Built with Python/Flask and Socket.IO, it provides a responsive dark-themed interface with real-time monitoring, role-based access control, automated backups, task scheduling, and a full public REST API.
 
-![Version](https://img.shields.io/badge/Version-3.3.1-purple.svg)
+![Version](https://img.shields.io/badge/Version-4.0.0-purple.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Flask](https://img.shields.io/badge/Flask-3.0+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)

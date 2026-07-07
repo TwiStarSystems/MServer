@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-MServer (v3.3.1) is a self-hosted web control panel for managing **Minecraft servers** (Java + Bedrock). It is a Python/Flask backend with a real-time websocket layer and a vanilla-JS multi-page frontend. A single operator host runs the panel; the panel launches, monitors, and manages multiple Minecraft server processes as subprocesses on the same machine.
+MServer (v4.0.0) is a self-hosted web control panel for managing **Minecraft servers** (Java + Bedrock). It is a Python/Flask backend with a real-time websocket layer and a vanilla-JS multi-page frontend. A single operator host runs the panel; the panel launches, monitors, and manages multiple Minecraft server processes as subprocesses on the same machine.
 
 ## Commands
 
@@ -93,4 +93,4 @@ Multi-page, classic (non-module) scripts — top-level `function` declarations a
 - `server.py` is large; jump via the manager-class list above rather than reading top-to-bottom. Edits should match the surrounding style.
 - Adding a per-server endpoint: route it under `/api/servers/<server_id>/...` and guard it with `@server_access_required`.
 - Subprocess calls use list-form argv with fixed binaries (no `shell=True`); keep it that way to avoid command injection.
-- `version` file holds the app version (`version=3.3.1`); referenced by the UI/update flow.
+- `version` file holds the app version (`version=4.0.0`); referenced by the UI/update flow.
