@@ -20,6 +20,11 @@ config.json
 api_keys.json
 api_stats.json
 
+# SQLite database (per-install; never commit)
+msc.db
+msc.db-shm
+msc.db-wal
+
 # Logs
 *.log
 
