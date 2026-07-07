@@ -1773,6 +1773,78 @@ async function loadJarBucketDownloaded() {
   }
 }
 
+async function backupAllJars() {
+  const status = document.getElementById('jar-backup-restore-status');
+  status.textContent = '⏳ Creating archive…';
+  status.className = 'jar-status';
+
+  try {
+    const response = await fetch('/api/jar-bucket/backup-all');
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Server error ${response.status}`);
+    }
+
+    // Trigger browser download
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : 'mserver_jars_backup.zip';
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    status.textContent = `✅ Archive downloaded: ${filename}`;
+    status.className = 'jar-status success';
+  } catch (err) {
+    status.textContent = `❌ Backup failed: ${err.message}`;
+    status.className = 'jar-status error';
+  }
+}
+
+async function restoreAllJars(input) {
+  if (!input.files || input.files.length === 0) return;
+  const file = input.files[0];
+  const status = document.getElementById('jar-backup-restore-status');
+
+  if (!confirm(`Restore JARs from "${file.name}"?\n\nThis will overwrite any downloaded JARs with the same filename.`)) {
+    input.value = '';
+    return;
+  }
+
+  status.textContent = '⏳ Restoring…';
+  status.className = 'jar-status';
+
+  try {
+    const formData = new FormData();
+    formData.append('backup', file);
+
+    const response = await fetch('/api/jar-bucket/restore-all', {
+      method: 'POST',
+      body: formData
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Server error ${response.status}`);
+
+    status.textContent = `✅ Restored ${data.restored} file(s)`;
+    status.className = 'jar-status success';
+    loadJarBucketDownloaded();
+  } catch (err) {
+    status.textContent = `❌ Restore failed: ${err.message}`;
+    status.className = 'jar-status error';
+  } finally {
+    input.value = '';
+  }
+}
+
 async function deleteJarBucket(serverType, filename) {
   if (!confirm(`Delete ${filename}?`)) return;
   

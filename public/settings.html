@@ -727,8 +727,16 @@
               <div class="downloaded-jars-section">
                 <div class="section-header">
                   <h4>📁 Downloaded Server JARs</h4>
-                  <button class="btn btn-small" onclick="loadJarBucketDownloaded()">🔄 Refresh</button>
+                  <div class="tool-header-actions">
+                    <button class="btn btn-small btn-success" onclick="backupAllJars()" title="Download every downloaded JAR as a single ZIP">📥 Download All JARs</button>
+                    <label class="btn btn-small upload-btn" title="Restore JARs from a backup ZIP">
+                      📤 Upload All JARs
+                      <input type="file" id="jar-restore-file-input" accept=".zip" style="display:none;" onchange="restoreAllJars(this)">
+                    </label>
+                    <button class="btn btn-small" onclick="loadJarBucketDownloaded()">🔄 Refresh</button>
+                  </div>
                 </div>
+                <div id="jar-backup-restore-status" class="jar-status"></div>
                 <div id="jar-bucket-downloaded-list" class="downloaded-jars-list">
                   <div class="loading-text">Loading...</div>
                 </div>

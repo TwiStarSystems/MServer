@@ -12227,6 +12227,40 @@ class JarBucketManager:
         except Exception as e:
             return {'success': False, 'error': f'Failed to delete: {str(e)}'}
 
+    def create_backup_zip(self):
+        """Zip up every downloaded JAR/executable, preserving the <type>/<filename> layout."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            if SERVER_EXECUTABLES_DIR.exists():
+                for file_path in sorted(SERVER_EXECUTABLES_DIR.rglob('*')):
+                    if file_path.is_file():
+                        arcname = file_path.relative_to(SERVER_EXECUTABLES_DIR)
+                        try:
+                            zf.write(file_path, arcname)
+                        except (PermissionError, OSError):
+                            pass  # Skip locked / unreadable files
+        buf.seek(0)
+        return buf
+
+    def restore_from_zip(self, zip_bytes):
+        """Restore JARs from an uploaded backup ZIP into serverexecutables/, merging with what's there."""
+        buf = io.BytesIO(zip_bytes)
+        if not zipfile.is_zipfile(buf):
+            return {'success': False, 'error': 'Uploaded file is not a valid ZIP archive'}
+
+        buf.seek(0)
+        SERVER_EXECUTABLES_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(buf, 'r') as zf:
+                safe_extractall(zf, SERVER_EXECUTABLES_DIR)
+                restored = sum(1 for info in zf.infolist() if not info.is_dir())
+        except ValueError as e:
+            return {'success': False, 'error': str(e)}
+        except Exception as e:
+            return {'success': False, 'error': f'Failed to extract archive: {str(e)}'}
+
+        return {'success': True, 'restored': restored}
+
 
 # Initialize JAR Bucket Manager
 jar_bucket = JarBucketManager()
@@ -12357,6 +12391,39 @@ def api_jar_bucket_delete():
         return jsonify({'error': 'Missing type or filename'}), 400
     
     result = jar_bucket.delete_jar(server_type, filename)
+    if result.get('success'):
+        return jsonify(result)
+    return jsonify(result), 400
+
+@app.route('/api/jar-bucket/backup-all', methods=['GET'])
+@permission_required('panel.jars.manage')
+def api_jar_bucket_backup_all():
+    """Zip up every downloaded server JAR/executable and stream it for download."""
+    try:
+        buf = jar_bucket.create_backup_zip()
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        archive_name = f'mserver_jars_backup_{timestamp}.zip'
+        response = make_response(buf.read())
+        response.headers['Content-Type'] = 'application/zip'
+        response.headers['Content-Disposition'] = f'attachment; filename="{archive_name}"'
+        return response
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/jar-bucket/restore-all', methods=['POST'])
+@permission_required('panel.jars.manage')
+def api_jar_bucket_restore_all():
+    """Restore server JARs from an uploaded backup ZIP (merges with existing files)."""
+    if 'backup' not in request.files:
+        return jsonify({'error': 'No backup file provided'}), 400
+
+    backup_file = request.files['backup']
+    if not backup_file.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+    if not backup_file.filename.lower().endswith('.zip'):
+        return jsonify({'error': 'Only ZIP archives are supported'}), 400
+
+    result = jar_bucket.restore_from_zip(backup_file.read())
     if result.get('success'):
         return jsonify(result)
     return jsonify(result), 400
