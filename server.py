@@ -11231,7 +11231,7 @@ class JarBucketManager:
             'name': 'Paper',
             'description': 'High-performance Spigot fork with optimizations',
             'category': 'modded',
-            'api_url': 'https://api.papermc.io/v2/',
+            'api_url': 'https://fill.papermc.io/v3/',
             'icon': '📄'
         },
         'purpur': {
@@ -11245,7 +11245,7 @@ class JarBucketManager:
             'name': 'Folia',
             'description': 'Paper fork for multi-threaded regions',
             'category': 'modded',
-            'api_url': 'https://api.papermc.io/v2/',
+            'api_url': 'https://fill.papermc.io/v3/',
             'icon': '🌿'
         },
         'spigot': {
@@ -11542,59 +11542,47 @@ class JarBucketManager:
         return types_by_category
     
     def _fetch_paper_versions(self, project='paper'):
-        """Fetch versions from Paper API (Paper, Folia)"""
+        """Fetch versions from PaperMC's Fill API (Paper, Folia). Versions are
+        grouped by major release, newest-first both across and within groups."""
         try:
             url = f"{self.get_link(project)}projects/{project}"
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                return list(reversed(data.get('versions', [])))
+                versions = []
+                for group in data.get('versions', {}).values():
+                    versions.extend(group)
+                return versions
         except Exception as e:
             print(f"[JarBucket] Error fetching {project} versions: {e}")
         return []
-    
+
     def _fetch_paper_download_url(self, project, version):
-        """Get download URL for Paper-based project"""
+        """Get download URL for Paper-based project via PaperMC's Fill API"""
         try:
-            # Get builds for version
             base = self.get_link(project)
-            url = f"{base}projects/{project}/versions/{version}"
+            url = f"{base}projects/{project}/versions/{version}/builds"
             response = requests.get(url, timeout=10)
             if response.status_code != 200:
                 print(f"[JarBucket] {project} API returned status {response.status_code} for version {version}")
                 return None, None
-            
+
             try:
-                data = response.json()
+                builds = response.json()
             except ValueError as json_err:
                 print(f"[JarBucket] Invalid JSON from {project} API for version {version}: {json_err}")
                 print(f"[JarBucket] Response content: {response.text[:200]}")
                 return None, None
-            builds = data.get('builds', [])
             if not builds:
                 return None, None
-            
-            latest_build = max(builds)
-            
-            # Get download info
-            build_url = f"{base}projects/{project}/versions/{version}/builds/{latest_build}"
-            build_response = requests.get(build_url, timeout=10)
-            if build_response.status_code != 200:
-                print(f"[JarBucket] {project} API returned status {build_response.status_code} for build {latest_build}")
-                return None, None
-            
-            try:
-                build_data = build_response.json()
-            except ValueError as json_err:
-                print(f"[JarBucket] Invalid JSON from {project} API for build {latest_build}: {json_err}")
-                return None, None
-            downloads = build_data.get('downloads', {})
-            application = downloads.get('application', {})
+
+            latest_build = max(builds, key=lambda b: b.get('id', 0))
+            application = latest_build.get('downloads', {}).get('server:default', {})
             jar_name = application.get('name')
-            sha256 = application.get('sha256')
-            
-            if jar_name:
-                download_url = f"{base}projects/{project}/versions/{version}/builds/{latest_build}/downloads/{jar_name}"
+            download_url = application.get('url')
+            sha256 = application.get('checksums', {}).get('sha256')
+
+            if jar_name and download_url:
                 return download_url, sha256
         except Exception as e:
             print(f"[JarBucket] Error getting {project} download URL: {e}")
