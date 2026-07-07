@@ -108,6 +108,11 @@ read_env_port() {
         SERVER_PORT=$(grep -E '^PORT=' "$env_file" | tail -n1 | cut -d= -f2-)
     fi
     SERVER_PORT="${SERVER_PORT:-3000}"
+
+    if ! [[ "$SERVER_PORT" =~ ^[0-9]+$ ]] || [ "$SERVER_PORT" -lt 1 ] || [ "$SERVER_PORT" -gt 65535 ]; then
+        print_error "Invalid PORT '$SERVER_PORT' in $env_file — must be an integer between 1 and 65535."
+        exit 1
+    fi
 }
 
 # Set (replace or append) a KEY=VALUE line in an env file, in place.
@@ -280,10 +285,28 @@ install_dependencies() {
     echo "  Java version: $(java -version 2>&1 | head -n 1)"
 }
 
+# Abort if the system python3 is older than MServer's minimum (3.10).
+check_python_version() {
+    local py_version major minor
+    py_version=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "0.0")
+    major="${py_version%%.*}"
+    minor="${py_version##*.}"
+
+    if [ "$major" -lt 3 ] 2>/dev/null || { [ "$major" -eq 3 ] && [ "$minor" -lt 10 ]; }; then
+        print_error "Python $py_version detected, but MServer requires Python 3.10 or newer."
+        print_error "Install a newer python3 (e.g. via deadsnakes or a newer Debian/Ubuntu release) and re-run this script."
+        exit 1
+    fi
+
+    print_success "Python $py_version meets the minimum requirement (3.10+)"
+}
+
 # Setup Python virtual environment and install packages
 setup_python_env() {
+    check_python_version
+
     print_info "Setting up Python virtual environment..."
-    
+
     # Remove old venv if exists
     if [ -d "$INSTALL_DIR/venv" ]; then
         rm -rf "$INSTALL_DIR/venv"
