@@ -88,6 +88,17 @@ Multi-page, classic (non-module) scripts — top-level `function` declarations a
 - **Prod is NOT a git checkout** — it is plain files. Deploying = copy changed files into `/opt/mserver`, `chown www-data:www-data`, `py_compile` to sanity-check, then `systemctl restart mserver`. Back up the files you replace first (e.g. to `/root/msc_deploy_backup_<ts>`). Verify with `systemctl is-active`, `journalctl`, and `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/` (expect `302` → login).
 - Deploying the working tree can ship more than your latest change if prod is behind — diff the remote file against `git show HEAD:<file>` before overwriting.
 
+## Bug-fix workflow
+
+Issues are tracked on GitHub (`TwiStarSystems/MServerController`). For each bug, work the full cycle before moving to the next issue:
+
+1. **Find** — `gh issue view <n>` to read the report (root cause/fix are often already diagnosed in the issue body).
+2. **Fix** — make the minimal code change that addresses the root cause.
+3. **Verify** — `python3 -m py_compile server.py db.py api_manager.py` (and `node --check` for JS touched); exercise the affected flow when practical.
+4. **Commit** — one commit per fix, referencing the issue.
+5. **Deploy** — ship to prod per the Deployment section below.
+6. **Close** — `gh issue close <n>` with a comment referencing the commit.
+
 ## Conventions / gotchas
 
 - `server.py` is large; jump via the manager-class list above rather than reading top-to-bottom. Edits should match the surrounding style.
