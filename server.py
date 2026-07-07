@@ -919,7 +919,12 @@ class StatsManager:
     RETENTION_DAYS = _env_int('STATS_RETENTION_DAYS', 7)
 
     def __init__(self):
+        self._stop_event = threading.Event()
         self._start_collection()
+
+    def stop(self):
+        """Signal the background collection thread to stop."""
+        self._stop_event.set()
 
     def _cleanup_old_stats(self):
         """Delete stats older than the retention period from the DB."""
@@ -928,20 +933,25 @@ class StatsManager:
         conn.execute('DELETE FROM stats_history WHERE timestamp < ?', (cutoff,))
         conn.commit()
     
-    def _get_system_stats(self):
-        """Get current system statistics"""
+    def _get_system_stats(self, blocking_cpu_sample=True):
+        """Get current system statistics.
+
+        blocking_cpu_sample=False uses psutil's non-blocking cpu_percent
+        (comparison against the last call) instead of sleeping 1s inline —
+        used by the background collection loop so it stays responsive to stop().
+        """
         stats = {
             'timestamp': datetime.now().isoformat(),
             'cpu': 0,
             'memory': {'used': 0, 'total': 0, 'percent': 0},
             'disk': {'used': 0, 'total': 0, 'percent': 0}
         }
-        
+
         try:
             # Try to use psutil if available
             import psutil
-            stats['cpu'] = psutil.cpu_percent(interval=1)
-            
+            stats['cpu'] = psutil.cpu_percent(interval=1 if blocking_cpu_sample else None)
+
             mem = psutil.virtual_memory()
             stats['memory'] = {
                 'used': mem.used,
@@ -1008,9 +1018,15 @@ class StatsManager:
     
     def _collect_stats(self):
         """Background thread: collect stats every 10 seconds and persist to SQLite."""
-        while True:
+        try:
+            import psutil
+            psutil.cpu_percent(interval=None)  # prime; first call's value is meaningless
+        except ImportError:
+            pass
+
+        while not self._stop_event.is_set():
             try:
-                stats = self._get_system_stats()
+                stats = self._get_system_stats(blocking_cpu_sample=False)
                 conn = get_db()
                 conn.execute(
                     '''INSERT INTO stats_history
@@ -1033,7 +1049,7 @@ class StatsManager:
             except Exception as e:
                 print(f"Stats collection error: {e}")
 
-            time.sleep(10)
+            self._stop_event.wait(10)
 
     def _start_collection(self):
         """Start the stats collection thread."""
@@ -13198,6 +13214,8 @@ def _graceful_shutdown(signum=None, frame=None):
     Sends the 'stop' command to each server and waits up to 60 seconds for
     them to save and shut down before allowing the process to end.
     """
+    stats_manager.stop()
+
     running_ids = [
         sid for sid, inst in list(server_manager.servers.items())
         if inst.is_running()
