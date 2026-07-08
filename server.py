@@ -7237,39 +7237,44 @@ def setup_bedrock_server(server_id):
     server_name = data.get('serverName', server_config.get('name', 'Bedrock Server'))
     
     # Initialize progress
-    jar_bucket.download_progress[progress_id] = {
+    jar_bucket.set_progress(progress_id, {
         'status': 'initializing',
         'message': 'Starting Bedrock server download...',
+        'kind': 'bedrock',
+        'server_id': server_id,
         'progress': 0,
         'step': 1
-    }
-    
+    })
+
     def do_bedrock_setup():
         zip_path = server_dir / 'bedrock_server.zip'
         try:
             # Step 2: Fetch download URL
-            jar_bucket.download_progress[progress_id] = {
-                'status': 'downloading',
-                'message': 'Fetching Bedrock server download URL...',
-                'progress': 5,
-                'step': 2
-            }
-            
+            jar_bucket.update_progress(
+                progress_id,
+                status='downloading',
+                message='Fetching Bedrock server download URL...',
+                progress=5,
+                step=2,
+            )
+
             download_url, _ = jar_bucket._fetch_bedrock_download_url()
             if not download_url:
-                jar_bucket.download_progress[progress_id] = {
-                    'status': 'error',
-                    'error': 'Could not get Bedrock server download URL'
-                }
+                jar_bucket.update_progress(
+                    progress_id,
+                    status='error',
+                    error='Could not get Bedrock server download URL',
+                )
                 return
-            
+
             # Download the zip
-            jar_bucket.download_progress[progress_id] = {
-                'status': 'downloading',
-                'message': 'Downloading latest Bedrock server...',
-                'progress': 10,
-                'step': 2
-            }
+            jar_bucket.update_progress(
+                progress_id,
+                status='downloading',
+                message='Downloading latest Bedrock server...',
+                progress=10,
+                step=2,
+            )
             
             response = requests.get(download_url, stream=True, timeout=300, headers={
                 'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
@@ -7286,22 +7291,24 @@ def setup_bedrock_server(server_id):
                         downloaded += len(chunk)
                         if total_size:
                             pct = 10 + int((downloaded / total_size) * 70)  # 10-80%
-                            jar_bucket.download_progress[progress_id] = {
-                                'status': 'downloading',
-                                'message': f'Downloading... ({downloaded // 1024 // 1024} MB / {total_size // 1024 // 1024} MB)',
-                                'progress': pct,
-                                'total': total_size,
-                                'downloaded': downloaded,
-                                'step': 2
-                            }
-            
+                            jar_bucket.update_progress(
+                                progress_id,
+                                status='downloading',
+                                message=f'Downloading... ({downloaded // 1024 // 1024} MB / {total_size // 1024 // 1024} MB)',
+                                progress=pct,
+                                total=total_size,
+                                downloaded=downloaded,
+                                step=2,
+                            )
+
             # Step 3: Extract the zip
-            jar_bucket.download_progress[progress_id] = {
-                'status': 'downloading',
-                'message': 'Extracting Bedrock server files...',
-                'progress': 85,
-                'step': 3
-            }
+            jar_bucket.update_progress(
+                progress_id,
+                status='downloading',
+                message='Extracting Bedrock server files...',
+                progress=85,
+                step=3,
+            )
             
             # Preserve existing user files
             preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds'}
@@ -7337,12 +7344,13 @@ def setup_bedrock_server(server_id):
             zip_path.unlink()
             
             # Step 4: Write server.properties with user-selected settings
-            jar_bucket.download_progress[progress_id] = {
-                'status': 'downloading',
-                'message': 'Writing server.properties...',
-                'progress': 92,
-                'step': 4
-            }
+            jar_bucket.update_progress(
+                progress_id,
+                status='downloading',
+                message='Writing server.properties...',
+                progress=92,
+                step=4,
+            )
             
             properties_path = server_dir / 'server.properties'
             bedrock_props = {
@@ -7374,22 +7382,24 @@ def setup_bedrock_server(server_id):
             # Update server config with the correct executable
             server_manager.update_server(server_id, executable='server.sh', version='latest')
             
-            jar_bucket.download_progress[progress_id] = {
-                'status': 'complete',
-                'message': 'Bedrock server setup complete!',
-                'progress': 100,
-                'step': 5,
-                'success': True
-            }
-            
+            jar_bucket.update_progress(
+                progress_id,
+                status='complete',
+                message='Bedrock server setup complete!',
+                progress=100,
+                step=5,
+                success=True,
+            )
+
         except Exception as e:
             if zip_path.exists():
                 zip_path.unlink()
-            
-            jar_bucket.download_progress[progress_id] = {
-                'status': 'error',
-                'error': f'Bedrock setup failed: {str(e)}'
-            }
+
+            jar_bucket.update_progress(
+                progress_id,
+                status='error',
+                error=f'Bedrock setup failed: {str(e)}',
+            )
     
     thread = threading.Thread(target=do_bedrock_setup, daemon=True)
     thread.start()
@@ -11373,11 +11383,60 @@ class JarBucketManager:
         },
     }
 
+    # How long a finished (complete/error) progress entry is retained before it
+    # is pruned, so the dict cannot grow without bound across many downloads.
+    PROGRESS_RETENTION_SECONDS = 3600  # 1 hour
+
     def __init__(self):
         self.cache = self._load_cache()
-        self.download_progress = {}  # Track download progress by ID
+        # Download/refresh progress, keyed by a unique progress id. Written from
+        # multiple background threads and read by the progress routes, so ALL
+        # access goes through the locked helpers below — never touch this dict
+        # directly (see issue #10).
+        self.download_progress = {}
+        self._progress_lock = threading.RLock()
         self.link_overrides = self._load_link_overrides()
-    
+
+    # --- Thread-safe progress accessors -------------------------------------
+    def set_progress(self, progress_id, data):
+        """Replace the progress entry for progress_id (thread-safe)."""
+        with self._progress_lock:
+            entry = dict(data)
+            entry['updated_at'] = time.time()
+            self.download_progress[progress_id] = entry
+            self._prune_progress_locked()
+
+    def update_progress(self, progress_id, **changes):
+        """Merge changes into an existing progress entry (thread-safe)."""
+        with self._progress_lock:
+            entry = dict(self.download_progress.get(progress_id, {}))
+            entry.update(changes)
+            entry['updated_at'] = time.time()
+            self.download_progress[progress_id] = entry
+
+    def get_progress(self, progress_id):
+        """Return a copy of one progress entry, or None (thread-safe)."""
+        with self._progress_lock:
+            entry = self.download_progress.get(progress_id)
+            return dict(entry) if entry is not None else None
+
+    def list_progress(self):
+        """Return {progress_id: entry-copy} for every tracked task (thread-safe)."""
+        with self._progress_lock:
+            self._prune_progress_locked()
+            return {pid: dict(entry) for pid, entry in self.download_progress.items()}
+
+    def _prune_progress_locked(self):
+        """Drop finished entries older than the retention window. Caller holds the lock."""
+        cutoff = time.time() - self.PROGRESS_RETENTION_SECONDS
+        stale = [
+            pid for pid, entry in self.download_progress.items()
+            if entry.get('status') in ('complete', 'error')
+            and entry.get('updated_at', 0) < cutoff
+        ]
+        for pid in stale:
+            del self.download_progress[pid]
+
     def _load_cache(self):
         """Load cached version data from file"""
         if JAR_CACHE_FILE.exists():
@@ -12076,25 +12135,27 @@ class JarBucketManager:
             downloaded = 0
             
             if progress_id:
-                self.download_progress[progress_id] = {
-                    'status': 'downloading',
-                    'total': total_size,
-                    'downloaded': 0,
-                    'progress': 0
-                }
-            
+                self.update_progress(
+                    progress_id,
+                    status='downloading',
+                    total=total_size,
+                    downloaded=0,
+                    progress=0,
+                )
+
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                         if progress_id and total_size:
-                            self.download_progress[progress_id] = {
-                                'status': 'downloading',
-                                'total': total_size,
-                                'downloaded': downloaded,
-                                'progress': int((downloaded / total_size) * 100)
-                            }
+                            self.update_progress(
+                                progress_id,
+                                status='downloading',
+                                total=total_size,
+                                downloaded=downloaded,
+                                progress=int((downloaded / total_size) * 100),
+                            )
             
             # Verify hash if available
             if download_info.get('hash'):
@@ -12104,13 +12165,14 @@ class JarBucketManager:
                     return {'success': False, 'error': 'Hash verification failed'}
             
             if progress_id:
-                self.download_progress[progress_id] = {
-                    'status': 'complete',
-                    'total': total_size,
-                    'downloaded': downloaded,
-                    'progress': 100
-                }
-            
+                self.update_progress(
+                    progress_id,
+                    status='complete',
+                    total=total_size,
+                    downloaded=downloaded,
+                    progress=100,
+                )
+
             return {
                 'success': True,
                 'message': f'Downloaded {filename} successfully',
@@ -12123,13 +12185,13 @@ class JarBucketManager:
             if filepath.exists():
                 filepath.unlink()
             if progress_id:
-                self.download_progress[progress_id] = {'status': 'error', 'error': str(e)}
+                self.update_progress(progress_id, status='error', error=str(e))
             return {'success': False, 'error': f'Download failed: {str(e)}'}
         except Exception as e:
             if filepath.exists():
                 filepath.unlink()
             if progress_id:
-                self.download_progress[progress_id] = {'status': 'error', 'error': str(e)}
+                self.update_progress(progress_id, status='error', error=str(e))
             return {'success': False, 'error': f'Error: {str(e)}'}
     
     def _calculate_hash(self, filepath, hash_type='sha256'):
@@ -12373,20 +12435,24 @@ def api_jar_bucket_download():
     
     # Generate progress ID
     progress_id = str(uuid.uuid4())
-    
+
     # Initialize progress immediately to avoid race condition
-    jar_bucket.download_progress[progress_id] = {
+    jar_bucket.set_progress(progress_id, {
         'status': 'initializing',
-        'message': 'Starting download...'
-    }
-    
+        'message': 'Starting download...',
+        'kind': 'download',
+        'type': server_type,
+        'version': version,
+    })
+
     # Start download in background thread
     def do_download():
         result = jar_bucket.download_jar(server_type, version, progress_id)
-        jar_bucket.download_progress[progress_id] = {
-            'status': 'complete' if result.get('success') else 'error',
+        jar_bucket.update_progress(
+            progress_id,
+            status='complete' if result.get('success') else 'error',
             **result
-        }
+        )
     
     thread = threading.Thread(target=do_download, daemon=True)
     thread.start()
@@ -12401,7 +12467,7 @@ def api_jar_bucket_download():
 @permission_required('panel.jars.manage')
 def api_jar_bucket_progress(progress_id):
     """Get download progress"""
-    progress = jar_bucket.download_progress.get(progress_id)
+    progress = jar_bucket.get_progress(progress_id)
     if progress:
         return jsonify(progress)
     return jsonify({'status': 'unknown'}), 404
@@ -12529,33 +12595,29 @@ def api_jar_bucket_refresh_all():
     """
     refresh_id = 'refresh_' + str(uuid.uuid4())
 
-    jar_bucket.download_progress[refresh_id] = {
+    jar_bucket.set_progress(refresh_id, {
         'status': 'running',
+        'kind': 'refresh',
         'current': None,
         'completed': 0,
         'total': len(jar_bucket.SERVER_TYPES)
-    }
+    })
 
     def do_refresh():
         def on_progress(server_type, index, total):
-            jar_bucket.download_progress[refresh_id].update({
-                'current': server_type,
-                'completed': index
-            })
+            jar_bucket.update_progress(refresh_id, current=server_type, completed=index)
 
         try:
             results = jar_bucket.refresh_all_versions(progress_callback=on_progress)
-            jar_bucket.download_progress[refresh_id] = {
-                'status': 'complete',
-                'completed': len(jar_bucket.SERVER_TYPES),
-                'total': len(jar_bucket.SERVER_TYPES),
-                'results': results
-            }
+            jar_bucket.update_progress(
+                refresh_id,
+                status='complete',
+                completed=len(jar_bucket.SERVER_TYPES),
+                total=len(jar_bucket.SERVER_TYPES),
+                results=results,
+            )
         except Exception as exc:
-            jar_bucket.download_progress[refresh_id] = {
-                'status': 'error',
-                'error': str(exc)
-            }
+            jar_bucket.update_progress(refresh_id, status='error', error=str(exc))
 
     threading.Thread(target=do_refresh, daemon=True).start()
 
