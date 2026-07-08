@@ -91,6 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadVersionInfo();
         loadJarBucketTypes();
         loadJarBucketDownloaded();
+        refreshJarDownloadQueue();
         initJarLinksPanel();
       }
     });
@@ -136,8 +137,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadTools();
   loadJarBucketTypes();
   loadJarBucketDownloaded();
+  refreshJarDownloadQueue();
   initJarLinksPanel();
-  
+
   // Time range change handler
   document.getElementById('time-range').addEventListener('change', loadStatsHistory);
   
@@ -1360,364 +1362,181 @@ function closeVersionsPanel() {
 
 async function downloadAllVersions() {
   if (!selectedServerType || !allVersions.length) {
-    alert('No versions to download');
+    showNotification('No versions to download', 'error');
     return;
   }
-  
+
   // Filter to only non-downloaded versions
   const toDownload = allVersions.filter(v => !downloadedVersions[v]);
-  
+
   if (toDownload.length === 0) {
-    alert('All versions are already downloaded!');
+    showNotification('All versions are already downloaded!', 'info');
     return;
   }
-  
-  const confirmMsg = `Download ${toDownload.length} version(s) of ${selectedServerTypeInfo?.name || selectedServerType}?\n\nThis may take a while and use significant disk space.`;
+
+  const typeName = selectedServerTypeInfo?.name || selectedServerType;
+  const confirmMsg = `Queue ${toDownload.length} download(s) of ${typeName}?\n\n` +
+    `They run in the background — you can leave this page. Large batches use significant disk space.`;
   if (!confirm(confirmMsg)) return;
-  
-  const progressPanel = document.getElementById('jar-download-progress-panel');
-  const progressContent = document.getElementById('jar-download-progress-content');
-  
-  progressPanel.style.display = 'block';
-  progressContent.innerHTML = `
-    <div class="bulk-download-status">
-      <div class="bulk-progress-header">
-        <span>Downloading ${selectedServerTypeInfo?.name || selectedServerType}</span>
-        <span id="bulk-progress-count">0 / ${toDownload.length}</span>
-      </div>
-      <div class="progress-bar">
-        <div id="bulk-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
-      </div>
-      <div id="bulk-progress-current" class="bulk-current">Starting...</div>
-      <div id="bulk-progress-log" class="bulk-log"></div>
-    </div>
-  `;
-  
-  let completed = 0;
-  let failed = 0;
-  const logEl = document.getElementById('bulk-progress-log');
-  
+
+  // Enqueue each as a background task; the queue panel + job pool handle the rest.
+  let queued = 0, failed = 0;
   for (const version of toDownload) {
-    document.getElementById('bulk-progress-current').textContent = `Downloading: ${version}`;
-    
     try {
-      const response = await fetch('/api/jar-bucket/download', {
+      const response = await fetch('/api/jar-bucket/queue-download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: selectedServerType, version })
       });
-      
-      const data = await response.json();
-      
-      if (response.ok && data.progress_id) {
-        // Wait for download to complete
-        await waitForDownload(data.progress_id);
-        completed++;
-        logEl.innerHTML = `<div class="log-success">✅ ${version}</div>` + logEl.innerHTML;
-      } else {
-        failed++;
-        logEl.innerHTML = `<div class="log-error">❌ ${version}: ${data.error || 'Failed'}</div>` + logEl.innerHTML;
-      }
-    } catch (err) {
+      if (response.ok) queued++; else failed++;
+    } catch (_) {
       failed++;
-      logEl.innerHTML = `<div class="log-error">❌ ${version}: ${err.message}</div>` + logEl.innerHTML;
     }
-    
-    // Update progress
-    const total = completed + failed;
-    const percent = Math.round((total / toDownload.length) * 100);
-    document.getElementById('bulk-progress-count').textContent = `${total} / ${toDownload.length}`;
-    document.getElementById('bulk-progress-bar').style.width = `${percent}%`;
   }
-  
-  document.getElementById('bulk-progress-current').textContent = `Complete! ${completed} succeeded, ${failed} failed.`;
-  
-  // Refresh the downloaded list
-  loadJarBucketDownloaded();
-  
-  // Refresh the versions panel to update downloaded status
-  if (selectedServerType && selectedServerTypeInfo) {
-    selectServerType(selectedServerType, selectedServerTypeInfo);
+
+  showNotification(
+    `Queued ${queued} download(s)${failed ? `, ${failed} failed to queue` : ''}`,
+    failed ? 'error' : 'success'
+  );
+  refreshJarDownloadQueue();
+}
+
+// --- Download queue (JobManager-backed jar_download tasks) -------------------
+// Jar downloads are submitted as background jobs that survive leaving the page
+// (and even a panel restart). This panel lists them and polls /api/jobs while
+// any are still active.
+let jarQueuePollTimer = null;
+let jarQueueHadActive = false;
+
+async function refreshJarDownloadQueue() {
+  const panel = document.getElementById('jar-download-progress-panel');
+  const content = document.getElementById('jar-download-progress-content');
+  if (!panel || !content) return;
+
+  let jobs = [];
+  try {
+    const response = await fetch('/api/jobs');
+    if (response.ok) {
+      const data = await response.json();
+      jobs = (data.jobs || []).filter(j => j.type === 'jar_download');
+    }
+  } catch (_) { /* keep the last render on transient errors */ }
+
+  jobs.sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+
+  const active = jobs.filter(j => j.status === 'queued' || j.status === 'running');
+
+  if (jobs.length === 0) {
+    panel.style.display = 'none';
+    content.innerHTML = '';
+    if (jarQueuePollTimer) { clearTimeout(jarQueuePollTimer); jarQueuePollTimer = null; }
+    jarQueueHadActive = false;
+    return;
+  }
+
+  panel.style.display = 'block';
+  renderJarDownloadQueue(jobs);
+
+  if (active.length > 0) {
+    jarQueueHadActive = true;
+    if (jarQueuePollTimer) clearTimeout(jarQueuePollTimer);
+    jarQueuePollTimer = setTimeout(refreshJarDownloadQueue, 1500);
+  } else {
+    if (jarQueuePollTimer) { clearTimeout(jarQueuePollTimer); jarQueuePollTimer = null; }
+    // On the active -> idle transition, refresh the downloaded list + version badges once.
+    if (jarQueueHadActive) {
+      jarQueueHadActive = false;
+      loadJarBucketDownloaded();
+      if (selectedServerType && selectedServerTypeInfo) {
+        selectServerType(selectedServerType, selectedServerTypeInfo);
+      }
+    }
   }
 }
 
-async function waitForDownload(progressId, maxWaitMs = 300000) {
-  const startTime = Date.now();
-  
-  while (Date.now() - startTime < maxWaitMs) {
-    try {
-      const response = await fetch(`/api/jar-bucket/progress/${progressId}`);
-      const data = await response.json();
-      
-      if (data.status === 'complete') {
-        if (data.success) return true;
-        throw new Error(data.error || 'Download failed');
-      } else if (data.status === 'error') {
-        throw new Error(data.error || 'Download failed');
-      }
-      
-      // Still downloading, wait and check again
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (err) {
-      console.error('Progress check error:', err);
-      throw err;
+function renderJarDownloadQueue(jobs) {
+  const content = document.getElementById('jar-download-progress-content');
+  const statusMeta = {
+    queued:    { icon: '⏸', cls: '',        label: 'Queued' },
+    running:   { icon: '⏳', cls: '',        label: 'Downloading' },
+    completed: { icon: '✅', cls: 'success', label: 'Done' },
+    failed:    { icon: '❌', cls: 'error',   label: 'Failed' },
+    cancelled: { icon: '🚫', cls: 'error',   label: 'Cancelled' },
+  };
+
+  content.innerHTML = jobs.map(job => {
+    const p = job.params || {};
+    const name = `${escapeHtml(p.type || '')} ${escapeHtml(p.version || '')}`.trim()
+      || escapeHtml(job.title || 'Download');
+    const meta = statusMeta[job.status] || { icon: '•', cls: '', label: job.status };
+    const pct = Math.max(0, Math.min(100, job.progress || 0));
+    const isActive = job.status === 'queued' || job.status === 'running';
+    let statusText = meta.label;
+    if (job.status === 'failed') statusText = job.error || 'Failed';
+    else if (job.status === 'running' && job.message) statusText = job.message;
+    const actions = isActive
+      ? `<button class="btn btn-small btn-secondary" onclick="cancelJarDownloadJob('${job.id}')">Cancel</button>`
+      : `<button class="btn btn-small" onclick="dismissJarDownloadJob('${job.id}')">Dismiss</button>`;
+    return `
+      <div class="download-item ${meta.cls}">
+        <div class="download-info">
+          <span class="download-name">${name}</span>
+          <span class="download-status ${meta.cls}">${meta.icon} ${escapeHtml(statusText)}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-bar-fill" style="width: ${pct}%"></div>
+        </div>
+        <div class="download-actions">${actions}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function cancelJarDownloadJob(jobId) {
+  try {
+    const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      showNotification(data.error || 'Failed to cancel download', 'error');
     }
+  } catch (err) {
+    showNotification('Network error: ' + err.message, 'error');
   }
-  
-  throw new Error('Download timeout');
+  refreshJarDownloadQueue();
+}
+
+async function dismissJarDownloadJob(jobId) {
+  try {
+    await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+  } catch (_) { /* ignore */ }
+  refreshJarDownloadQueue();
 }
 
 async function downloadJarVersion(serverType, version) {
-  const progressPanel = document.getElementById('jar-download-progress-panel');
-  const progressContent = document.getElementById('jar-download-progress-content');
-  
-  progressPanel.style.display = 'block';
-  progressContent.innerHTML = `
-    <div class="download-item">
-      <div class="download-info">
-        <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-        <span class="download-status">Starting download...</span>
-      </div>
-      <div class="progress-bar">
-        <div class="progress-bar-fill" style="width: 0%"></div>
-      </div>
-    </div>
-  `;
-  
+  // Submit the download as a background task and let the queue panel track it,
+  // so it keeps running even if the user navigates away.
   try {
-    const response = await fetch('/api/jar-bucket/download', {
+    const response = await fetch('/api/jar-bucket/queue-download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: serverType, version })
     });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      progressContent.innerHTML = `
-        <div class="download-item error">
-          <div class="download-info">
-            <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-            <span class="download-status error">❌ ${data.error || 'Failed to start download'}</span>
-          </div>
-          <div class="download-actions">
-            <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-            <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-          </div>
-        </div>
-      `;
-      return;
-    }
-    
-    if (!data.progress_id) {
-      progressContent.innerHTML = `
-        <div class="download-item error">
-          <div class="download-info">
-            <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-            <span class="download-status error">❌ Failed to start download - no progress ID</span>
-          </div>
-          <div class="download-actions">
-            <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-            <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-          </div>
-        </div>
-      `;
-      return;
-    }
-    
-    // Poll for progress
-    const progressId = data.progress_id;
-    pollDownloadProgress(progressId, serverType, version);
-    
-  } catch (err) {
-    progressContent.innerHTML = `
-      <div class="download-item error">
-        <div class="download-info">
-          <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-          <span class="download-status error">❌ Network error: ${err.message}</span>
-        </div>
-        <div class="download-actions">
-          <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-          <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-        </div>
-      </div>
-    `;
-  }
-}
+    const data = await response.json().catch(() => ({}));
 
-async function pollDownloadProgress(progressId, serverType, version) {
-  const progressContent = document.getElementById('jar-download-progress-content');
-  let pollCount = 0;
-  const maxPolls = 600; // 5 minute timeout
-  let consecutiveErrors = 0;
-  const maxConsecutiveErrors = 5;
-  
-  const checkProgress = async () => {
-    pollCount++;
-    
-    if (pollCount > maxPolls) {
-      progressContent.innerHTML = `
-        <div class="download-item error">
-          <div class="download-info">
-            <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-            <span class="download-status error">❌ Download timed out</span>
-          </div>
-          <div class="download-actions">
-            <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-            <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-          </div>
-        </div>
-      `;
+    if (!response.ok) {
+      showNotification(data.error || 'Failed to queue download', 'error');
       return;
     }
-    
-    try {
-      const response = await fetch(`/api/jar-bucket/progress/${progressId}`);
-      
-      // Check if response is valid before parsing
-      if (!response.ok) {
-        // If 404, the progress ID doesn't exist yet (still initializing)
-        if (response.status === 404) {
-          consecutiveErrors++;
-          if (consecutiveErrors >= maxConsecutiveErrors) {
-            progressContent.innerHTML = `
-              <div class="download-item error">
-                <div class="download-info">
-                  <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-                  <span class="download-status error">❌ Download initialization failed</span>
-                </div>
-                <div class="download-actions">
-                  <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-                  <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-                </div>
-              </div>
-            `;
-            return;
-          } else {
-            // Keep trying for 404s (initialization delay)
-            setTimeout(checkProgress, 1000);
-            return;
-          }
-        }
-        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
-      }
-      
-      // Check content type before parsing
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        throw new Error('Server response is not JSON');
-      }
-      
-      const data = await response.json();
-      
-      consecutiveErrors = 0; // Reset on successful poll
-      
-      if (data.status === 'initializing') {
-        // Still initializing, keep polling
-        progressContent.innerHTML = `
-          <div class="download-item">
-            <div class="download-info">
-              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-              <span class="download-status">${data.message || 'Initializing...'}</span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-bar-fill" style="width: 0%"></div>
-            </div>
-          </div>
-        `;
-        setTimeout(checkProgress, 500);
-      } else if (data.status === 'downloading') {
-        const percent = data.progress || 0;
-        const downloaded = formatBytes(data.downloaded || 0);
-        const total = formatBytes(data.total || 0);
-        
-        progressContent.innerHTML = `
-          <div class="download-item">
-            <div class="download-info">
-              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-              <span class="download-status">${downloaded} / ${total}</span>
-            </div>
-            <div class="progress-bar">
-              <div class="progress-bar-fill" style="width: ${percent}%"></div>
-            </div>
-          </div>
-        `;
-        setTimeout(checkProgress, 500);
-      } else if (data.status === 'complete') {
-        if (data.success !== false) {
-          progressContent.innerHTML = `
-            <div class="download-item success">
-              <div class="download-info">
-                <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-                <span class="download-status success">✅ ${data.message || 'Download complete!'}</span>
-              </div>
-              <small class="download-path">📁 ${data.path || ''}</small>
-              <div class="download-actions">
-                <button class="btn btn-small btn-success" onclick="document.getElementById('jar-download-progress-panel').style.display='none'; selectServerType('${escapeHtml(serverType)}', selectedServerTypeInfo);">View Downloads</button>
-              </div>
-            </div>
-          `;
-          // Refresh the downloaded list and version panel
-          loadJarBucketDownloaded();
-          if (selectedServerType === serverType) {
-            // Update the version panel to show new downloaded status
-            downloadedVersions[version] = true;
-            renderVersions(allVersions || []);
-          }
-        } else {
-          progressContent.innerHTML = `
-            <div class="download-item error">
-              <div class="download-info">
-                <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-                <span class="download-status error">❌ ${data.error || 'Download failed'}</span>
-              </div>
-              <div class="download-actions">
-                <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-                <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-              </div>
-            </div>
-          `;
-        }
-      } else if (data.status === 'error') {
-        progressContent.innerHTML = `
-          <div class="download-item error">
-            <div class="download-info">
-              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-              <span class="download-status error">❌ ${data.error || 'Download failed'}</span>
-            </div>
-            <div class="download-actions">
-              <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-              <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-            </div>
-          </div>
-        `;
-      } else {
-        // Unknown status, keep polling
-        setTimeout(checkProgress, 500);
-      }
-    } catch (err) {
-      consecutiveErrors++;
-      if (consecutiveErrors >= maxConsecutiveErrors) {
-        progressContent.innerHTML = `
-          <div class="download-item error">
-            <div class="download-info">
-              <span class="download-name">${escapeHtml(serverType)} ${escapeHtml(version)}</span>
-              <span class="download-status error">❌ Lost connection to server</span>
-            </div>
-            <div class="download-actions">
-              <button class="btn btn-small btn-secondary" onclick="downloadJarVersion('${escapeHtml(serverType)}', '${escapeHtml(version)}')">🔄 Retry</button>
-              <button class="btn btn-small" onclick="document.getElementById('jar-download-progress-panel').style.display='none'">Dismiss</button>
-            </div>
-          </div>
-        `;
-      } else {
-        // Keep trying
-        setTimeout(checkProgress, 1000);
-      }
-    }
-  };
-  
-  checkProgress();
+
+    showNotification(
+      data.duplicate ? `${serverType} ${version} is already downloading`
+                     : `Queued download: ${serverType} ${version}`,
+      data.duplicate ? 'info' : 'success'
+    );
+    refreshJarDownloadQueue();
+  } catch (err) {
+    showNotification('Network error: ' + err.message, 'error');
+  }
 }
 
 async function loadJarBucketDownloaded() {

@@ -5766,11 +5766,27 @@ def _job_zip_download(job_id, params, progress, cancel):
     return {'download': True, 'filename': download_name, 'size': size}
 
 
+def _job_jar_download(job_id, params, progress, cancel):
+    """Download one server JAR into the shared bucket (serverexecutables/).
+
+    Not tied to a server, so several run concurrently across the job pool.
+    `progress`/`cancel` come from the JobManager; download_jar raises
+    JobCancelled on cancel so the task ends as 'cancelled'."""
+    server_type = params['type']
+    version = params['version']
+    result = jar_bucket.download_jar(server_type, version,
+                                     progress_cb=progress, cancel=cancel)
+    if not result.get('success'):
+        raise Exception(result.get('error', 'Download failed'))
+    return result
+
+
 job_manager.register('backup', _job_backup)
 job_manager.register('restore', _job_restore)
 job_manager.register('delete_server', _job_delete_server)
 job_manager.register('swap_jar', _job_swap_jar)
 job_manager.register('zip_download', _job_zip_download)
+job_manager.register('jar_download', _job_jar_download)
 
 
 def _cleanup_job_artifacts(max_age_hours=24):
@@ -12104,24 +12120,32 @@ class JarBucketManager:
 
         return None
     
-    def download_jar(self, server_type, version, progress_id=None):
-        """Download a JAR file to serverexecutables folder"""
+    def download_jar(self, server_type, version, progress_id=None,
+                     progress_cb=None, cancel=None):
+        """Download a JAR file to serverexecutables folder.
+
+        Progress is reported through whichever channels are supplied:
+        - progress_id: legacy in-memory download_progress dict (poll route).
+        - progress_cb: callable(pct, message) for the JobManager task queue.
+        - cancel: threading.Event; when set, aborts and raises JobCancelled
+          (used by the queued-download job so the user can cancel it).
+        """
         download_info = self.get_download_info(server_type, version)
-        
+
         if not download_info:
             return {'success': False, 'error': 'Could not find download URL for this version'}
-        
+
         if download_info.get('requires_build'):
             return {'success': False, 'error': download_info.get('message'), 'requires_build': True}
-        
+
         url = download_info['url']
         filename = download_info['filename']
-        
+
         # Create directory
         type_dir = SERVER_EXECUTABLES_DIR / server_type
         type_dir.mkdir(parents=True, exist_ok=True)
         filepath = type_dir / filename
-        
+
         try:
             # Download with progress tracking. Send a browser User-Agent: the
             # Bedrock CDN (www.minecraft.net) blocks the default python-requests
@@ -12130,10 +12154,10 @@ class JarBucketManager:
                 'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
             })
             response.raise_for_status()
-            
+
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
-            
+
             if progress_id:
                 self.update_progress(
                     progress_id,
@@ -12142,28 +12166,36 @@ class JarBucketManager:
                     downloaded=0,
                     progress=0,
                 )
+            if progress_cb:
+                progress_cb(0, f'Downloading {filename}…')
 
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
+                    if cancel is not None and cancel.is_set():
+                        raise JobCancelled()
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
-                        if progress_id and total_size:
-                            self.update_progress(
-                                progress_id,
-                                status='downloading',
-                                total=total_size,
-                                downloaded=downloaded,
-                                progress=int((downloaded / total_size) * 100),
-                            )
-            
+                        if total_size:
+                            pct = int((downloaded / total_size) * 100)
+                            if progress_id:
+                                self.update_progress(
+                                    progress_id,
+                                    status='downloading',
+                                    total=total_size,
+                                    downloaded=downloaded,
+                                    progress=pct,
+                                )
+                            if progress_cb:
+                                progress_cb(pct, f'Downloading {filename}… ({pct}%)')
+
             # Verify hash if available
             if download_info.get('hash'):
                 file_hash = self._calculate_hash(filepath, download_info.get('hash_type', 'sha256'))
                 if file_hash != download_info['hash']:
                     filepath.unlink()  # Delete mismatched file
                     return {'success': False, 'error': 'Hash verification failed'}
-            
+
             if progress_id:
                 self.update_progress(
                     progress_id,
@@ -12172,6 +12204,8 @@ class JarBucketManager:
                     downloaded=downloaded,
                     progress=100,
                 )
+            if progress_cb:
+                progress_cb(100, f'Downloaded {filename}')
 
             return {
                 'success': True,
@@ -12180,7 +12214,13 @@ class JarBucketManager:
                 'filename': filename,
                 'size': downloaded
             }
-            
+
+        except JobCancelled:
+            # Cooperative cancel: drop the partial file and let the job manager
+            # mark the task cancelled (never swallowed by the generic handler below).
+            if filepath.exists():
+                filepath.unlink()
+            raise
         except requests.exceptions.RequestException as e:
             if filepath.exists():
                 filepath.unlink()
@@ -12456,11 +12496,57 @@ def api_jar_bucket_download():
     
     thread = threading.Thread(target=do_download, daemon=True)
     thread.start()
-    
+
     return jsonify({
         'progress_id': progress_id,
         'message': f'Starting download of {server_type} {version}'
     })
+
+@app.route('/api/jar-bucket/queue-download', methods=['POST'])
+@permission_required('panel.jars.manage')
+def api_jar_bucket_queue_download():
+    """Queue a JAR download as a background task (JobManager).
+
+    Unlike /download (a fire-and-forget thread whose progress lives only in the
+    browser), this creates a persisted 'jar_download' job: it survives leaving
+    the page or restarting the panel, runs in the shared job pool, and can be
+    cancelled. The Server JAR Manager uses this so batches of downloads keep
+    going in the background."""
+    data = request.get_json() or {}
+    server_type = data.get('type', '').strip().lower()
+    version = data.get('version', '').strip()
+
+    if not server_type or not version:
+        return jsonify({'error': 'Missing server type or version'}), 400
+
+    import re
+    if not re.match(r'^[a-z0-9-]+$', server_type):
+        return jsonify({'error': 'Invalid server type'}), 400
+
+    user_id, user = get_current_user()
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+
+    # De-duplicate: if this exact type+version is already queued/running for the
+    # user, return that job instead of starting a second identical download.
+    existing = [
+        j for j in job_manager.list_jobs(is_admin=is_admin, user_id=user_id, limit=200)
+        if j['type'] == 'jar_download'
+        and j['status'] in JobManager.ACTIVE_STATUSES
+        and (j.get('params') or {}).get('type') == server_type
+        and (j.get('params') or {}).get('version') == version
+    ]
+    if existing:
+        return jsonify({'job_id': existing[0]['id'], 'duplicate': True,
+                        'message': f'{server_type} {version} is already downloading'})
+
+    job_id = job_manager.submit(
+        'jar_download',
+        title=f'Download {server_type} {version}',
+        params={'type': server_type, 'version': version},
+        created_by=user_id,
+    )
+    return jsonify({'job_id': job_id,
+                    'message': f'Queued download of {server_type} {version}'})
 
 @app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
 @limiter.exempt
