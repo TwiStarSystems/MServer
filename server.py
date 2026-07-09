@@ -7298,14 +7298,17 @@ def setup_bedrock_server(server_id):
                 step=2,
             )
             
-            response = requests.get(download_url, stream=True, timeout=300, headers={
+            # (connect, read) timeout — read applies per chunk, so a stalled
+            # connection fails in seconds instead of holding the worker for
+            # the full download budget (issue #13).
+            response = requests.get(download_url, stream=True, timeout=(10, 30), headers={
                 'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
             })
             response.raise_for_status()
-            
+
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
-            
+
             with open(zip_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
@@ -12171,7 +12174,10 @@ class JarBucketManager:
             # Download with progress tracking. Send a browser User-Agent: the
             # Bedrock CDN (www.minecraft.net) blocks the default python-requests
             # UA, and it is harmless for the other (Maven/PaperMC/etc.) hosts.
-            response = requests.get(url, stream=True, timeout=300, headers={
+            # (connect, read) timeout — read applies per chunk, so a stalled
+            # connection fails in seconds instead of holding the worker for
+            # the full download budget (issue #13).
+            response = requests.get(url, stream=True, timeout=(10, 30), headers={
                 'User-Agent': 'Mozilla/5.0 (Linux; x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
             })
             response.raise_for_status()
