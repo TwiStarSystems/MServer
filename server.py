@@ -4194,6 +4194,9 @@ class ServerManager:
     def __init__(self):
         self.servers = {}  # server_id -> ServerInstance (in-memory runtime state only)
         self.lock = threading.Lock()
+        # Serializes port-conflict-check + commit so two concurrent requests can't
+        # both pass the "port is free" check and write the same port to two servers.
+        self.port_lock = threading.Lock()
 
     # ── Internal row → dict helper ────────────────────────────────────────────
 
@@ -7150,75 +7153,78 @@ def create_server():
     policy = settings_manager.get_policy('serverCreate')
     approved = is_admin or policy != 'require_approval'
 
-    # Check for duplicate port if server-port is provided
-    if 'server-port' in server_properties:
-        new_port = str(server_properties['server-port'])
-        existing_ports = server_manager.get_all_server_ports()
-        
-        for other_server_id, port in existing_ports.items():
-            if port == new_port:
-                other_server_config = server_manager.get_server_config(other_server_id)
-                other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
+    # Check for duplicate port and create the server + server.properties under a
+    # single lock so two concurrent requests can't both pass the "port is free"
+    # check and then each write the same port to a different server (issue #11).
+    with server_manager.port_lock:
+        if 'server-port' in server_properties:
+            new_port = str(server_properties['server-port'])
+            existing_ports = server_manager.get_all_server_ports()
+
+            for other_server_id, port in existing_ports.items():
+                if port == new_port:
+                    other_server_config = server_manager.get_server_config(other_server_id)
+                    other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
+                    return jsonify({
+                        'error': f'Port {new_port} is already in use by server: {other_server_name}'
+                    }), 400
+
+        # Create server locally. This is fast (DB row + a local JAR copy + a couple of
+        # config files) and is invoked from several frontend wizards that expect a
+        # synchronous {serverId}, so it stays inline rather than going on the job queue.
+        server_id = server_manager.create_server(
+            name=name,
+            server_path=server_path,
+            executable=executable,
+            java_args=java_args,
+            server_type=server_type,
+            version=version,
+            owner=user_id,
+            approved=approved,
+            category=category,
+            port=server_properties.get('server-port')
+        )
+
+        # Get server directory for creating files
+        server_config = server_manager.get_server_config(server_id)
+        server_dir = Path(server_config['serverPath'])
+
+        # Handle Bedrock server setup
+        if category == 'bedrock':
+            # server.properties is written by setup-bedrock after ZIP extraction
+            response = {'success': True, 'serverId': server_id}
+            if not approved:
+                response['pendingApproval'] = True
+                response['message'] = 'Server created and pending admin approval'
+            if not is_admin and policy == 'notify':
+                notification_manager.notify_admins(
+                    'action_notify', f'Server created — {user.get("username", "Unknown")}',
+                    f'{user.get("username", "Unknown")} created Bedrock server "{name}".',
+                    ref_type='server', ref_id=server_id)
+            return jsonify(response)
+
+        # Copy JAR from serverexecutables if requested (Java servers only)
+        if download_jar and server_type and version:
+            jar_path = server_dir / executable
+
+            # Copy the local JAR file to the server directory
+            success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
+            if not success:
                 return jsonify({
-                    'error': f'Port {new_port} is already in use by server: {other_server_name}'
-                }), 400
-    
-    # Create server locally. This is fast (DB row + a local JAR copy + a couple of
-    # config files) and is invoked from several frontend wizards that expect a
-    # synchronous {serverId}, so it stays inline rather than going on the job queue.
-    server_id = server_manager.create_server(
-        name=name,
-        server_path=server_path,
-        executable=executable,
-        java_args=java_args,
-        server_type=server_type,
-        version=version,
-        owner=user_id,
-        approved=approved,
-        category=category,
-        port=server_properties.get('server-port')
-    )
+                    'success': True,
+                    'serverId': server_id,
+                    'warning': f'Server created but JAR copy failed: {result}'
+                })
 
-    # Get server directory for creating files
-    server_config = server_manager.get_server_config(server_id)
-    server_dir = Path(server_config['serverPath'])
+        # Create eula.txt for convenience
+        eula_path = server_dir / 'eula.txt'
+        eula_path.write_text('# By setting this to TRUE, you agree to the Minecraft EULA\neula=false\n')
 
-    # Handle Bedrock server setup
-    if category == 'bedrock':
-        # server.properties is written by setup-bedrock after ZIP extraction
-        response = {'success': True, 'serverId': server_id}
-        if not approved:
-            response['pendingApproval'] = True
-            response['message'] = 'Server created and pending admin approval'
-        if not is_admin and policy == 'notify':
-            notification_manager.notify_admins(
-                'action_notify', f'Server created — {user.get("username", "Unknown")}',
-                f'{user.get("username", "Unknown")} created Bedrock server "{name}".',
-                ref_type='server', ref_id=server_id)
-        return jsonify(response)
-
-    # Copy JAR from serverexecutables if requested (Java servers only)
-    if download_jar and server_type and version:
-        jar_path = server_dir / executable
-
-        # Copy the local JAR file to the server directory
-        success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
-        if not success:
-            return jsonify({
-                'success': True,
-                'serverId': server_id,
-                'warning': f'Server created but JAR copy failed: {result}'
-            })
-
-    # Create eula.txt for convenience
-    eula_path = server_dir / 'eula.txt'
-    eula_path.write_text('# By setting this to TRUE, you agree to the Minecraft EULA\neula=false\n')
-
-    # Create server.properties with the provided settings
-    if server_properties:
-        properties_path = server_dir / 'server.properties'
-        properties_content = _generate_server_properties(server_properties, name)
-        properties_path.write_text(properties_content, encoding='utf-8')
+        # Create server.properties with the provided settings
+        if server_properties:
+            properties_path = server_dir / 'server.properties'
+            properties_content = _generate_server_properties(server_properties, name)
+            properties_path.write_text(properties_content, encoding='utf-8')
 
     response = {'success': True, 'serverId': server_id}
     if not approved:
@@ -10027,56 +10033,59 @@ def save_properties(server_id):
         return jsonify({'error': 'Missing properties'}), 400
     
     new_properties = data['properties']
-    
-    # Check for duplicate port if server-port is being changed
-    if 'server-port' in new_properties:
-        new_port = new_properties['server-port']
-        existing_ports = server_manager.get_all_server_ports(exclude_server_id=server_id)
-        
-        # Check if this port is already in use by another server
-        for other_server_id, port in existing_ports.items():
-            if port == new_port:
-                other_server_config = server_manager.get_server_config(other_server_id)
-                other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
-                return jsonify({
-                    'error': f'Port {new_port} is already in use by server: {other_server_name}'
-                }), 400
-    
-    try:
-        # Read existing file to preserve comments and order
-        lines = []
-        with open(properties_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                stripped = line.strip()
-                # Preserve comments and empty lines
-                if not stripped or stripped.startswith('#'):
-                    lines.append(line)
-                elif '=' in stripped:
-                    key, _ = stripped.split('=', 1)
-                    key = key.strip()
-                    # Update with new value if exists, otherwise keep original
-                    if key in new_properties:
-                        lines.append(f'{key}={new_properties[key]}\n')
-                        # Mark as processed
-                        new_properties.pop(key)
+
+    # Check for duplicate port and write the file under a single lock so two
+    # concurrent requests can't both pass the "port is free" check and then each
+    # commit the same port to a different server (issue #11).
+    with server_manager.port_lock:
+        if 'server-port' in new_properties:
+            new_port = new_properties['server-port']
+            existing_ports = server_manager.get_all_server_ports(exclude_server_id=server_id)
+
+            # Check if this port is already in use by another server
+            for other_server_id, port in existing_ports.items():
+                if port == new_port:
+                    other_server_config = server_manager.get_server_config(other_server_id)
+                    other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
+                    return jsonify({
+                        'error': f'Port {new_port} is already in use by server: {other_server_name}'
+                    }), 400
+
+        try:
+            # Read existing file to preserve comments and order
+            lines = []
+            with open(properties_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    # Preserve comments and empty lines
+                    if not stripped or stripped.startswith('#'):
+                        lines.append(line)
+                    elif '=' in stripped:
+                        key, _ = stripped.split('=', 1)
+                        key = key.strip()
+                        # Update with new value if exists, otherwise keep original
+                        if key in new_properties:
+                            lines.append(f'{key}={new_properties[key]}\n')
+                            # Mark as processed
+                            new_properties.pop(key)
+                        else:
+                            lines.append(line)
                     else:
                         lines.append(line)
-                else:
-                    lines.append(line)
-        
-        # Append any new properties that weren't in the original file
-        if new_properties:
-            lines.append('\n# Added by MServer\n')
-            for key, value in new_properties.items():
-                lines.append(f'{key}={value}\n')
-        
-        # Write back to file
-        with open(properties_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
-        
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
+            # Append any new properties that weren't in the original file
+            if new_properties:
+                lines.append('\n# Added by MServer\n')
+                for key, value in new_properties.items():
+                    lines.append(f'{key}={value}\n')
+
+            # Write back to file
+            with open(properties_path, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
 
 # ==================== Resource Pack API ====================
