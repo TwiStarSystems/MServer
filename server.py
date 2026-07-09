@@ -94,6 +94,12 @@ app = Flask(__name__, static_folder='public', static_url_path='')
 # --- SECRET_KEY validation ---
 _raw_secret = os.environ.get('SECRET_KEY', '')
 if not _raw_secret:
+    if os.environ.get('FLASK_ENV', 'production') != 'development':
+        raise SystemExit(
+            "SECRET_KEY not set in environment — refusing to start in production. "
+            "Set SECRET_KEY in .env (re-run install.sh update, or generate one with "
+            "`python3 -c \"import secrets; print(secrets.token_hex(32))\"`)."
+        )
     import warnings
     warnings.warn(
         "SECRET_KEY not set in environment — a random key has been generated. "
