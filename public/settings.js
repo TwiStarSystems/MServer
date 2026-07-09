@@ -94,6 +94,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         refreshJarDownloadQueue();
         initJarLinksPanel();
       }
+      // Load host/OS update status when Updates tab is clicked
+      if (tab === 'updates') {
+        loadOsUpdateStatus();
+      }
     });
   });
   
@@ -190,6 +194,7 @@ function applyTabVisibility() {
     'appsettings': 'panel.settings.view',
     'external-backup': 'panel.settings.view',
     'tools': 'panel.tools.manage',
+    'updates': 'panel.tools.manage',
   };
   let firstVisible = null;
   document.querySelectorAll('.settings-tab-btn').forEach(btn => {
@@ -1196,6 +1201,157 @@ async function loadVersionInfo() {
     console.error('Error loading version:', error);
     document.getElementById('current-version').textContent = 'Error';
   }
+}
+
+// ==================== System / OS Update Functions ====================
+
+// Append a line to the Updates output log.
+function osUpdateLog(text, replace = false) {
+  const el = document.getElementById('os-update-output');
+  if (!el) return;
+  if (replace) {
+    el.textContent = text;
+  } else {
+    el.textContent += (el.textContent && el.textContent !== 'Ready.' ? '\n' : '') + text;
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+// Load read-only host/update status (pending packages, reboot flag, kernel, java).
+async function loadOsUpdateStatus() {
+  const setText = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+  setText('os-status-version', 'Loading…');
+  setText('os-status-pending', '…');
+  setText('os-status-kernel', '…');
+  setText('os-status-java', '');
+  setText('os-status-reboot', '');
+  try {
+    const response = await fetch('/api/system/os-status');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to load status');
+
+    setText('os-status-version', data.version || 'unknown');
+    setText('os-status-pending', String(data.pending ?? 0) + (data.pending === 1 ? ' package' : ' packages'));
+    setText('os-status-kernel', data.kernel || '—');
+    setText('os-status-java', data.java || '');
+
+    const rebootEl = document.getElementById('os-status-reboot');
+    if (rebootEl) {
+      if (data.reboot_required) {
+        rebootEl.textContent = '⚠ Reboot required';
+        rebootEl.style.color = '#e0a800';
+      } else {
+        rebootEl.textContent = 'No reboot needed';
+        rebootEl.style.color = '';
+      }
+    }
+  } catch (error) {
+    console.error('Error loading OS status:', error);
+    setText('os-status-version', 'Error');
+    setText('os-status-pending', '—');
+    setText('os-status-kernel', '—');
+    osUpdateLog('Failed to load host status: ' + error.message);
+  }
+}
+
+// Run the OS update (mode: 'check' dry-run, or 'apply'). Requires the root password.
+async function runOsUpdate(mode) {
+  const pwInput = document.getElementById('os-update-password');
+  const password = pwInput ? pwInput.value : '';
+  if (!password) {
+    osUpdateLog('Enter the root password first.', true);
+    if (pwInput) pwInput.focus();
+    return;
+  }
+
+  const verb = mode === 'apply' ? 'Applying OS update' : 'Checking for updates';
+  osUpdateLog(verb + '… this can take a while, please wait.', true);
+  setOsButtonsDisabled(true);
+  try {
+    const response = await fetch('/api/system/os-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, password }),
+    });
+    const data = await response.json();
+    if (data.output) osUpdateLog(data.output, true);
+    if (data.error) osUpdateLog('\n' + data.error);
+    if (!response.ok && !data.output && !data.error) {
+      osUpdateLog('Request failed (HTTP ' + response.status + ')');
+    }
+    if (data.ok) {
+      osUpdateLog('\n✓ Done.');
+      loadOsUpdateStatus();
+    }
+  } catch (error) {
+    console.error('OS update error:', error);
+    osUpdateLog('\nRequest failed: ' + error.message);
+  } finally {
+    setOsButtonsDisabled(false);
+    if (pwInput) pwInput.value = '';
+  }
+}
+
+// Restart the mserver service. The connection will drop mid-restart; poll until back.
+async function restartMserverService() {
+  const pwInput = document.getElementById('os-update-password');
+  const password = pwInput ? pwInput.value : '';
+  if (!password) {
+    osUpdateLog('Enter the root password first.', true);
+    if (pwInput) pwInput.focus();
+    return;
+  }
+  if (!confirm('Restart the MServer panel service now? The panel will be briefly unavailable.')) {
+    return;
+  }
+
+  osUpdateLog('Requesting service restart…', true);
+  setOsButtonsDisabled(true);
+  try {
+    const response = await fetch('/api/system/service-restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    const data = await response.json();
+    if (data.output) osUpdateLog(data.output);
+    if (data.error) { osUpdateLog('\n' + data.error); setOsButtonsDisabled(false); return; }
+    if (!data.ok) { osUpdateLog('\nRestart request failed.'); setOsButtonsDisabled(false); return; }
+    osUpdateLog('\nService is restarting — waiting for it to come back…');
+    pollServiceBack();
+  } catch (error) {
+    console.error('Restart error:', error);
+    osUpdateLog('\nRequest failed: ' + error.message);
+    setOsButtonsDisabled(false);
+  } finally {
+    if (pwInput) pwInput.value = '';
+  }
+}
+
+// Poll the panel until it responds again after a restart.
+function pollServiceBack(attempt = 0) {
+  const maxAttempts = 30;
+  setTimeout(async () => {
+    try {
+      const r = await fetch('/api/system/version', { cache: 'no-store' });
+      if (r.ok) {
+        osUpdateLog('✓ Panel is back online.');
+        setOsButtonsDisabled(false);
+        loadOsUpdateStatus();
+        return;
+      }
+    } catch (_) { /* still down */ }
+    if (attempt >= maxAttempts) {
+      osUpdateLog('Still waiting — try reloading the page in a moment.');
+      setOsButtonsDisabled(false);
+      return;
+    }
+    pollServiceBack(attempt + 1);
+  }, 2000);
+}
+
+function setOsButtonsDisabled(disabled) {
+  document.querySelectorAll('.os-update-buttons button').forEach(b => { b.disabled = disabled; });
 }
 
 // ==================== JAR Bucket Functions ====================

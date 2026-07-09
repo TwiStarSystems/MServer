@@ -64,6 +64,7 @@
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
           <button type="button" class="settings-tab-btn" data-tab="external-backup">☁️ External Backup</button>
           <button type="button" class="settings-tab-btn" data-tab="tools">🛠️ Tools</button>
+          <button type="button" class="settings-tab-btn" data-tab="updates">🔄 Updates</button>
         </nav>
         
         <!-- Stats Section -->
@@ -868,10 +869,68 @@
             </div>
           </div>
         </section>
+
+        <!-- Updates -->
+        <section id="updates-section" class="settings-section">
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>🔄 System Updates</h3>
+              <span class="tool-description">Patch the host OS &amp; Java, and restart the panel service</span>
+              <div class="tool-header-actions">
+                <button class="btn btn-small" onclick="loadOsUpdateStatus()" title="Refresh status">🔄</button>
+              </div>
+            </div>
+            <div class="tool-panel-body">
+              <!-- Status cards -->
+              <div class="update-info-section" style="display:flex; gap:1rem; flex-wrap:wrap;">
+                <div class="info-card">
+                  <label>App Version</label>
+                  <div id="os-status-version" class="version-display">Loading…</div>
+                </div>
+                <div class="info-card">
+                  <label>Pending OS Updates</label>
+                  <div id="os-status-pending" class="version-display">—</div>
+                  <small id="os-status-reboot" class="version-date"></small>
+                </div>
+                <div class="info-card">
+                  <label>Kernel / Java</label>
+                  <div id="os-status-kernel" class="version-display" style="font-size:0.9rem;">—</div>
+                  <small id="os-status-java" class="version-date">—</small>
+                </div>
+              </div>
+
+              <!-- Action controls -->
+              <div class="os-update-controls" style="margin-top:1.25rem;">
+                <p class="settings-description">
+                  Applying updates and restarting the service run as <strong>root</strong> on the host.
+                  Enter the server's <strong>root password</strong> to authorise the action — it is used
+                  once and never stored. (The host's root account must have a password set.)
+                </p>
+                <div class="form-group" style="max-width:360px;">
+                  <label for="os-update-password">Root password</label>
+                  <input type="password" id="os-update-password" autocomplete="off"
+                         placeholder="Required to apply updates / restart">
+                </div>
+                <div class="os-update-buttons" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
+                  <button class="btn btn-small" onclick="runOsUpdate('check')">🔍 Check for updates</button>
+                  <button class="btn btn-small btn-success" onclick="runOsUpdate('apply')">⬇️ Apply OS update</button>
+                  <button class="btn btn-small btn-danger" onclick="restartMserverService()">♻️ Restart service</button>
+                </div>
+              </div>
+
+              <!-- Output log -->
+              <div class="os-update-output-wrap" style="margin-top:1.25rem;">
+                <label>Output</label>
+                <pre id="os-update-output"
+                     style="max-height:340px; overflow:auto; white-space:pre-wrap; word-break:break-word; background:#0b0b0b; color:#dcdcdc; padding:0.75rem; border-radius:6px; margin-top:0.25rem;">Ready.</pre>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
-  
+
   <!-- Add User Modal -->
   <div id="add-user-modal" class="modal">
     <div class="modal-content">

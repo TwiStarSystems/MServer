@@ -9,6 +9,11 @@ set -e
 INSTALL_DIR="/opt/mserver"
 REPO_URL="https://github.com/TwiStarSystems/MServer.git"
 SERVICE_NAME="mserver"
+# Root-owned privileged host-control helper (see mserver-hostctl). Lives OUTSIDE
+# the www-data-writable app dir so the panel can only invoke it via sudo, never
+# rewrite it. The sudoers rule scopes www-data to just this one command.
+HOSTCTL_DEST="/usr/local/sbin/mserver-hostctl"
+SUDOERS_FILE="/etc/sudoers.d/mserver"
 
 # Colors for output
 RED='\033[0;31m'
@@ -285,6 +290,45 @@ install_dependencies() {
     echo "  Java version: $(java -version 2>&1 | head -n 1)"
 }
 
+# Install the root-owned host-control helper + its scoped sudoers rule. This is
+# what lets the (non-root) panel run host updates: the operator supplies the root
+# password per run, and sudo only ever permits this one fixed command.
+install_hostctl_helper() {
+    local src="${SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}/mserver-hostctl"
+    if [ ! -f "$src" ]; then
+        print_warning "mserver-hostctl not found at $src — skipping host-control helper."
+        print_warning "Panel-driven OS updates will be unavailable until it is installed."
+        return 0
+    fi
+
+    print_info "Installing host-control helper to $HOSTCTL_DEST..."
+    install -o root -g root -m 0755 "$src" "$HOSTCTL_DEST"
+
+    # Scoped sudoers rule: www-data may run ONLY the helper, authenticating with
+    # the root password (rootpw) — www-data itself has no password. Validate with
+    # visudo before installing so a bad rule can never lock out sudo.
+    print_info "Installing sudoers rule ($SUDOERS_FILE)..."
+    local tmp
+    tmp="$(mktemp)"
+    cat > "$tmp" <<EOF
+# MServer — allow the panel (www-data) to run ONLY the host-control helper,
+# authenticating with the root password. Managed by install.sh; do not edit.
+Defaults:www-data rootpw
+Defaults:www-data !requiretty
+www-data ALL=(root) $HOSTCTL_DEST
+EOF
+    if visudo -cf "$tmp" >/dev/null 2>&1; then
+        install -o root -g root -m 0440 "$tmp" "$SUDOERS_FILE"
+        rm -f "$tmp"
+        print_success "Host-control helper + sudoers rule installed"
+        print_info "Panel OS updates require the root account to have a password set."
+    else
+        rm -f "$tmp"
+        print_error "Generated sudoers rule failed validation — NOT installing it."
+        print_warning "Panel-driven OS updates will be unavailable."
+    fi
+}
+
 # Abort if the system python3 is older than MServer's minimum (3.10).
 check_python_version() {
     local py_version major minor
@@ -521,7 +565,11 @@ do_install() {
     fi
     
     cd "$INSTALL_DIR"
-    
+
+    # Install the root-owned host-control helper + sudoers rule (enables the
+    # panel's Updates tab and `install.sh os-update`).
+    install_hostctl_helper
+
     # Create .env file with user configuration
     create_env_file
     read_env_port
@@ -541,9 +589,19 @@ do_install() {
 }
 
 # Update existing installation (preserves all configs and data)
+#   do_update             update the app layer only
+#   do_update --with-os   update the app layer, then also patch the host OS/Java
 do_update() {
+    local with_os="false" arg
+    for arg in "$@"; do
+        case "$arg" in
+            --with-os) with_os="true" ;;
+            *) print_error "Unknown update option: $arg"; exit 1 ;;
+        esac
+    done
+
     print_header "Update Installation"
-    
+
     # Check if installation exists
     if [ ! -d "$INSTALL_DIR" ]; then
         print_error "No existing installation found at $INSTALL_DIR"
@@ -714,7 +772,11 @@ do_update() {
     
     # Fix permissions
     set_permissions
-    
+
+    # Refresh the root-owned host-control helper + sudoers rule (so existing
+    # installs gain the Updates tab / os-update capability on update).
+    install_hostctl_helper
+
     # Update systemd service (in case of changes)
     print_info "Updating systemd service..."
     create_service
@@ -739,6 +801,12 @@ do_update() {
         echo ""
         echo "  Updated timestamp: $(date)"
         echo ""
+
+        # Optionally patch the host OS/Java too (one-stop "app + os" update).
+        if [ "$with_os" = "true" ]; then
+            do_os_update
+        fi
+
         show_completion "Update"
     else
         print_error "Update completed with warnings"
@@ -746,6 +814,50 @@ do_update() {
         echo "  sudo journalctl -u mserver -xe"
         exit 1
     fi
+}
+
+# In-place OS / host update (host layer only — never touches msc.db, .env, or app
+# data). Delegates the privileged work to the shared mserver-hostctl helper so the
+# logic is identical whether run from here or triggered by the panel.
+#   do_os_update            apply upgrades (no service restart)
+#   do_os_update --check    dry run: refresh + report pending, apply nothing
+#   do_os_update --restart  apply upgrades, then restart the mserver service
+do_os_update() {
+    local check_only="false" do_restart="false" arg
+    for arg in "$@"; do
+        case "$arg" in
+            --check)   check_only="true" ;;
+            --restart) do_restart="true" ;;
+            *) print_error "Unknown os-update option: $arg"; exit 1 ;;
+        esac
+    done
+
+    # Make sure the helper is installed (e.g. first os-update on an older install).
+    if [ ! -x "$HOSTCTL_DEST" ]; then
+        SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+        install_hostctl_helper
+    fi
+    if [ ! -x "$HOSTCTL_DEST" ]; then
+        print_error "Host-control helper not available at $HOSTCTL_DEST — cannot continue."
+        exit 1
+    fi
+
+    if [ "$check_only" = "true" ]; then
+        print_header "OS Update — Check (dry run)"
+        "$HOSTCTL_DEST" os-check
+        return 0
+    fi
+
+    print_header "OS / Host Update"
+    "$HOSTCTL_DEST" os-update
+
+    if [ "$do_restart" = "true" ]; then
+        restart_services
+    else
+        print_info "mserver service left running (pass --restart to bounce it)."
+    fi
+    echo ""
+    print_success "OS update finished"
 }
 
 # Uninstall
@@ -855,7 +967,21 @@ do_status() {
             du -sh "$INSTALL_DIR/backups" 2>/dev/null || true
         fi
     fi
-    
+
+    # Host OS / patch status (read-only, from the apt cache — run `os-update
+    # --check` for a fresh network refresh).
+    echo ""
+    echo "Host OS Status:"
+    if [ -x "$HOSTCTL_DEST" ]; then
+        "$HOSTCTL_DEST" status || true
+    else
+        echo "  Kernel: $(uname -r)"
+        if [ -f /var/run/reboot-required ]; then
+            print_warning "Reboot required (/var/run/reboot-required present)"
+        fi
+        echo "  (host-control helper not installed — run install/update to enable OS updates)"
+    fi
+
     echo ""
 }
 
@@ -866,16 +992,22 @@ show_usage() {
     echo "Usage: $0 [OPTION]"
     echo ""
     echo "Options:"
-    echo "  install       Fresh installation (default if no option given)"
-    echo "  update        Update existing installation (preserves data)"
-    echo "  status        Show installation status"
-    echo "  uninstall     Remove MServer completely"
-    echo "  help          Show this help message"
+    echo "  install            Fresh installation (default if no option given)"
+    echo "  update             Update the app layer only (preserves data)"
+    echo "  update --with-os   Update the app layer, then also patch the host OS/Java"
+    echo "  os-update          Patch the host OS + Java only (no app/data changes)"
+    echo "  os-update --check  Dry run: report pending OS updates, apply nothing"
+    echo "  os-update --restart  Patch the host, then restart the mserver service"
+    echo "  status             Show installation + host OS status"
+    echo "  uninstall          Remove MServer completely"
+    echo "  help               Show this help message"
     echo ""
     echo "Examples:"
-    echo "  sudo $0 install        # Fresh installation"
-    echo "  sudo $0 update         # Update to latest version"
-    echo "  $0 status              # Check installation status"
+    echo "  sudo $0 install             # Fresh installation"
+    echo "  sudo $0 update              # Update the app to the latest version"
+    echo "  sudo $0 update --with-os    # Update app + patch the host OS"
+    echo "  sudo $0 os-update --check   # See what OS updates are pending"
+    echo "  $0 status                   # Check installation + host status"
     echo ""
 }
 
@@ -894,20 +1026,24 @@ show_menu() {
     
     echo "Please select an option:"
     echo ""
-    echo "  1) Fresh Install      - Complete new installation"
-    echo "  2) Update             - Update existing installation (preserves data)"
-    echo "  3) Status             - Show installation status"
-    echo "  4) Uninstall          - Remove MServer"
-    echo "  5) Exit"
+    echo "  1) Fresh Install       - Complete new installation"
+    echo "  2) Update (App only)   - Update MServer app (preserves data)"
+    echo "  3) Update (App + OS)   - Update the app, then patch the host OS/Java"
+    echo "  4) OS Update           - Patch the host OS + Java only (no app changes)"
+    echo "  5) Status              - Show installation + host OS status"
+    echo "  6) Uninstall           - Remove MServer"
+    echo "  7) Exit"
     echo ""
-    read -p "Enter your choice [1-5]: " choice
+    read -p "Enter your choice [1-7]: " choice
 
     case $choice in
         1) check_root; do_install ;;
         2) check_root; do_update ;;
-        3) do_status ;;
-        4) check_root; do_uninstall ;;
-        5) echo "Goodbye!"; exit 0 ;;
+        3) check_root; do_update --with-os ;;
+        4) check_root; do_os_update ;;
+        5) do_status ;;
+        6) check_root; do_uninstall ;;
+        7) echo "Goodbye!"; exit 0 ;;
         *) print_error "Invalid option"; exit 1 ;;
     esac
 }
@@ -921,7 +1057,13 @@ main() {
             ;;
         update)
             check_root
-            do_update
+            shift
+            do_update "$@"
+            ;;
+        os-update|os_update)
+            check_root
+            shift
+            do_os_update "$@"
             ;;
         status)
             do_status

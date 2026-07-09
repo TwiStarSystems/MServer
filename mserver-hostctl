@@ -1,0 +1,258 @@
+#!/bin/bash
+#
+# mserver-hostctl — privileged host-control helper for MServer.
+#
+# This is the SINGLE, root-owned surface for host-layer operations. The MServer
+# panel runs unprivileged (as www-data) and can trigger these actions only via a
+# tightly-scoped sudoers rule (/etc/sudoers.d/mserver) that authorizes ONLY this
+# one command — so the panel can never run arbitrary root commands. Installed by
+# install.sh to /usr/local/sbin/mserver-hostctl (root:root 0755); it must NOT
+# live inside the www-data-writable app dir, or the boundary would be defeated.
+#
+# Subcommands:
+#   status [--kv]   Report host/update state. Needs NO root (safe for the panel
+#                   to run directly). --kv emits machine-parseable key=value lines.
+#   ensure-deps     Install/verify Java + Python + build deps (idempotent). root.
+#   os-check        Refresh apt lists and report what is pending; applies nothing. root.
+#   os-update       ensure-deps, then apply OS package upgrades + refresh Java. root.
+#   restart         Restart the mserver service (detached, so the caller returns). root.
+#
+# NOTE: the package set in ensure_deps() mirrors install_dependencies()/install_java()
+# in install.sh — keep the two in sync.
+
+set -e
+
+SERVICE_NAME="mserver"
+INSTALL_DIR="/opt/mserver"
+# Newest-first list of Java majors we try to install (matches install.sh).
+JAVA_VERSIONS="25 24 23 22 21"
+
+# ---- output helpers ----
+c_green='\033[0;32m'; c_yellow='\033[1;33m'; c_red='\033[0;31m'; c_blue='\033[0;34m'; c_nc='\033[0m'
+info() { echo -e "${c_blue}→ $*${c_nc}"; }
+ok()   { echo -e "${c_green}✓ $*${c_nc}"; }
+warn() { echo -e "${c_yellow}⚠ $*${c_nc}"; }
+err()  { echo -e "${c_red}✗ $*${c_nc}" >&2; }
+
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        err "This action requires root (the panel runs it via sudo)."
+        exit 1
+    fi
+}
+
+# ---- unprivileged state probes ----
+
+# Number of packages with pending upgrades, read from the current apt cache
+# (no network, no root — reflects the last `apt-get update`).
+count_upgradable() {
+    local n
+    n=$(apt-get -s upgrade 2>/dev/null | awk '/^[0-9]+ upgraded/ {print $1; exit}') || true
+    echo "${n:-0}"
+}
+
+reboot_required() {
+    [ -f /var/run/reboot-required ]
+}
+
+java_version_line() {
+    if command -v java >/dev/null 2>&1; then
+        java -version 2>&1 | head -n1
+    else
+        echo "not installed"
+    fi
+}
+
+app_version() {
+    local vf="$INSTALL_DIR/version" v=""
+    if [ -f "$vf" ]; then
+        v=$(grep -E '^version=' "$vf" 2>/dev/null | tail -n1 | cut -d= -f2-)
+        [ -n "$v" ] || v=$(head -n1 "$vf" 2>/dev/null || true)
+    fi
+    echo "${v:-unknown}"
+}
+
+cmd_status() {
+    local kv="false"
+    [ "${1:-}" = "--kv" ] && kv="true"
+
+    local pending kernel java version rr
+    pending=$(count_upgradable)
+    kernel=$(uname -r)
+    java=$(java_version_line)
+    version=$(app_version)
+    if reboot_required; then rr=1; else rr=0; fi
+
+    if [ "$kv" = "true" ]; then
+        echo "version=$version"
+        echo "pending=$pending"
+        echo "reboot_required=$rr"
+        echo "kernel=$kernel"
+        echo "java=$java"
+    else
+        echo "MServer host status"
+        echo "  App version:      $version"
+        echo "  Pending upgrades: $pending"
+        echo "  Reboot required:  $([ "$rr" -eq 1 ] && echo yes || echo no)"
+        echo "  Kernel:           $kernel"
+        echo "  Java:             $java"
+    fi
+}
+
+# ---- privileged operations ----
+
+# Install the newest available Java JRE (21+): apt packages first (25 → 21),
+# then Eclipse Temurin (Adoptium), then the distro default. Mirrors install.sh.
+install_java() {
+    local pkg="" version codename
+    info "Searching for latest Java in system repositories..."
+    for version in $JAVA_VERSIONS; do
+        if apt-cache show "openjdk-${version}-jre-headless" >/dev/null 2>&1; then
+            pkg="openjdk-${version}-jre-headless"; break
+        fi
+    done
+
+    if [ -n "$pkg" ]; then
+        info "Installing $pkg from system packages..."
+        apt-get install -y "$pkg"
+    else
+        info "Java 21+ not in system repos. Adding Eclipse Temurin (Adoptium)..."
+        apt-get install -y wget apt-transport-https gnupg
+        wget -qO /tmp/adoptium.gpg "https://packages.adoptium.net/artifactory/api/gpg/key/public"
+        gpg --batch --yes --dearmor -o /etc/apt/trusted.gpg.d/adoptium.gpg /tmp/adoptium.gpg
+        rm -f /tmp/adoptium.gpg
+        codename=$(awk -F= '/^VERSION_CODENAME/{print $2}' /etc/os-release)
+        echo "deb https://packages.adoptium.net/artifactory/deb ${codename} main" \
+            > /etc/apt/sources.list.d/adoptium.list
+        apt-get update
+        for version in $JAVA_VERSIONS; do
+            if apt-cache show "temurin-${version}-jre" >/dev/null 2>&1; then
+                pkg="temurin-${version}-jre"; break
+            fi
+        done
+        if [ -n "$pkg" ]; then
+            info "Installing $pkg from Eclipse Temurin..."
+            apt-get install -y "$pkg"
+        else
+            warn "Could not find Java 21+ via Temurin. Installing system default Java."
+            apt-get install -y default-jre-headless
+        fi
+    fi
+
+    # If multiple Java versions are installed, make the newest the system default.
+    if command -v update-java-alternatives >/dev/null 2>&1; then
+        update-java-alternatives --set \
+            "$(update-java-alternatives --list | sort -t' ' -k3 -rV | head -1 | awk '{print $1}')" \
+            2>/dev/null || true
+    fi
+}
+
+# Ensure every host package MServer needs is present (idempotent) + newest Java.
+ensure_deps() {
+    require_root
+    info "Installing/verifying required packages..."
+    apt-get install -y curl wget git unzip
+    apt-get install -y \
+        python3 python3-pip python3-venv python3-dev \
+        build-essential libffi-dev \
+        libjpeg-dev libpng-dev zlib1g-dev
+    install_java
+    ok "Host dependencies present"
+    echo "  Python: $(python3 --version 2>&1)"
+    echo "  Java:   $(java_version_line)"
+}
+
+cmd_os_check() {
+    require_root
+    info "Refreshing package lists (apt-get update)..."
+    apt-get update
+    local pending
+    pending=$(count_upgradable)
+    info "Pending package upgrades: $pending"
+    if [ "$pending" -gt 0 ]; then
+        echo ""
+        info "Packages that would be upgraded:"
+        apt list --upgradable 2>/dev/null | grep -v '^Listing' || true
+    else
+        ok "System packages are up to date"
+    fi
+    echo ""
+    if reboot_required; then
+        warn "A system reboot is required (/var/run/reboot-required present)"
+    else
+        info "No reboot currently flagged"
+    fi
+    echo ""
+    info "Check only — no changes were applied."
+}
+
+cmd_os_update() {
+    require_root
+
+    local kernel_before java_before
+    kernel_before=$(uname -r)
+    java_before=$(java_version_line)
+
+    info "Refreshing package lists (apt-get update)..."
+    apt-get update
+
+    # Guarantee all required deps are present (installs missing ones + newest Java)...
+    ensure_deps
+
+    # ...then patch everything that has an upgrade pending.
+    local pending
+    pending=$(count_upgradable)
+    if [ "$pending" -gt 0 ]; then
+        info "Applying OS package upgrades ($pending pending)..."
+        DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+        ok "OS packages upgraded"
+    else
+        ok "System packages already up to date — nothing to upgrade"
+    fi
+
+    local kernel_after java_after
+    kernel_after=$(uname -r)
+    java_after=$(java_version_line)
+
+    echo ""
+    echo "OS update summary"
+    echo "  Java (before):    $java_before"
+    echo "  Java (after):     $java_after"
+    echo "  Kernel (running): $kernel_after"
+    echo ""
+    if reboot_required; then
+        warn "REBOOT REQUIRED to finish applying updates (run: sudo reboot)"
+    else
+        ok "No reboot required"
+    fi
+    echo ""
+    ok "OS / host update complete"
+}
+
+cmd_restart() {
+    require_root
+    info "Scheduling mserver service restart..."
+    # Detach so the caller — which may BE the mserver process being restarted —
+    # can return its HTTP response before the service is bounced.
+    if command -v systemd-run >/dev/null 2>&1; then
+        systemd-run --quiet --on-active=1 --unit="mserver-restart-$$" \
+            /bin/systemctl restart "$SERVICE_NAME"
+    else
+        setsid bash -c "sleep 1; systemctl restart '$SERVICE_NAME'" >/dev/null 2>&1 &
+    fi
+    ok "Restart scheduled (service will bounce in ~1s)"
+}
+
+usage() {
+    echo "Usage: mserver-hostctl {status [--kv]|ensure-deps|os-check|os-update|restart}"
+}
+
+case "${1:-}" in
+    status)      shift; cmd_status "${1:-}" ;;
+    ensure-deps) ensure_deps ;;
+    os-check)    cmd_os_check ;;
+    os-update)   cmd_os_update ;;
+    restart)     cmd_restart ;;
+    -h|--help|"") usage ;;
+    *)           err "Unknown subcommand: $1"; usage >&2; exit 1 ;;
+esac

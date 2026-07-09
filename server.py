@@ -11284,6 +11284,138 @@ def api_get_current_version():
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== Host / OS Update API ====================
+# The panel runs unprivileged (www-data). Host-layer actions are delegated to the
+# root-owned helper /usr/local/sbin/mserver-hostctl, which is the ONLY command the
+# scoped sudoers rule (installed by install.sh) permits www-data to run as root.
+# Read-only status needs no privilege; applying updates / restarting requires the
+# operator to supply the root password per request (piped to `sudo -S`, never stored).
+
+HOSTCTL_PATH = '/usr/local/sbin/mserver-hostctl'
+
+
+def _hostctl_auth_failed(output):
+    """Heuristic: did sudo reject the supplied password (vs. the command failing)?"""
+    o = (output or '').lower()
+    return ('try again' in o or 'incorrect password' in o
+            or 'password is required' in o or 'authentication failure' in o
+            or 'sorry' in o)
+
+
+def _run_hostctl_sudo(subcmd, password, timeout):
+    """Run `sudo -S -k mserver-hostctl <subcmd>`, feeding the root password on
+    stdin. `-k` forces re-auth every call (no cached credentials). Returns
+    (returncode, combined_output). The password is never logged or returned."""
+    proc = subprocess.run(
+        ['sudo', '-S', '-k', '-p', '', HOSTCTL_PATH, subcmd],
+        input=(password + '\n'),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return proc.returncode, ((proc.stdout or '') + (proc.stderr or ''))
+
+
+@app.route('/api/system/os-status', methods=['GET'])
+@admin_required
+def api_system_os_status():
+    """Read-only host/update status (pending package count, reboot flag, kernel,
+    Java, app version). Runs the helper unprivileged — no password required."""
+    try:
+        result = subprocess.run(
+            [HOSTCTL_PATH, 'status', '--kv'],
+            capture_output=True, text=True, timeout=30
+        )
+    except FileNotFoundError:
+        return jsonify({'error': 'host-control helper not installed', 'detail': HOSTCTL_PATH}), 503
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'host status timed out'}), 504
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if result.returncode != 0:
+        return jsonify({'error': 'host status failed', 'detail': (result.stderr or '').strip()}), 500
+
+    data = {}
+    for line in result.stdout.splitlines():
+        if '=' in line:
+            k, v = line.split('=', 1)
+            data[k.strip()] = v.strip()
+    try:
+        pending = int(data.get('pending', '0'))
+    except ValueError:
+        pending = 0
+    return jsonify({
+        'version': data.get('version', 'unknown'),
+        'pending': pending,
+        'reboot_required': data.get('reboot_required') == '1',
+        'kernel': data.get('kernel', ''),
+        'java': data.get('java', ''),
+    })
+
+
+@app.route('/api/system/os-update', methods=['POST'])
+@admin_required
+def api_system_os_update():
+    """Run the host OS update. Body: {mode: 'check'|'apply', password}.
+    'check' is a dry run (apt refresh + report); 'apply' upgrades packages + Java."""
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode', 'check')
+    password = data.get('password', '')
+    if mode not in ('check', 'apply'):
+        return jsonify({'error': "mode must be 'check' or 'apply'"}), 400
+    if not password:
+        return jsonify({'error': 'Root password is required'}), 400
+
+    subcmd = 'os-check' if mode == 'check' else 'os-update'
+    timeout = 180 if mode == 'check' else 1800  # apt upgrade can take a while
+    try:
+        rc, output = _run_hostctl_sudo(subcmd, password, timeout)
+    except subprocess.TimeoutExpired:
+        return jsonify({'ok': False, 'error': 'operation timed out'}), 504
+    except FileNotFoundError:
+        return jsonify({'ok': False, 'error': 'sudo or host-control helper not found'}), 503
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+    finally:
+        # Best-effort: drop our reference to the password (Python strings are
+        # immutable, so this cannot truly wipe it from memory).
+        password = None
+
+    resp = {'ok': rc == 0, 'output': output, 'returncode': rc}
+    if rc != 0 and _hostctl_auth_failed(output):
+        resp['error'] = ('Authentication failed — check the root password. '
+                         '(Requires the root account to have a password set.)')
+    return jsonify(resp)
+
+
+@app.route('/api/system/service-restart', methods=['POST'])
+@admin_required
+def api_system_service_restart():
+    """Restart the mserver service. Body: {password}. The restart is detached, so
+    this response returns before the service is bounced; the UI then polls to
+    confirm the panel came back."""
+    data = request.get_json(silent=True) or {}
+    password = data.get('password', '')
+    if not password:
+        return jsonify({'error': 'Root password is required'}), 400
+    try:
+        rc, output = _run_hostctl_sudo('restart', password, 30)
+    except subprocess.TimeoutExpired:
+        return jsonify({'ok': False, 'error': 'operation timed out'}), 504
+    except FileNotFoundError:
+        return jsonify({'ok': False, 'error': 'sudo or host-control helper not found'}), 503
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+    finally:
+        password = None
+
+    resp = {'ok': rc == 0, 'output': output, 'returncode': rc}
+    if rc != 0 and _hostctl_auth_failed(output):
+        resp['error'] = 'Authentication failed — check the root password.'
+    return jsonify(resp)
+
+
 # ==================== JAR Bucket Manager ====================
 
 SERVER_EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
