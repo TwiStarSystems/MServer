@@ -5867,12 +5867,12 @@ def is_server_path_allowed(server_path):
         return False
 
 
-def safe_extractall(zipf, dest_dir):
-    """Extract a zip archive, rejecting path-traversal and symlink members.
-
-    zipfile.extractall() sanitizes ".."/absolute names but still happily writes
-    symlink members, which a crafted archive can use to escape dest_dir on a
-    follow-up write. Validate every member before extracting.
+def validate_zip_members(zipf, dest_dir):
+    """Raise ValueError if any member of zipf is unsafe to extract into dest_dir:
+    an absolute or '..'-containing name, a symlink, or a name whose *resolved*
+    target falls outside dest_dir (a plain '..' substring check isn't enough —
+    see issue #14). Callers doing custom member-by-member extraction (e.g.
+    import_world) should call this before writing anything.
     """
     dest = Path(dest_dir).resolve()
     for info in zipf.infolist():
@@ -5885,6 +5885,16 @@ def safe_extractall(zipf, dest_dir):
         target = (dest / name).resolve()
         if target != dest and dest not in target.parents:
             raise ValueError(f'Path escapes destination: {name}')
+
+
+def safe_extractall(zipf, dest_dir):
+    """Extract a zip archive, rejecting path-traversal and symlink members.
+
+    zipfile.extractall() sanitizes ".."/absolute names but still happily writes
+    symlink members, which a crafted archive can use to escape dest_dir on a
+    follow-up write. Validate every member before extracting.
+    """
+    validate_zip_members(zipf, dest_dir)
     zipf.extractall(dest_dir)
 
 # ==================== CSRF Token Endpoint ====================
@@ -7525,13 +7535,6 @@ def import_world(server_id):
             _infos = zipf.infolist()
             names = [i.filename for i in _infos]
 
-            # Security: reject path traversal and symlinks
-            for _info in _infos:
-                if '..' in _info.filename or _info.filename.startswith('/'):
-                    return jsonify({'error': 'Invalid ZIP: contains unsafe paths'}), 400
-                if (_info.external_attr >> 16) & 0o170000 == 0o120000:
-                    return jsonify({'error': 'Invalid ZIP: contains symbolic links'}), 400
-
             # Determine the structure of the world ZIP
             top_level_items = set()
             for n in names:
@@ -7545,6 +7548,14 @@ def import_world(server_id):
                 if world_dir.exists():
                     shutil.rmtree(world_dir)
                 world_dir.mkdir()
+                # Reject traversal/symlink members and members whose resolved
+                # target would land outside world_dir (issue #14) before writing
+                # anything — a substring '..' check alone isn't sufficient.
+                try:
+                    validate_zip_members(zipf, world_dir)
+                except ValueError as e:
+                    shutil.rmtree(world_dir, ignore_errors=True)
+                    return jsonify({'error': f'Invalid ZIP: {e}'}), 400
                 for member in names:
                     if member.endswith('/'):
                         continue
@@ -7558,6 +7569,11 @@ def import_world(server_id):
                 if tmp_dir.exists():
                     shutil.rmtree(tmp_dir)
                 tmp_dir.mkdir()
+                try:
+                    validate_zip_members(zipf, tmp_dir)
+                except ValueError as e:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    return jsonify({'error': f'Invalid ZIP: {e}'}), 400
                 for _info in _infos:
                     if not _info.filename.endswith('/'):
                         zipf.extract(_info, tmp_dir)
