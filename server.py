@@ -11464,13 +11464,25 @@ class JarBucketManager:
 
     def _load_cache(self):
         """Load cached version data from file"""
+        default = {'last_updated': None, 'versions': {}}
         if JAR_CACHE_FILE.exists():
             try:
                 with open(JAR_CACHE_FILE, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError(f'expected a JSON object, got {type(data).__name__}')
+                return data
             except Exception as e:
-                print(f"[JarBucket] Error loading cache: {e}")
-        return {'last_updated': None, 'versions': {}}
+                # Malformed or wrong-shaped cache file (issue #12) — rebuild it on
+                # disk immediately so a corrupt file doesn't keep tripping this on
+                # every restart, rather than just falling back in memory.
+                print(f"[JarBucket] Cache file corrupt, rebuilding: {e}")
+                try:
+                    with open(JAR_CACHE_FILE, 'w') as f:
+                        json.dump(default, f, indent=2)
+                except Exception as write_err:
+                    print(f"[JarBucket] Failed to rebuild cache file: {write_err}")
+        return default
     
     def _save_cache(self):
         """Save version data to cache file"""
