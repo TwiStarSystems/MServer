@@ -11213,7 +11213,10 @@ def restore_all_servers():
             for name in zf.namelist():
                 parts = Path(name).parts
                 # Expected layout: servers/<server_id>/...
-                if len(parts) >= 2 and parts[0] == 'servers':
+                # The id is later used in shutil.rmtree(SERVERS_DIR / sid), so
+                # '..' or any other path-like segment must never be accepted.
+                if (len(parts) >= 2 and parts[0] == 'servers'
+                        and re.fullmatch(r'[A-Za-z0-9_-]+', parts[1])):
                     server_ids_in_archive.add(parts[1])
 
             if not server_ids_in_archive:
@@ -11238,10 +11241,11 @@ def restore_all_servers():
                     if target.exists():
                         shutil.rmtree(target)
 
-            # Extract
+            # Extract (only members under a validated server id)
             for name in zf.namelist():
                 parts = Path(name).parts
-                if len(parts) >= 2 and parts[0] == 'servers':
+                if (len(parts) >= 2 and parts[0] == 'servers'
+                        and parts[1] in server_ids_in_archive):
                     # Security: prevent path traversal
                     safe_relative = Path(*parts)
                     dest = SERVERS_DIR.parent / safe_relative
