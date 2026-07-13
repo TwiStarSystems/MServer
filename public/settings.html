@@ -765,40 +765,6 @@
             </div>
           </div>
 
-          <!-- Manual JAR Downloader (Legacy) -->
-          <div class="tool-panel collapsed">
-            <div class="tool-panel-header collapsible" onclick="toggleToolPanel(this)">
-              <h3>📥 Manual JAR Download</h3>
-              <span class="tool-description">Download JARs from custom URLs (advanced)</span>
-              <span class="collapse-indicator">▼</span>
-            </div>
-            <div class="tool-panel-body" style="display: none;">
-              <div class="jar-downloader-form">
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="download-type">Server Type</label>
-                    <input type="text" id="download-type" class="form-control" placeholder="e.g., vanilla, paper, forge" required>
-                  </div>
-                  <div class="form-group">
-                    <label for="download-version">Version</label>
-                    <input type="text" id="download-version" class="form-control" placeholder="e.g., 1.21.4" required>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label for="download-url">Download URL</label>
-                  <input type="url" id="download-url" class="form-control" placeholder="https://..." required>
-                </div>
-                <div class="form-group">
-                  <button id="download-jar-btn" class="btn btn-primary" onclick="downloadJarManual()">
-                    📥 Download JAR
-                  </button>
-                </div>
-              </div>
-              
-              <div id="download-status" class="jar-status"></div>
-            </div>
-          </div>
-          
           <!-- Server Backup & Restore -->
           <div class="tool-panel">
             <div class="tool-panel-header">

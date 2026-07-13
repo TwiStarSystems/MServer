@@ -41,7 +41,8 @@ Almost all server logic lives in `server.py`. It is organized as a set of **mana
 | Singleton | Class | Responsibility |
 |-----------|-------|----------------|
 | `settings_manager` | `SettingsManager` | App settings + branding, persisted to `configs/` |
-| `user_manager` | `UserManager` | Users, roles, auth, MFA/TOTP. Defines the `ROLES` hierarchy |
+| `user_manager` | `UserManager` | Users, auth, MFA/TOTP |
+| `group_manager` | `GroupManager` | RBAC groups + their permission lists (`'*'` wildcard = admin group) |
 | `server_manager` | `ServerManager` | CRUD for server configs; owns the live `ServerInstance` map |
 | (per server) | `ServerInstance` | Wraps one running MC server: subprocess, stdin/stdout, status |
 | `backup_scheduler` | `BackupScheduler` | APScheduler-driven automated backups + retention |
@@ -59,10 +60,11 @@ The `__main__` block calls `parse_arguments()` → `run_server()` → `socketio.
 - **`api_manager.py`** defines a separate `api_v1` Blueprint (`/api/v1/*`) — the **public, API-key-authenticated** API (key CRUD, server status/start/stop/restart/command). Registered in `server.py` via `init_api_manager(app)`. This is distinct from the session-authenticated `/api/*` routes the web UI uses.
 
 ### Auth & authorization model (security-critical)
-Session-cookie auth for the web UI; **role hierarchy** `ROLES = {public:0, user:1, admin:2}`. Decorators in `server.py` enforce access — always use these on new routes:
-- `@login_required` — any approved logged-in user.
-- `@role_required(min_role)` / `@admin_required` — role-gated.
-- `@server_access_required` — **the correct guard for any `/api/servers/<server_id>/...` route**; calls `can_access_server()` = admin OR `server_config.owner == current user`. Using `@login_required` instead on a per-server route is an IDOR.
+Session-cookie auth for the web UI; authorization is **group/permission-based** (no role hierarchy): each user belongs to a group (`group_manager`), each group holds a list of permission strings (e.g. `panel.jars.manage`), and the `'*'` wildcard marks an admin group. Decorators in `server.py` enforce access — always use these on new routes:
+- `@login_required` — any logged-in user.
+- `@permission_required(*perms)` — requires ALL listed permissions (via `user_manager.user_has_permission`); the standard guard for admin/settings routes.
+- `@admin_required` — user's group must have the `'*'` wildcard (`group_manager.is_admin_group`).
+- `@server_access_required` — **the correct guard for any `/api/servers/<server_id>/...` route**; calls `can_access_server()` = `servers.access.all` permission OR `server_config.owner == current user` OR the user's group is in the server's shared-group list. Using `@login_required` instead on a per-server route is an IDOR.
 - `get_current_user()` → `(user_id, user_dict)`.
 
 **Path containment:** per-server file routes use `is_safe_path(base, requested)` to prevent traversal, where `base` is the server's stored `serverPath`. Because that base is trusted, `serverPath` itself must stay inside `SERVERS_DIR` — enforced by `is_server_path_allowed()` at create time and by stripping `serverPath` from `update_server`. Don't reintroduce a user-controlled base directory. Zip extraction of user uploads goes through `safe_extractall()` (rejects `..`, absolute paths, and symlink members) — use it, not `zipfile.extractall`, for any user-supplied archive.

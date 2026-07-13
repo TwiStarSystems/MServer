@@ -32,8 +32,6 @@ class APIPermission:
     READ = 'read'           # Read server info, status
     WRITE = 'write'         # Send commands, modify settings
     ADMIN = 'admin'         # Full access including user management
-    SERVERS = 'servers'     # Server management (create, delete)
-    PLAYERS = 'players'     # Player-related queries
     CONSOLE = 'console'     # Console access (send commands)
 
 
@@ -455,9 +453,7 @@ def api_docs():
         'permissions': {
             'read': 'Read server information and status',
             'write': 'Modify server settings',
-            'servers': 'Create and delete servers',
             'console': 'Send console commands',
-            'players': 'Query player information',
             'admin': 'Full administrative access'
         },
         'endpoints': {
