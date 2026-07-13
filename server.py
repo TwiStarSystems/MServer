@@ -11128,29 +11128,39 @@ def backup_all_servers():
     Running servers are NOT stopped; their files are snapshotted live.
     The archive preserves the directory structure: servers/<server_id>/...
     """
+    import tempfile
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         archive_name = f'mserver_backup_all_{timestamp}.zip'
 
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-            if SERVERS_DIR.exists():
-                for server_dir in sorted(SERVERS_DIR.iterdir()):
-                    if not server_dir.is_dir():
-                        continue
-                    for file_path in server_dir.rglob('*'):
-                        if file_path.is_file():
-                            # Store as servers/<server_id>/... so it restores cleanly
-                            arcname = file_path.relative_to(SERVERS_DIR.parent)
-                            try:
-                                zf.write(file_path, arcname)
-                            except (PermissionError, OSError):
-                                pass  # Skip locked / unreadable files
+        # Build the archive on disk under UPLOADS_DIR (not /tmp, which may be
+        # RAM-backed tmpfs) so multi-GB installs don't get buffered in memory.
+        tmp = tempfile.NamedTemporaryFile(suffix='.zip', dir=UPLOADS_DIR, delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        try:
+            with zipfile.ZipFile(tmp_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                if SERVERS_DIR.exists():
+                    for server_dir in sorted(SERVERS_DIR.iterdir()):
+                        if not server_dir.is_dir():
+                            continue
+                        for file_path in server_dir.rglob('*'):
+                            if file_path.is_file():
+                                # Store as servers/<server_id>/... so it restores cleanly
+                                arcname = file_path.relative_to(SERVERS_DIR.parent)
+                                try:
+                                    zf.write(file_path, arcname)
+                                except (PermissionError, OSError):
+                                    pass  # Skip locked / unreadable files
 
-        buf.seek(0)
-        response = make_response(buf.read())
-        response.headers['Content-Type'] = 'application/zip'
-        response.headers['Content-Disposition'] = f'attachment; filename="{archive_name}"'
+            response = send_file(tmp_path, as_attachment=True,
+                                 download_name=archive_name, mimetype='application/zip')
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        # send_file already holds the file open; unlinking now still lets the
+        # download stream to completion (Linux) and guarantees cleanup.
+        tmp_path.unlink(missing_ok=True)
         return response
 
     except Exception as e:
@@ -11181,18 +11191,23 @@ def restore_all_servers():
     if mode not in ('merge', 'replace'):
         return jsonify({'error': 'Invalid mode; use "merge" or "replace"'}), 400
 
+    import tempfile
+    tmp_path = None
     try:
-        data = backup_file.read()
-        buf = io.BytesIO(data)
+        # Stream the upload to disk instead of read()-ing it into RAM —
+        # MAX_CONTENT_LENGTH allows archives far larger than available memory.
+        tmp = tempfile.NamedTemporaryFile(suffix='.zip', dir=UPLOADS_DIR, delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        backup_file.save(tmp_path)
 
-        if not zipfile.is_zipfile(buf):
+        if not zipfile.is_zipfile(tmp_path):
             return jsonify({'error': 'Uploaded file is not a valid ZIP archive'}), 400
 
-        buf.seek(0)
         restored = []
         skipped = []
 
-        with zipfile.ZipFile(buf, 'r') as zf:
+        with zipfile.ZipFile(tmp_path, 'r') as zf:
             # Collect server IDs inside the archive (top-level dirs under servers/)
             server_ids_in_archive = set()
             for name in zf.namelist():
@@ -11257,6 +11272,9 @@ def restore_all_servers():
         return jsonify({'error': 'Corrupt or invalid ZIP archive'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        if tmp_path:
+            tmp_path.unlink(missing_ok=True)
 
 
 # ==================== System Stats API ====================
@@ -12566,10 +12584,10 @@ class JarBucketManager:
         except Exception as e:
             return {'success': False, 'error': f'Failed to delete: {str(e)}'}
 
-    def create_backup_zip(self):
-        """Zip up every downloaded JAR/executable, preserving the <type>/<filename> layout."""
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+    def create_backup_zip(self, dest_path):
+        """Zip up every downloaded JAR/executable into dest_path (a file on disk,
+        not memory — the bucket can hold many GB), preserving the <type>/<filename> layout."""
+        with zipfile.ZipFile(dest_path, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
             if SERVER_EXECUTABLES_DIR.exists():
                 for file_path in sorted(SERVER_EXECUTABLES_DIR.rglob('*')):
                     if file_path.is_file():
@@ -12578,19 +12596,15 @@ class JarBucketManager:
                             zf.write(file_path, arcname)
                         except (PermissionError, OSError):
                             pass  # Skip locked / unreadable files
-        buf.seek(0)
-        return buf
 
-    def restore_from_zip(self, zip_bytes):
-        """Restore JARs from an uploaded backup ZIP into serverexecutables/, merging with what's there."""
-        buf = io.BytesIO(zip_bytes)
-        if not zipfile.is_zipfile(buf):
+    def restore_from_zip(self, zip_path):
+        """Restore JARs from a backup ZIP file on disk into serverexecutables/, merging with what's there."""
+        if not zipfile.is_zipfile(zip_path):
             return {'success': False, 'error': 'Uploaded file is not a valid ZIP archive'}
 
-        buf.seek(0)
         SERVER_EXECUTABLES_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            with zipfile.ZipFile(buf, 'r') as zf:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
                 safe_extractall(zf, SERVER_EXECUTABLES_DIR)
                 restored = sum(1 for info in zf.infolist() if not info.is_dir())
         except ValueError as e:
@@ -12788,13 +12802,25 @@ def api_jar_bucket_delete():
 @permission_required('panel.jars.manage')
 def api_jar_bucket_backup_all():
     """Zip up every downloaded server JAR/executable and stream it for download."""
+    import tempfile
     try:
-        buf = jar_bucket.create_backup_zip()
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         archive_name = f'mserver_jars_backup_{timestamp}.zip'
-        response = make_response(buf.read())
-        response.headers['Content-Type'] = 'application/zip'
-        response.headers['Content-Disposition'] = f'attachment; filename="{archive_name}"'
+        # Build the archive on disk under UPLOADS_DIR (not /tmp, which may be
+        # RAM-backed tmpfs) so a multi-GB bucket doesn't get buffered in memory.
+        tmp = tempfile.NamedTemporaryFile(suffix='.zip', dir=UPLOADS_DIR, delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        try:
+            jar_bucket.create_backup_zip(tmp_path)
+            response = send_file(tmp_path, as_attachment=True,
+                                 download_name=archive_name, mimetype='application/zip')
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        # send_file already holds the file open; unlinking now still lets the
+        # download stream to completion (Linux) and guarantees cleanup.
+        tmp_path.unlink(missing_ok=True)
         return response
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -12812,7 +12838,20 @@ def api_jar_bucket_restore_all():
     if not backup_file.filename.lower().endswith('.zip'):
         return jsonify({'error': 'Only ZIP archives are supported'}), 400
 
-    result = jar_bucket.restore_from_zip(backup_file.read())
+    import tempfile
+    tmp_path = None
+    try:
+        # Stream the upload to disk instead of read()-ing it into RAM.
+        tmp = tempfile.NamedTemporaryFile(suffix='.zip', dir=UPLOADS_DIR, delete=False)
+        tmp_path = Path(tmp.name)
+        tmp.close()
+        backup_file.save(tmp_path)
+        result = jar_bucket.restore_from_zip(tmp_path)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if tmp_path:
+            tmp_path.unlink(missing_ok=True)
     if result.get('success'):
         return jsonify(result)
     return jsonify(result), 400
