@@ -283,15 +283,6 @@ def mc_version_is_modern(v):
     return major >= 26 or (major == 1 and minor >= 26)
 
 
-def mc_version_is_legacy(v):
-    """Return True if version is in the legacy (<=1.21.x) era."""
-    m = re.match(r'(\d+)\.(\d+)', str(v))
-    if not m:
-        return True  # unparseable defaults to legacy
-    major, minor = int(m.group(1)), int(m.group(2))
-    return major == 1 and minor <= 21
-
-
 def compare_mc_versions(v1, v2):
     """Compare two MC version strings. Returns -1, 0, or 1."""
     t1 = _parse_mc_version_tuple(v1)
