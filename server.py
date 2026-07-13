@@ -1936,9 +1936,13 @@ class MessageScheduler:
 
     def _build_command(self, msg, is_bedrock):
         msg_type = msg['msgType']
-        message = msg['message']
-        target = msg['target']
-        color = msg['color']
+        # Sanitize at send time so rows created before this hardening (or via
+        # the raw API) can't smuggle a second console command past stdin.
+        message = _safe_console_text(msg['message'])
+        target = _safe_message_target(msg['target'])
+        color = msg['color'] if msg['color'] in VALID_MESSAGE_COLORS else 'white'
+        if not target:
+            return None
         safe = message.replace('\\', '\\\\').replace('"', '\\"')
 
         if msg_type == 'say':
@@ -2145,7 +2149,7 @@ class MessageScheduler:
         is_bedrock = server_config and server_config.get('category') == 'bedrock'
         command = self._build_command(config, is_bedrock)
         if not command:
-            return False, "Invalid message type"
+            return False, "Invalid message type or target"
         instance.send_command(command)
         return True, command
 
@@ -8433,6 +8437,28 @@ def _safe_console_text(text):
     return re.sub(r'[\r\n]+', ' ', str(text or '')).strip()
 
 
+VALID_MESSAGE_COLORS = {
+    'black', 'dark_blue', 'dark_green', 'dark_aqua', 'dark_red',
+    'dark_purple', 'gold', 'gray', 'dark_gray', 'blue', 'green',
+    'aqua', 'red', 'light_purple', 'yellow', 'white'
+}
+
+
+def _safe_message_target(target):
+    """Validate a message target for use in a single console command line.
+
+    Accepts a selector (@a/@p/@r/@s/@e, optionally with one [...] argument
+    block) or a player name (letters/digits/underscore; interior spaces
+    allowed for Bedrock gamertags). Returns the trimmed target, or None —
+    anything else (newlines especially) could smuggle a second command."""
+    target = (target or '').strip()
+    if re.match(r'^@[aprse](\[[^\[\]\r\n]*\])?$', target):
+        return target
+    if re.match(r'^[A-Za-z0-9_][A-Za-z0-9_ ]{0,31}$', target):
+        return target
+    return None
+
+
 def _name_from_json_by_uuid(server_path, filename, uuid):
     """Resolve a player's name from a Minecraft list file (ops/whitelist/banned) by uuid."""
     f = server_path / filename
@@ -8657,8 +8683,8 @@ def message_players(server_id):
     """Send a message to players via console commands (say/msg/tellraw/title/actionbar)"""
     data = request.get_json()
     msg_type = data.get('type', 'chat')
-    target = data.get('target', '@a').strip()
-    message = data.get('message', '').strip()
+    target = _safe_message_target(data.get('target', '@a'))
+    message = _safe_console_text(data.get('message', ''))
     color = data.get('color', 'white')
     bold = data.get('bold', False)
     italic = data.get('italic', False)
@@ -8668,18 +8694,15 @@ def message_players(server_id):
 
     if not message:
         return jsonify({'error': 'Message is required'}), 400
+    if not target:
+        return jsonify({'error': 'Invalid target: use @a/@p/@r/@s/@e or a player name'}), 400
 
     server_config = server_manager.get_server_config(server_id)
     is_bedrock = server_config and server_config.get('category') == 'bedrock'
 
     safe = message.replace('\\', '\\\\').replace('"', '\\"')
 
-    VALID_COLORS = {
-        'black', 'dark_blue', 'dark_green', 'dark_aqua', 'dark_red',
-        'dark_purple', 'gold', 'gray', 'dark_gray', 'blue', 'green',
-        'aqua', 'red', 'light_purple', 'yellow', 'white'
-    }
-    if color not in VALID_COLORS:
+    if color not in VALID_MESSAGE_COLORS:
         color = 'white'
 
     if msg_type == 'say':
