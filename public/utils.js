@@ -143,3 +143,41 @@ function showNotification(message, type = 'info') {
     }
   }, 5000);
 }
+
+/**
+ * Modal stack management.
+ *
+ * Every `.modal` in the app shares the same CSS z-index, so which modal
+ * is drawn on top when two happen to be open at once (e.g. a user opens
+ * their own profile modal via the top bar while an admin "edit user"
+ * modal is still open) depends on DOM order rather than open order — the
+ * later-opened modal can end up hidden behind the first with no way to
+ * interact with it. Watch for any `.modal` becoming visible (covers both
+ * the `.active` class and `style.display = 'flex'` patterns used across
+ * the codebase) and raise it above whatever else is currently showing.
+ */
+(function setupModalStacking() {
+  let topModalZIndex = 1000; // matches .modal's default CSS z-index
+  let topModalEl = null;
+
+  function isModalVisible(el) {
+    return el.classList.contains('active') || el.style.display === 'flex';
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      const el = mutation.target;
+      if (!(el instanceof Element) || !el.classList.contains('modal')) continue;
+      if (el === topModalEl || !isModalVisible(el)) continue;
+      topModalZIndex += 1;
+      topModalEl = el;
+      el.style.zIndex = String(topModalZIndex);
+    }
+  });
+
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+    subtree: true,
+  });
+})();
