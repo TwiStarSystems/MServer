@@ -32,6 +32,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from enum import Enum
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from functools import wraps
@@ -176,6 +177,34 @@ limiter = Limiter(
     default_limits=[_env_str('RATE_LIMIT_DEFAULT', '100 per 15 minutes')],
     storage_uri="memory://"
 )
+
+# Flask-Limiter only wraps HTTP routes — it has no hook into SocketIO event
+# handlers, so 'command'/'subscribe' spam could bypass the HTTP-only limits.
+# This is a minimal, independent per-connection sliding-window counter keyed by
+# the socket session id, applied to the socketio.on() handlers below.
+SOCKET_COMMAND_RATE_LIMIT = _env_int('SOCKET_COMMAND_RATE_LIMIT', 20)            # commands
+SOCKET_COMMAND_RATE_WINDOW = _env_int('SOCKET_COMMAND_RATE_WINDOW_SECONDS', 10)  # per N seconds
+SOCKET_SUBSCRIBE_RATE_LIMIT = _env_int('SOCKET_SUBSCRIBE_RATE_LIMIT', 30)
+SOCKET_SUBSCRIBE_RATE_WINDOW = _env_int('SOCKET_SUBSCRIBE_RATE_WINDOW_SECONDS', 10)
+
+_socket_rate_lock = threading.Lock()
+_socket_rate_hits = defaultdict(deque)  # (sid, event) -> deque[monotonic timestamps]
+
+
+def _socket_rate_limited(event, limit, window_seconds):
+    """True if this socket connection has exceeded `limit` hits of `event`
+    within the trailing `window_seconds`; otherwise records this hit and
+    returns False."""
+    key = (request.sid, event)
+    now = time.monotonic()
+    with _socket_rate_lock:
+        hits = _socket_rate_hits[key]
+        while hits and now - hits[0] > window_seconds:
+            hits.popleft()
+        if len(hits) >= limit:
+            return True
+        hits.append(now)
+        return False
 
 # Configuration
 PORT = _env_int('PORT', 3000)
@@ -13337,6 +13366,9 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     """Handle client disconnection"""
+    with _socket_rate_lock:
+        for key in [k for k in _socket_rate_hits if k[0] == request.sid]:
+            del _socket_rate_hits[key]
     print('Client disconnected from WebSocket')
 
 @socketio.on('command')
@@ -13346,10 +13378,14 @@ def handle_command(data):
     if 'user_id' not in session:
         emit('message', {'type': 'error', 'data': 'Not authenticated\n'})
         return
-    
+
+    if _socket_rate_limited('command', SOCKET_COMMAND_RATE_LIMIT, SOCKET_COMMAND_RATE_WINDOW):
+        emit('message', {'type': 'error', 'data': 'Rate limit exceeded — slow down.\n'})
+        return
+
     server_id = data.get('serverId')
     command = data.get('command', '')
-    
+
     if server_id:
         # Check if user has access to this server
         user = user_manager.get_user(session['user_id'])
@@ -13377,7 +13413,10 @@ def handle_subscribe(data):
     # Verify user is authenticated
     if 'user_id' not in session:
         return
-    
+
+    if _socket_rate_limited('subscribe', SOCKET_SUBSCRIBE_RATE_LIMIT, SOCKET_SUBSCRIBE_RATE_WINDOW):
+        return
+
     server_id = data.get('serverId')
     if server_id:
         # Check if user has access to this server
