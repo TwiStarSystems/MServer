@@ -3099,56 +3099,42 @@ function onVersionChangeSelection() {
   submitBtn.disabled = false;
 }
 
+function parseMcVersionTuple(v) {
+  // Mirrors server.py's _parse_mc_version_tuple: strip a modloader suffix
+  // (e.g. '1.21.3-53.0.26' -> '1.21.3', '1.20.5-pre1' -> '1.20.5') before
+  // pulling out up to 3 numeric groups. Unlike a single leading-run regex,
+  // this doesn't get confused by weekly snapshot ids like '24w14a'.
+  const base = String(v).split('-')[0];
+  const parts = (base.match(/\d+/g) || []).map(Number).slice(0, 3);
+  while (parts.length < 3) parts.push(0);
+  return parts;
+}
+
 function compareVersions(v1, v2) {
   // Enhanced version comparison for Minecraft versioning
-  // Handles both old (1.20.4) and new (1.26.1) numbering systems
-  
-  // Remove any non-numeric prefixes
-  const cleanVersion = (v) => {
-    const match = v.match(/([\d.]+)/);
-    return match ? match[1] : v;
-  };
-  
-  const clean1 = cleanVersion(v1);
-  const clean2 = cleanVersion(v2);
-  
-  const parts1 = clean1.split('.').map(p => parseInt(p) || 0);
-  const parts2 = clean2.split('.').map(p => parseInt(p) || 0);
-  
-  // Ensure at least 3 parts for comparison
-  while (parts1.length < 3) parts1.push(0);
-  while (parts2.length < 3) parts2.push(0);
-  
-  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-    const p1 = parts1[i] || 0;
-    const p2 = parts2[i] || 0;
-    if (p1 > p2) return 1;
-    if (p1 < p2) return -1;
+  // Handles both old (1.20.4) and new (1.26.1) numbering systems, plus
+  // pre-release/RC/modloader suffixes (e.g. '1.20.5-pre1', '1.20.1-47.2.0')
+  const t1 = parseMcVersionTuple(v1);
+  const t2 = parseMcVersionTuple(v2);
+
+  for (let i = 0; i < 3; i++) {
+    if (t1[i] > t2[i]) return 1;
+    if (t1[i] < t2[i]) return -1;
   }
   return 0;
 }
 
 function isVersionBelow126(version) {
-  // Check if a version is below 1.26
-  const cleanVersion = (v) => {
-    const match = v.match(/([\d.]+)/);
-    return match ? match[1] : v;
-  };
-  
-  const clean = cleanVersion(version);
-  const parts = clean.split('.').map(p => parseInt(p) || 0);
-  
-  if (parts.length === 0) return true;
-  
-  // Major version check
-  if (parts[0] < 1) return true;
-  if (parts[0] > 1) return false;
-  
-  // Minor version check (1.x)
-  if (parts.length < 2) return true;
-  if (parts[1] < 26) return true;
-  
-  return false;
+  // Check if a version is below 1.26 (i.e. NOT in the modern/1.26+ world
+  // format era). Mirrors server.py's mc_version_is_modern (inverted) so the
+  // client-side warning agrees with the server's actual era-gating.
+  const m = String(version).match(/(\d+)\.(\d+)/);
+  if (!m) return true;
+  const major = parseInt(m[1], 10);
+  const minor = parseInt(m[2], 10);
+  // '1.26', '1.27' ... OR new-scheme '26.1', '27.x'
+  const modern = major >= 26 || (major === 1 && minor >= 26);
+  return !modern;
 }
 
 async function submitVersionChange(e) {
