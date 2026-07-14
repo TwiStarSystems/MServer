@@ -4478,13 +4478,29 @@ async function loadBackupSchedule() {
 function openScheduleModal() {
   const modal = document.getElementById('schedule-modal');
   modal.classList.add('active');
-  
-  // Load current schedule if exists
+
+  // Reset to defaults first, then load the saved schedule (if any) over them,
+  // so stale values from a previously cancelled edit never resurface.
+  resetScheduleForm();
   loadScheduleIntoModal();
 }
 
 function closeScheduleModal() {
   document.getElementById('schedule-modal').classList.remove('active');
+  resetScheduleForm();
+}
+
+function resetScheduleForm() {
+  document.getElementById('schedule-type').value = 'daily';
+  document.getElementById('schedule-hour').value = 3;
+  document.getElementById('schedule-minute').value = 0;
+  document.getElementById('schedule-day').value = 0;
+  document.getElementById('schedule-cron').value = '';
+  document.getElementById('schedule-compression-level').value = 6;
+  document.getElementById('schedule-compression-level-val').textContent = 6;
+  document.getElementById('schedule-stop-server').checked = true;
+  document.getElementById('schedule-restart-after').checked = true;
+  updateScheduleOptions();
 }
 
 async function loadScheduleIntoModal() {
@@ -4500,7 +4516,6 @@ async function loadScheduleIntoModal() {
       document.getElementById('schedule-minute').value = s.minute || 0;
       document.getElementById('schedule-day').value = s.dayOfWeek || 0;
       document.getElementById('schedule-cron').value = s.cron || '';
-      document.getElementById('schedule-max-backups').value = s.maxBackups || 7;
       document.getElementById('schedule-stop-server').checked = s.stopServer !== false;
       document.getElementById('schedule-restart-after').checked = s.restartAfter !== false;
 
