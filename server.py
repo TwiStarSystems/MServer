@@ -4771,8 +4771,8 @@ class ServerManager:
 
     def restart_server(self, server_id):
         """Restart a server: stop it (if running), wait for the process to exit,
-        then start it again. Runs in a background thread so the request returns
-        immediately. Returns (True, message)."""
+        pause 5s so the stopped state is visible, then start it again. Runs in a
+        background thread so the request returns immediately. Returns (True, message)."""
         def _worker():
             cur = self.servers.get(server_id)
             if cur and cur.is_running():
@@ -4783,6 +4783,7 @@ class ServerManager:
                     if not inst or not inst.is_running():
                         break
                     time.sleep(0.5)
+            time.sleep(5)
             self.start_server(server_id)
         threading.Thread(target=_worker, daemon=True).start()
         return True, "Server restarting"
@@ -8176,6 +8177,26 @@ def stop_server(server_id):
         'serverLifecycle', user, {'server_id': server_id, 'action': 'stop', 'server_name': server_name},
         target_id=server_id, execute_fn=do_stop,
         description=f'{user.get("username","Unknown")} stopped server "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
+
+@app.route('/api/servers/<server_id>/restart', methods=['POST'])
+@server_access_required
+def restart_server(server_id):
+    """Restart a server: stop it, then start it again after a short delay"""
+    user_id, user = get_current_user()
+    cfg = server_manager.get_server_config(server_id)
+    server_name = cfg.get('name', server_id) if cfg else server_id
+
+    def do_restart():
+        success, message = server_manager.restart_server(server_id)
+        if success:
+            return jsonify({'success': True, 'message': message}), 200
+        return jsonify({'error': message}), 400
+
+    result, status = check_action_policy(
+        'serverLifecycle', user, {'server_id': server_id, 'action': 'restart', 'server_name': server_name},
+        target_id=server_id, execute_fn=do_restart,
+        description=f'{user.get("username","Unknown")} restarted server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
 
 @app.route('/api/servers/<server_id>/kill', methods=['POST'])

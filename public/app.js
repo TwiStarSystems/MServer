@@ -1065,6 +1065,7 @@ function updateServerStatus(status, isRunning) {
   const indicator = document.getElementById('status-indicator');
   const text = document.getElementById('status-text');
   const startBtn = document.getElementById('start-btn');
+  const restartBtn = document.getElementById('restart-btn');
   const stopBtn = document.getElementById('stop-btn');
   const killBtn = document.getElementById('kill-btn');
   const terminalInput = document.getElementById('terminal-input');
@@ -1095,11 +1096,13 @@ function updateServerStatus(status, isRunning) {
   
   // Button states based on status
   const canStart = status === 'stopped';
+  const canRestart = status === 'running';
   const canStop = status === 'running' || status === 'unresponsive';
   const canKill = status === 'starting' || status === 'running' || status === 'stopping' || status === 'unresponsive';
   const canCommand = status === 'running';
-  
+
   startBtn.disabled = !canStart;
+  restartBtn.disabled = !canRestart;
   stopBtn.disabled = !canStop;
   killBtn.disabled = !canKill;
   terminalInput.disabled = !canCommand;
@@ -1437,6 +1440,21 @@ async function stopServer() {
     }
   } catch (error) {
     showNotification('Failed to stop server: ' + error.message, 'error');
+  }
+}
+
+async function restartServer() {
+  if (!currentServerId) return;
+
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/restart`, { method: 'POST' });
+    if (result.pending) return;
+    if (result.success) {
+      appendTerminalOutput('Restarting server...\n');
+      updateServerStatus('stopping', true);
+    }
+  } catch (error) {
+    showNotification('Failed to restart server: ' + error.message, 'error');
   }
 }
 
@@ -4260,6 +4278,11 @@ async function importBackup(input) {
   if (!currentServerId || !input.files || !input.files[0]) return;
   const file = input.files[0];
   input.value = '';
+  await importBackupFile(file);
+}
+
+async function importBackupFile(file) {
+  if (!currentServerId || !file) return;
   showNotification(`Uploading ${file.name}…`, 'info');
   const formData = new FormData();
   formData.append('file', file);
@@ -6444,6 +6467,41 @@ async function openPlayerNbtEditor(uuid, path) {
   showNotification('Could not find player data file', 'error');
 }
 
+// ==================== Drag & Drop Upload ====================
+// Generic drop-zone wiring: highlights `zoneEl` while a file is dragged over it
+// and hands the dropped FileList to `onFilesDropped`. Uses an enter/leave counter
+// so hovering over child elements (e.g. table rows) doesn't cause flicker.
+function setupDropZone(zoneEl, onFilesDropped) {
+  if (!zoneEl) return;
+  let dragCounter = 0;
+
+  zoneEl.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+    dragCounter++;
+    zoneEl.classList.add('drag-active');
+  });
+
+  zoneEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+
+  zoneEl.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragCounter = Math.max(0, dragCounter - 1);
+    if (dragCounter === 0) zoneEl.classList.remove('drag-active');
+  });
+
+  zoneEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    zoneEl.classList.remove('drag-active');
+    const files = e.dataTransfer ? e.dataTransfer.files : null;
+    if (files && files.length > 0) onFilesDropped(files);
+  });
+}
+
 // ==================== Event Listeners ====================
 // Note: Utility functions (formatBytes, escapeHtml) are in utils.js
 
@@ -6495,11 +6553,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Server actions
   const startBtn = document.getElementById('start-btn');
+  const restartBtn = document.getElementById('restart-btn');
   const stopBtn = document.getElementById('stop-btn');
   const killBtn = document.getElementById('kill-btn');
   const editBtn = document.getElementById('edit-server-btn');
   const deleteBtn = document.getElementById('delete-server-btn');
   if (startBtn) startBtn.onclick = startServer;
+  if (restartBtn) restartBtn.onclick = restartServer;
   if (stopBtn) stopBtn.onclick = stopServer;
   if (killBtn) killBtn.onclick = killServer;
   if (editBtn) editBtn.onclick = openEditServerModal;
@@ -6555,7 +6615,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     };
   }
-  
+
+  setupDropZone(document.querySelector('.file-explorer'), async (files) => {
+    for (const file of files) {
+      await uploadFile(file);
+    }
+  });
+
   // Mods controls
   const refreshModsBtn = document.getElementById('refresh-mods-btn');
   const modUpload = document.getElementById('mod-upload');
@@ -6575,7 +6641,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     };
   }
-  
+
+  // Dropping directly onto the Plugins or Mods listing uploads straight to that
+  // folder, skipping the folder-choice dialog since the drop target already says which.
+  const pluginsListEl = document.getElementById('plugins-list');
+  const modsListEl = document.getElementById('mods-list');
+  setupDropZone(pluginsListEl ? pluginsListEl.closest('.mods-section') : null, async (files) => {
+    for (const file of files) {
+      await uploadMod(file, 'plugins');
+    }
+  });
+  setupDropZone(modsListEl ? modsListEl.closest('.mods-section') : null, async (files) => {
+    for (const file of files) {
+      await uploadMod(file, 'mods');
+    }
+  });
+
   // File editor
   const saveFileBtn = document.getElementById('save-file-btn');
   if (saveFileBtn) saveFileBtn.onclick = saveFile;
@@ -6588,7 +6669,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (createBackupBtn) createBackupBtn.onclick = openCreateBackupModal;
   if (scheduleBackupBtn) scheduleBackupBtn.onclick = openScheduleModal;
   if (refreshBackupsBtn) refreshBackupsBtn.onclick = loadBackups;
-  
+
+  setupDropZone(document.querySelector('.backup-list'), async (files) => {
+    for (const file of files) {
+      await importBackupFile(file);
+    }
+  });
+
   // Task controls
   const createTaskBtn = document.getElementById('create-task-btn');
   const refreshTasksBtn = document.getElementById('refresh-tasks-btn');
@@ -7433,6 +7520,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', deleteResourcePack);
   }
+
+  setupDropZone(document.getElementById('resourcepack-upload-section'), (files) => {
+    uploadResourcePack(files[0]);
+  });
 });
 
 // ==================== Quick Commands ====================

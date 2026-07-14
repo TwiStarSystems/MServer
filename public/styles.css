@@ -625,6 +625,12 @@ body {
   overflow: hidden;
 }
 
+.file-explorer.drag-active {
+  outline: 2px dashed #667eea;
+  outline-offset: -2px;
+  background: #1a2744;
+}
+
 .file-table {
   width: 100%;
   border-collapse: collapse;
@@ -714,6 +720,12 @@ body {
   border-radius: 0px;
   padding: 15px;
   margin-bottom: 20px;
+}
+
+.mods-section.drag-active {
+  outline: 2px dashed #667eea;
+  outline-offset: -2px;
+  background: #1a2744;
 }
 
 .mods-section h4 {
@@ -1029,6 +1041,12 @@ body {
   background: #16213e;
   border-radius: 0px;
   overflow: hidden;
+}
+
+.backup-list.drag-active {
+  outline: 2px dashed #667eea;
+  outline-offset: -2px;
+  background: #1a2744;
 }
 
 .backup-table {
@@ -5401,9 +5419,14 @@ select.form-control:disabled {
   transition: all 0.3s ease;
 }
 
-.upload-box:hover {
+.upload-box:hover,
+.upload-box.drag-active {
   border-color: #764ba2;
   background: #252538;
+}
+
+.upload-box.drag-active {
+  box-shadow: 0 0 0 2px rgba(118, 75, 162, 0.4);
 }
 
 .upload-icon {
