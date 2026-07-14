@@ -4215,7 +4215,7 @@ async function createBackup() {
     openJobsPanel();
   } catch (error) {
     console.error('Failed to start backup:', error);
-    showNotification('Failed to start backup', 'error');
+    showNotification('Failed to start backup: ' + error.message, 'error');
   }
 }
 

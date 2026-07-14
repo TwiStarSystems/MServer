@@ -10467,6 +10467,8 @@ def create_backup(server_id):
             return jsonify({'error': 'Invalid backup name'}), 400
         if not custom_name.lower().endswith('.zip'):
             custom_name += '.zip'
+        if (BACKUPS_DIR / server_id / custom_name).exists():
+            return jsonify({'error': 'A backup with that name already exists'}), 409
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
