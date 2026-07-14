@@ -46,7 +46,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, make_response
-from flask_socketio import SocketIO, emit, join_room
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
@@ -209,6 +209,13 @@ SOCKET_SUBSCRIBE_RATE_WINDOW = _env_int('SOCKET_SUBSCRIBE_RATE_WINDOW_SECONDS', 
 
 _socket_rate_lock = threading.Lock()
 _socket_rate_hits = defaultdict(deque)  # (sid, event) -> deque[monotonic timestamps]
+
+# Tracks each connected user's active websocket session ids, so a live
+# permission change (group edit, server unsharing, group reassignment) can
+# drop an already-connected socket's room membership immediately instead of
+# waiting for it to reconnect. See _resync_user_rooms().
+_user_sockets_lock = threading.Lock()
+_user_sockets = defaultdict(set)  # user_id -> set of sids
 
 
 def _socket_rate_limited(event, limit, window_seconds):
@@ -6597,6 +6604,8 @@ def api_update_user_group(user_id):
         return jsonify({'error': 'Only an administrator can assign an admin group'}), 403
 
     if user_manager.update_user_group(user_id, group_id):
+        # Drop the target's live socket from any room the new group no longer covers.
+        _resync_user_rooms(user_id)
         return jsonify({'success': True})
     return jsonify({'error': 'Invalid group or user not found'}), 400
 
@@ -6699,6 +6708,8 @@ def api_delete_user(user_id):
         return jsonify({'error': 'Cannot delete your own account'}), 400
     
     if user_manager.delete_user(user_id):
+        # Drop any live socket the deleted user still holds open from every room.
+        _resync_user_rooms(user_id)
         return jsonify({'success': True})
     return jsonify({'error': 'User not found'}), 404
 
@@ -6806,6 +6817,9 @@ def api_update_group(group_id):
     )
     if not ok:
         return jsonify({'error': msg}), 400
+    if permissions is not None:
+        # Permission changes can affect every connected member of this group at once.
+        _resync_all_connected_rooms()
     return jsonify({'success': True, 'message': msg})
 
 @app.route('/api/admin/groups/<group_id>', methods=['DELETE'])
@@ -6815,6 +6829,8 @@ def api_delete_group(group_id):
     ok, msg = group_manager.delete_group(group_id)
     if not ok:
         return jsonify({'error': msg}), 400
+    # Deleting a group reassigns its members elsewhere — resync everyone connected.
+    _resync_all_connected_rooms()
     return jsonify({'success': True, 'message': msg})
 
 @app.route('/api/admin/groups/<group_id>/default', methods=['POST'])
@@ -6853,6 +6869,8 @@ def api_update_server_access(server_id):
     data = request.get_json()
     group_ids = data.get('groupIds', [])
     group_manager.set_server_groups(server_id, group_ids)
+    # Unsharing can revoke access for every connected member of an affected group.
+    _resync_all_connected_rooms()
     return jsonify({'success': True})
 
 
@@ -13464,6 +13482,42 @@ def _accessible_server_ids(user, user_id):
     return ids
 
 
+def _resync_user_rooms(user_id):
+    """Re-validate a connected user's realtime room memberships against their
+    current permissions, dropping any server/admin/stats room they're no
+    longer entitled to. Room membership is otherwise only set at connect
+    time, so without this an admin revoking a user's access (unsharing a
+    server, editing group permissions, reassigning a user's group) would
+    leave that live socket receiving console/status output until it happens
+    to reconnect. Call after any admin action that can shrink access."""
+    with _user_sockets_lock:
+        sids = list(_user_sockets.get(user_id, ()))
+    if not sids:
+        return
+    user = user_manager.get_user(user_id)
+    allowed_servers = set(_accessible_server_ids(user, user_id)) if user else set()
+    is_admin = bool(user) and group_manager.is_admin_group(user.get('groupId'))
+    can_view_stats = bool(user) and user_manager.user_has_permission(user, 'panel.stats.view')
+    for sid in sids:
+        for server_id in server_manager.get_all_server_ids():
+            if server_id not in allowed_servers:
+                leave_room(f'server_{server_id}', sid=sid, namespace='/')
+        if not is_admin:
+            leave_room('admins', sid=sid, namespace='/')
+        if not can_view_stats:
+            leave_room('stats_viewers', sid=sid, namespace='/')
+
+
+def _resync_all_connected_rooms():
+    """Resync every currently-connected user's rooms. Use after a change
+    whose blast radius isn't limited to a single user (group permission
+    edits, group deletion, server re-sharing)."""
+    with _user_sockets_lock:
+        user_ids = list(_user_sockets.keys())
+    for uid in user_ids:
+        _resync_user_rooms(uid)
+
+
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
@@ -13487,8 +13541,10 @@ def handle_connect():
     # server it may access — including the dashboard's multi-server status list —
     # without leaking servers it cannot access.
     if user:
-        for sid in _accessible_server_ids(user, user_id):
-            join_room(f'server_{sid}')
+        for server_id in _accessible_server_ids(user, user_id):
+            join_room(f'server_{server_id}')
+    with _user_sockets_lock:
+        _user_sockets[user_id].add(request.sid)
     print(f'Client connected to WebSocket (user: {session.get("username", "unknown")})')
 
 @socketio.on('disconnect')
@@ -13497,6 +13553,12 @@ def handle_disconnect():
     with _socket_rate_lock:
         for key in [k for k in _socket_rate_hits if k[0] == request.sid]:
             del _socket_rate_hits[key]
+    user_id = session.get('user_id')
+    if user_id:
+        with _user_sockets_lock:
+            _user_sockets[user_id].discard(request.sid)
+            if not _user_sockets[user_id]:
+                del _user_sockets[user_id]
     print('Client disconnected from WebSocket')
 
 @socketio.on('command')
