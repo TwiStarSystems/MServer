@@ -1091,7 +1091,7 @@ class StatsManager:
                 conn.commit()
                 self._cleanup_old_stats()
 
-                socketio.emit('stats_update', stats)
+                socketio.emit('stats_update', stats, to='stats_viewers', namespace='/')
             except Exception as e:
                 print(f"Stats collection error: {e}")
 
@@ -13379,6 +13379,11 @@ def handle_connect():
     user = user_manager.get_user(user_id)
     if user and group_manager.is_admin_group(user.get('groupId')):
         join_room('admins')
+    # Join a room for host-level stats (CPU/RAM/disk) so stats_update only
+    # reaches clients permitted to view them — same permission that gates the
+    # HTTP /api/stats/* routes — instead of broadcasting to every connection.
+    if user and user_manager.user_has_permission(user, 'panel.stats.view'):
+        join_room('stats_viewers')
     # Join a room per accessible server so live console/status (emitted via
     # ServerInstance._broadcast to 'server_<id>') reaches this client for every
     # server it may access — including the dashboard's multi-server status list —
