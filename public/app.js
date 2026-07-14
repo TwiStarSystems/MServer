@@ -70,6 +70,10 @@ window.fetch = async function(...args) {
 
 // Global state
 let socket = null;
+let wsConnected = false;      // Tracks live Socket.IO connection state (for issue #21)
+let wsHasConnectedOnce = false;
+let lastServerStatus = 'stopped';
+let lastServerRunning = false;
 let currentServerId = null;
 let currentPath = '';
 let currentEditingFile = '';
@@ -651,6 +655,11 @@ function connectWebSocket() {
   
   socket.on('connect', () => {
     console.log('Socket.IO connected');
+    wsConnected = true;
+    wsHasConnectedOnce = true;
+    setWsBanner(null);
+    // Re-enable command input now that we're back online (server-running state permitting).
+    updateServerStatus(lastServerStatus, lastServerRunning);
     // Re-subscribe to current server on reconnect (don't clear terminal)
     if (currentServerId) {
       socket.emit('subscribe', { serverId: currentServerId });
@@ -686,10 +695,24 @@ function connectWebSocket() {
   
   socket.on('disconnect', (reason) => {
     console.log('Socket.IO disconnected:', reason);
+    wsConnected = false;
+    setWsBanner('⚠ Disconnected from server — attempting to reconnect…');
+    // Force command input off while disconnected, regardless of last-known server state.
+    updateServerStatus(lastServerStatus, lastServerRunning);
   });
-  
+
   socket.on('connect_error', (error) => {
     console.error('Socket.IO error:', error);
+    // Covers the case where the very first connection attempt fails (server
+    // unreachable on page load) — 'disconnect' never fires for that case.
+    if (!wsHasConnectedOnce) {
+      setWsBanner('⚠ Unable to reach server — retrying…');
+    }
+  });
+
+  // Manager-level reconnection events (Socket.IO v4 emits these on socket.io, not socket).
+  socket.io.on('reconnect_attempt', (attempt) => {
+    setWsBanner(`⚠ Disconnected from server — reconnecting… (attempt ${attempt})`);
   });
   
   // Listen for scheduled backup events
@@ -1061,7 +1084,24 @@ async function loadServerDetails() {
   }
 }
 
+// Shows/hides the disconnected-websocket banner above the terminal (issue #21).
+// Pass null/empty to hide it.
+function setWsBanner(message) {
+  const banner = document.getElementById('ws-status-banner');
+  if (!banner) return;
+  if (message) {
+    banner.textContent = message;
+    banner.style.display = '';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
 function updateServerStatus(status, isRunning) {
+  status = status || 'stopped';
+  lastServerStatus = status;
+  lastServerRunning = isRunning;
+
   const indicator = document.getElementById('status-indicator');
   const text = document.getElementById('status-text');
   const startBtn = document.getElementById('start-btn');
@@ -1070,10 +1110,7 @@ function updateServerStatus(status, isRunning) {
   const killBtn = document.getElementById('kill-btn');
   const terminalInput = document.getElementById('terminal-input');
   const sendBtn = document.getElementById('send-btn');
-  
-  // Fallback to 'stopped' if status is undefined
-  status = status || 'stopped';
-  
+
   // Update status indicator and text
   const statusClasses = {
     'stopped': 'status-stopped',
@@ -1099,7 +1136,8 @@ function updateServerStatus(status, isRunning) {
   const canRestart = status === 'running';
   const canStop = status === 'running' || status === 'unresponsive';
   const canKill = status === 'starting' || status === 'running' || status === 'stopping' || status === 'unresponsive';
-  const canCommand = status === 'running';
+  // Command input additionally requires a live websocket, since commands are sent via socket.emit (issue #21).
+  const canCommand = status === 'running' && wsConnected;
 
   startBtn.disabled = !canStart;
   restartBtn.disabled = !canRestart;

@@ -563,6 +563,17 @@ body {
   border-top: 1px solid #333;
 }
 
+.ws-status-banner {
+  padding: 8px 15px;
+  background: #4a1a1a;
+  color: #ff6b6b;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  text-align: center;
+  border-bottom: 1px solid #663333;
+  flex-shrink: 0;
+}
+
 .terminal-input {
   flex: 1;
   padding: 12px 15px;
