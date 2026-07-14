@@ -77,6 +77,7 @@ let lastServerRunning = false;
 let currentServerId = null;
 let currentPath = '';
 let currentEditingFile = '';
+let fileEditorRequestId = 0;
 let editingServerId = null;
 let servers = [];
 let currentUser = null;
@@ -3569,10 +3570,17 @@ async function openFileEditor(filePath) {
     return;
   }
   
+  const requestId = ++fileEditorRequestId;
+  currentEditingFile = filePath;
+
   try {
-    currentEditingFile = filePath;
     const data = await apiRequest(`/api/servers/${currentServerId}/files/read?path=${encodeURIComponent(filePath)}`);
-    
+
+    // A newer openFileEditor()/closeFileEditor() call superseded this one
+    // while the request was in flight — discard the stale response so it
+    // can't overwrite the editor with the wrong file's content.
+    if (requestId !== fileEditorRequestId) return;
+
     document.getElementById('editor-title').textContent = `Edit: ${filePath}`;
     document.getElementById('file-content').value = data.content;
     document.getElementById('file-editor-modal').classList.add('active');
@@ -3601,6 +3609,7 @@ async function saveFile() {
 function closeFileEditor() {
   document.getElementById('file-editor-modal').classList.remove('active');
   currentEditingFile = '';
+  fileEditorRequestId++; // invalidate any in-flight openFileEditor() request
 }
 
 // ==================== NBT Editor ====================
