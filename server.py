@@ -5849,9 +5849,15 @@ backup_scheduler.scheduler.add_job(
     next_run_time=datetime.now() + timedelta(seconds=30)
 )
 
-# Initialize API Manager
+# Initialize API Manager. Pass the dependencies its routes need explicitly —
+# api_manager.py must not `from server import X` itself: this app is launched
+# as `python server.py`, so it's registered as sys.modules['__main__'], not
+# sys.modules['server']. A `from server import` from within a module that's
+# only ever imported BY this already-running script would re-execute this
+# entire file as a second, independent module (re-running the module-level
+# signal.signal() call below off the main thread, which raises on every call).
 from api_manager import init_api_manager, api_v1
-init_api_manager(app)
+init_api_manager(app, server_manager, get_current_user, group_manager, read_version_file)
 
 # Exempt API v1 from CSRF protection (uses API key authentication)
 csrf.exempt(api_v1)

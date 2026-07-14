@@ -27,6 +27,23 @@ BASE_DIR = Path(__file__).parent.absolute()
 
 from db import get_db
 
+# ==================== server.py dependencies (injected, not imported) ====================
+# api_manager.py is only ever imported FROM server.py (never the reverse), so by
+# the time init_api_manager() runs, everything below already exists as globals
+# in the already-executing server.py module. Routes must NOT do
+# `from server import X` to reach them: the app is launched as `python
+# server.py`, so Python registers it under sys.modules['__main__'], not
+# sys.modules['server'] — a `from server import` doesn't find 'server' already
+# loaded and re-executes the whole file as a second, independent module
+# (re-running its module-level signal.signal() call off the main thread, which
+# raises ValueError on every single call). Passing references in at
+# registration time avoids the re-import entirely.
+_server_manager = None
+_get_current_user = None
+_group_manager = None
+_read_version_file = None
+
+
 # API Key permissions
 class APIPermission:
     READ = 'read'           # Read server info, status
@@ -246,11 +263,10 @@ def _require_admin_session():
     RBAC is group-based (there is no 'role' field on the user dict), so admin
     status is determined by group_manager.is_admin_group(). Returns (user, None)
     on success, or (None, (response, status)) to short-circuit the caller."""
-    from server import get_current_user, group_manager
-    user_id, user = get_current_user()
+    user_id, user = _get_current_user()
     if not user:
         return None, (jsonify({'error': 'Authentication required'}), 401)
-    if not group_manager.is_admin_group(user.get('groupId')):
+    if not _group_manager.is_admin_group(user.get('groupId')):
         return None, (jsonify({'error': 'Admin access required'}), 403)
     return user, None
 
@@ -515,9 +531,7 @@ def api_docs():
 @require_api_key(permissions=[APIPermission.READ])
 def api_status():
     """Get MServer status."""
-    from server import read_version_file
-    
-    version = read_version_file() or 'unknown'
+    version = _read_version_file() or 'unknown'
     
     return jsonify({
         'status': 'online',
@@ -529,8 +543,7 @@ def api_status():
 def _api_server_view(server_id):
     """Return the runtime-status dict for one server (or None), as exposed by
     ServerManager.get_servers_list()."""
-    from server import server_manager
-    for s in server_manager.get_servers_list():
+    for s in _server_manager.get_servers_list():
         if s.get('id') == server_id:
             return s
     return None
@@ -540,10 +553,8 @@ def _api_server_view(server_id):
 @require_api_key(permissions=[APIPermission.READ])
 def api_list_servers():
     """List all servers."""
-    from server import server_manager
-
     result = []
-    for server in server_manager.get_servers_list():
+    for server in _server_manager.get_servers_list():
         result.append({
             'id': server.get('id'),
             'name': server.get('name'),
@@ -573,13 +584,11 @@ def api_get_server(server_id):
 @require_api_key(permissions=[APIPermission.READ])
 def api_server_status(server_id):
     """Get server status."""
-    from server import server_manager
-
     server = _api_server_view(server_id)
     if not server:
         return jsonify({'error': 'Server not found'}), 404
 
-    instance = server_manager.servers.get(server_id)
+    instance = _server_manager.servers.get(server_id)
     online = list(instance.online_players.keys()) if (instance and instance.is_running()) else []
 
     return jsonify({
@@ -595,8 +604,6 @@ def api_server_status(server_id):
 @require_api_key(permissions=[APIPermission.CONSOLE])
 def api_send_command(server_id):
     """Send a command to the server console."""
-    from server import server_manager
-
     if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
 
@@ -606,7 +613,7 @@ def api_send_command(server_id):
     if not command:
         return jsonify({'error': 'Command is required'}), 400
 
-    success, message = server_manager.send_command(server_id, command)
+    success, message = _server_manager.send_command(server_id, command)
     return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
@@ -614,12 +621,10 @@ def api_send_command(server_id):
 @require_api_key(permissions=[APIPermission.WRITE])
 def api_start_server(server_id):
     """Start a server."""
-    from server import server_manager
-
     if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
 
-    success, message = server_manager.start_server(server_id)
+    success, message = _server_manager.start_server(server_id)
     return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
@@ -627,12 +632,10 @@ def api_start_server(server_id):
 @require_api_key(permissions=[APIPermission.WRITE])
 def api_stop_server(server_id):
     """Stop a server."""
-    from server import server_manager
-
     if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
 
-    success, message = server_manager.stop_server(server_id)
+    success, message = _server_manager.stop_server(server_id)
     return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
@@ -640,19 +643,25 @@ def api_stop_server(server_id):
 @require_api_key(permissions=[APIPermission.WRITE])
 def api_restart_server(server_id):
     """Restart a server."""
-    from server import server_manager
-
     if _api_server_view(server_id) is None:
         return jsonify({'error': 'Server not found'}), 404
 
-    success, message = server_manager.restart_server(server_id)
+    success, message = _server_manager.restart_server(server_id)
     return jsonify({'success': success, 'message': message}), (200 if success else 400)
 
 
 # ==================== Utility Functions ====================
 
-def init_api_manager(app):
-    """Initialize the API manager with the Flask app."""
+def init_api_manager(app, server_manager, get_current_user, group_manager, read_version_file):
+    """Initialize the API manager with the Flask app and the server.py
+    dependencies its routes need (see the comment near the top of this file
+    for why these are passed in rather than imported by module name)."""
+    global _server_manager, _get_current_user, _group_manager, _read_version_file
+    _server_manager = server_manager
+    _get_current_user = get_current_user
+    _group_manager = group_manager
+    _read_version_file = read_version_file
+
     app.register_blueprint(api_v1)
     app.register_blueprint(api_v1_admin)
     print(f"[API Manager] Public API v1 initialized at /api/v1/")
