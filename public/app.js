@@ -1157,7 +1157,7 @@ async function startServer() {
       updateServerStatus('starting', false);
     }
   } catch (error) {
-    // Error already shown by apiRequest
+    showNotification('Failed to start server: ' + error.message, 'error');
   }
 }
 
@@ -1436,7 +1436,7 @@ async function stopServer() {
       setTimeout(() => loadServerDetails(), 2000);
     }
   } catch (error) {
-    // Error already shown by apiRequest
+    showNotification('Failed to stop server: ' + error.message, 'error');
   }
 }
 
@@ -1547,7 +1547,7 @@ async function killServer() {
       updateServerStatus('stopped', false);
     }
   } catch (error) {
-    // Error already shown by apiRequest
+    showNotification('Failed to kill server: ' + error.message, 'error');
   }
 }
 
