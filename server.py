@@ -118,8 +118,28 @@ elif len(_raw_secret) < 32:
     )
 app.config['SECRET_KEY'] = _raw_secret
 
+# Bounds for PERMANENT_SESSION_LIFETIME (seconds): floor avoids sessions that
+# expire before a user can do anything useful; ceiling avoids an absurdly
+# large value effectively creating non-expiring sessions.
+PERMANENT_SESSION_LIFETIME_MIN_SECONDS = 300       # 5 minutes
+PERMANENT_SESSION_LIFETIME_MAX_SECONDS = 2592000   # 30 days
+
+def _clamp_session_lifetime(seconds):
+    """Clamp a session-lifetime value (seconds) into the sane bounds above,
+    warning if the caller's value was out of range."""
+    clamped = max(PERMANENT_SESSION_LIFETIME_MIN_SECONDS,
+                  min(PERMANENT_SESSION_LIFETIME_MAX_SECONDS, seconds))
+    if clamped != seconds:
+        import warnings
+        warnings.warn(
+            f"PERMANENT_SESSION_LIFETIME={seconds} is out of range "
+            f"[{PERMANENT_SESSION_LIFETIME_MIN_SECONDS}, {PERMANENT_SESSION_LIFETIME_MAX_SECONDS}]; "
+            f"clamped to {clamped}.", stacklevel=2
+        )
+    return clamped
+
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
-    seconds=_env_int('PERMANENT_SESSION_LIFETIME', 604800)
+    seconds=_clamp_session_lifetime(_env_int('PERMANENT_SESSION_LIFETIME', 604800))
 )
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
@@ -11015,7 +11035,12 @@ def update_network_settings():
         updated_keys.append('SESSION_COOKIE_DOMAIN')
 
     if 'permanentSessionLifetime' in data:
-        _write_env_value('PERMANENT_SESSION_LIFETIME', str(int(data['permanentSessionLifetime'])))
+        try:
+            lifetime = int(data['permanentSessionLifetime'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'permanentSessionLifetime must be an integer number of seconds'}), 400
+        lifetime = _clamp_session_lifetime(lifetime)
+        _write_env_value('PERMANENT_SESSION_LIFETIME', str(lifetime))
         updated_keys.append('PERMANENT_SESSION_LIFETIME')
 
     return jsonify({
