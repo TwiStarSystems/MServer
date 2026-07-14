@@ -4192,6 +4192,17 @@ class ServerStatus(Enum):
 
 # ==================== Server Manager ====================
 
+# Console commands that grant/revoke in-game operator status. Blocked at the
+# console (HTTP, SocketIO, and public API all funnel through
+# ServerManager.send_command) because they let any caller with console access
+# bypass the panel's own permission model entirely — e.g. a public API key
+# scoped to CONSOLE only (not WRITE/ADMIN) has no dedicated op-management
+# endpoint, but could otherwise 'op' a player and gain full in-game control.
+# The Operators tab (add_operator route) is the supported way to do this,
+# gated at the same @server_access_required level with proper auditing.
+BLOCKED_CONSOLE_COMMANDS = re.compile(r'^\s*/?\s*(op|deop)\b', re.IGNORECASE)
+
+
 class ServerManager:
     """Manages multiple Minecraft server instances — backed by SQLite."""
 
@@ -4793,9 +4804,12 @@ class ServerManager:
     
     def send_command(self, server_id, command):
         """Send a command to a running server"""
+        if BLOCKED_CONSOLE_COMMANDS.match(command or ''):
+            return False, "The 'op'/'deop' commands are blocked from the console — use the Operators tab (or its API) instead."
+
         if server_id not in self.servers:
             return False, "Server is not running"
-        
+
         instance = self.servers[server_id]
         if not instance.is_running():
             return False, "Server is not running"
