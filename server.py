@@ -1370,7 +1370,7 @@ class BackupScheduler:
                 'scheduled': True,
                 'verified':  ok,
                 'checksum':  checksum,
-            })
+            }, to=f'server_{server_id}', namespace='/')
 
             _backup_ctx = {
                 'server_id':   server_id,
@@ -1393,7 +1393,8 @@ class BackupScheduler:
                 'success':     False,
                 'error':       str(e),
             })
-            socketio.emit('backup_failed', {'serverId': server_id, 'error': str(e), 'scheduled': True})
+            socketio.emit('backup_failed', {'serverId': server_id, 'error': str(e), 'scheduled': True},
+                          to=f'server_{server_id}', namespace='/')
             try:
                 _fail_cfg  = server_manager.get_server_config(server_id)
                 _fail_name = _fail_cfg.get('name', server_id) if _fail_cfg else server_id
