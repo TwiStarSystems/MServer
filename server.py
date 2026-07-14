@@ -5901,6 +5901,43 @@ def safe_extractall(zipf, dest_dir):
     validate_zip_members(zipf, dest_dir)
     zipf.extractall(dest_dir)
 
+
+def reject_if_not_zip(saved_path):
+    """After saving an upload that must be a ZIP/JAR (JARs are ZIP archives),
+    verify the actual content — not just the filename extension — really is a
+    zip. Deletes the file and returns an error response tuple on mismatch, so
+    a polyglot file can't ride an extension check onto disk unexamined.
+    Returns None when the file is a valid zip."""
+    if not zipfile.is_zipfile(saved_path):
+        Path(saved_path).unlink(missing_ok=True)
+        return jsonify({'error': 'Uploaded file is not a valid ZIP/JAR archive'}), 400
+    return None
+
+
+# Magic-number signatures for the image types accepted for the branding favicon.
+_IMAGE_MAGIC_BYTES = {
+    'png': (b'\x89PNG\r\n\x1a\n',),
+    'jpg': (b'\xff\xd8\xff',),
+    'jpeg': (b'\xff\xd8\xff',),
+    'gif': (b'GIF87a', b'GIF89a'),
+    'ico': (b'\x00\x00\x01\x00',),
+}
+
+
+def reject_if_not_image(file_storage, file_ext):
+    """Verify an uploaded favicon's leading bytes match its claimed extension,
+    rejecting content/extension mismatches (e.g. an HTML/SVG polyglot saved
+    with a .png name and later served as a static asset). Resets the stream
+    position so the caller can still .save() it. Returns an error response
+    tuple on mismatch, None if the content matches."""
+    signatures = _IMAGE_MAGIC_BYTES.get(file_ext, ())
+    file_storage.seek(0)
+    header = file_storage.read(16)
+    file_storage.seek(0)
+    if not any(header.startswith(sig) for sig in signatures):
+        return jsonify({'success': False, 'error': f'File content does not match a valid {file_ext.upper()} image'}), 400
+    return None
+
 # ==================== CSRF Token Endpoint ====================
 
 @app.route('/api/csrf-token', methods=['GET'])
@@ -7640,10 +7677,14 @@ def upload_custom_jar(server_id):
     
     try:
         file.save(str(jar_path))
-        
+
+        rejected = reject_if_not_zip(jar_path)
+        if rejected:
+            return rejected
+
         # Update server config to use this JAR
         server_manager.update_server(server_id, executable=filename, serverType='custom')
-        
+
         return jsonify({'success': True, 'executable': filename})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -9622,6 +9663,9 @@ def upload_mod(server_id):
         dest_path = target_dir / filename
         try:
             file.save(str(dest_path))
+            rejected = reject_if_not_zip(dest_path)
+            if rejected:
+                return rejected
             return jsonify({'success': True, 'filename': filename}), 200
         except Exception as e:
             return jsonify({'error': str(e)}), 500
@@ -10205,7 +10249,11 @@ def upload_resourcepack(server_id):
         # Save the file
         resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
         file.save(str(resourcepack_path))
-        
+
+        rejected = reject_if_not_zip(resourcepack_path)
+        if rejected:
+            return rejected
+
         # Calculate SHA1 hash
         sha1_hash = hashlib.sha1()
         with open(resourcepack_path, 'rb') as f:
@@ -10800,7 +10848,11 @@ def update_branding():
         
         if file_ext not in allowed_extensions:
             return jsonify({'success': False, 'error': 'Invalid file type. Allowed: PNG, JPEG, GIF, ICO'}), 400
-        
+
+        rejected = reject_if_not_image(favicon_file, file_ext)
+        if rejected:
+            return rejected
+
         # Create favicons directory if it doesn't exist
         favicons_dir = os.path.join('public', 'favicons')
         os.makedirs(favicons_dir, exist_ok=True)
@@ -12851,6 +12903,11 @@ def api_jar_bucket_restore_all():
         tmp_path = Path(tmp.name)
         tmp.close()
         backup_file.save(tmp_path)
+
+        rejected = reject_if_not_zip(tmp_path)
+        if rejected:
+            return rejected
+
         result = jar_bucket.restore_from_zip(tmp_path)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
