@@ -6975,6 +6975,8 @@ def api_public_servers():
             'running': s['running'],
             'address': address,
             'ownerName': owner_name,
+            'serverType': s.get('serverType'),
+            'version': s.get('version'),
         })
     return jsonify({'servers': public_servers})
 
