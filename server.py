@@ -7861,7 +7861,7 @@ def update_server(server_id):
     def do_update():
         if server_manager.update_server(server_id, **data):
             return jsonify({'success': True}), 200
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     cfg = server_manager.get_server_config(server_id)
     server_name = cfg.get('name', server_id) if cfg else server_id
@@ -7880,7 +7880,7 @@ def delete_server(server_id):
 
     cfg = server_manager.get_server_config(server_id)
     if not cfg:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
     server_name = cfg.get('name', server_id)
 
     def do_delete():
@@ -8197,7 +8197,7 @@ def start_server(server_id):
         success, message = server_manager.start_server(server_id)
         if success:
             return jsonify({'success': True, 'message': message}), 200
-        return jsonify({'error': message}), 400
+        return api_error(message, 400)
 
     result, status = check_action_policy(
         'serverLifecycle', user, {'server_id': server_id, 'action': 'start', 'server_name': server_name},
@@ -8217,7 +8217,7 @@ def stop_server(server_id):
         success, message = server_manager.stop_server(server_id)
         if success:
             return jsonify({'success': True, 'message': message}), 200
-        return jsonify({'error': message}), 400
+        return api_error(message, 400)
 
     result, status = check_action_policy(
         'serverLifecycle', user, {'server_id': server_id, 'action': 'stop', 'server_name': server_name},
@@ -8237,7 +8237,7 @@ def restart_server(server_id):
         success, message = server_manager.restart_server(server_id)
         if success:
             return jsonify({'success': True, 'message': message}), 200
-        return jsonify({'error': message}), 400
+        return api_error(message, 400)
 
     result, status = check_action_policy(
         'serverLifecycle', user, {'server_id': server_id, 'action': 'restart', 'server_name': server_name},
@@ -8257,7 +8257,7 @@ def kill_server(server_id):
         success, message = server_manager.kill_server(server_id)
         if success:
             return jsonify({'success': True, 'message': message}), 200
-        return jsonify({'error': message}), 400
+        return api_error(message, 400)
 
     result, status = check_action_policy(
         'serverLifecycle', user, {'server_id': server_id, 'action': 'kill', 'server_name': server_name},
