@@ -16,7 +16,7 @@ async function waitForServerStopped(serverId, timeoutMs = 40000) {
   while (Date.now() < deadline) {
     try {
       const serverList = await apiRequest('/api/servers');
-      const s = serverList.find(sv => sv.id === serverId);
+      const s = serverList.servers.find(sv => sv.id === serverId);
       if (!s || s.status === 'stopped') return true;
     } catch (_) {}
     await sleep(2000);

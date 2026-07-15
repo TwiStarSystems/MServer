@@ -5966,6 +5966,34 @@ def reject_if_not_image(file_storage, file_ext):
         return jsonify({'success': False, 'error': f'File content does not match a valid {file_ext.upper()} image'}), 400
     return None
 
+
+# ==================== API Response Helpers ====================
+# See issue #28: response shapes across routes historically mixed
+# {'success': True, ...}, {'error': ...}-only, and raw un-enveloped data.
+# New/touched routes should use these so every JSON response carries a
+# top-level `success` boolean, even the raw-shape GET/list endpoints that
+# previously omitted it — existing fields are never renamed or nested, only
+# `success` is added, so this is safe to adopt incrementally route by route.
+
+def api_success(data=None, status=200, **extra):
+    """Standard success JSON response: always includes `success: true`.
+    `data`, if given, is merged flat at the top level (matches the existing
+    {'success': True, ...fields} convention already used across server.py)."""
+    body = {'success': True}
+    if data:
+        body.update(data)
+    body.update(extra)
+    return jsonify(body), status
+
+
+def api_error(message, status=400, **extra):
+    """Standard error JSON response: always includes `success: false`
+    alongside the existing `error` key every route already returns."""
+    body = {'success': False, 'error': message}
+    body.update(extra)
+    return jsonify(body), status
+
+
 # ==================== CSRF Token Endpoint ====================
 
 @app.route('/api/csrf-token', methods=['GET'])
@@ -7153,7 +7181,7 @@ def get_servers():
     all_servers = server_manager.get_servers_list()
 
     if user_manager.user_has_permission(user, 'servers.access.all'):
-        return jsonify({'servers': all_servers})
+        return api_success({'servers': all_servers})
 
     user_group_id = user.get('groupId')
     user_servers = []
@@ -7162,7 +7190,7 @@ def get_servers():
             user_servers.append(s)
         elif user_group_id and user_group_id in group_manager.get_server_group_ids(s.get('id', '')):
             user_servers.append(s)
-    return jsonify({'servers': user_servers})
+    return api_success({'servers': user_servers})
 
 
 def _generate_server_properties(custom_properties, server_name='A Minecraft Server'):
@@ -7794,12 +7822,12 @@ def get_server(server_id):
     """Get a specific server's configuration"""
     config = server_manager.get_server_config(server_id)
     if not config:
-        return jsonify({'error': 'Server not found'}), 404
-    
+        return api_error('Server not found', 404)
+
     instance = server_manager.servers.get(server_id)
     is_running = instance is not None and instance.is_running()
     status = instance.get_status().value if instance else ServerStatus.STOPPED.value
-    
+
     # Enrich with managed.conf Engine/Version (authoritative source)
     server_dir = Path(config.get('serverPath', ''))
     managed = server_manager._read_managed_conf(server_dir) if server_dir.exists() else {}
@@ -7807,8 +7835,8 @@ def get_server(server_id):
     version = managed.get('Version') or config.get('version')
     if engine and engine.lower() == 'imported':
         engine = None
-    
-    return jsonify({
+
+    return api_success({
         'id': server_id,
         'running': is_running,
         'status': status,
