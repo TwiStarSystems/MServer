@@ -11306,7 +11306,7 @@ def backup_all_servers():
         return response
 
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/tools/servers/restore-all', methods=['POST'])
@@ -11319,19 +11319,19 @@ def restore_all_servers():
     Running servers inside the archive are stopped before their data is replaced.
     """
     if 'backup' not in request.files:
-        return jsonify({'error': 'No backup file provided'}), 400
+        return api_error('No backup file provided', 400)
 
     backup_file = request.files['backup']
     if not backup_file.filename:
-        return jsonify({'error': 'Empty filename'}), 400
+        return api_error('Empty filename', 400)
 
     filename = secure_filename(backup_file.filename)
     if not filename.lower().endswith('.zip'):
-        return jsonify({'error': 'Only ZIP archives are supported'}), 400
+        return api_error('Only ZIP archives are supported', 400)
 
     mode = request.args.get('mode', 'merge')
     if mode not in ('merge', 'replace'):
-        return jsonify({'error': 'Invalid mode; use "merge" or "replace"'}), 400
+        return api_error('Invalid mode; use "merge" or "replace"', 400)
 
     import tempfile
     tmp_path = None
@@ -11344,7 +11344,7 @@ def restore_all_servers():
         backup_file.save(tmp_path)
 
         if not zipfile.is_zipfile(tmp_path):
-            return jsonify({'error': 'Uploaded file is not a valid ZIP archive'}), 400
+            return api_error('Uploaded file is not a valid ZIP archive', 400)
 
         restored = []
         skipped = []
@@ -11362,7 +11362,7 @@ def restore_all_servers():
                     server_ids_in_archive.add(parts[1])
 
             if not server_ids_in_archive:
-                return jsonify({'error': 'No server directories found in archive (expected servers/<id>/...)'}), 400
+                return api_error('No server directories found in archive (expected servers/<id>/...)', 400)
 
             if mode == 'replace':
                 # Stop all running servers and wipe SERVERS_DIR
@@ -11415,9 +11415,9 @@ def restore_all_servers():
         })
 
     except zipfile.BadZipFile:
-        return jsonify({'error': 'Corrupt or invalid ZIP archive'}), 400
+        return api_error('Corrupt or invalid ZIP archive', 400)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
     finally:
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
@@ -11429,7 +11429,7 @@ def restore_all_servers():
 @permission_required('panel.stats.view')
 def get_current_stats():
     """Get current system stats"""
-    return jsonify(stats_manager.get_current_stats())
+    return api_success(stats_manager.get_current_stats())
 
 @app.route('/api/stats/history', methods=['GET'])
 @permission_required('panel.stats.view')
@@ -11439,7 +11439,7 @@ def get_stats_history():
     # Limit to 7 days max
     hours = min(hours, 24 * 7)
     history = stats_manager.get_history(hours)
-    return jsonify({'history': history})
+    return api_success({'history': history})
 
 
 # ==================== System Info API ====================
@@ -13207,54 +13207,54 @@ def list_tools():
         tools.sort(key=lambda x: x['name'].lower())
         
     except Exception as e:
-        return jsonify({'error': str(e), 'tools': []}), 500
-    
-    return jsonify({'tools': tools})
+        return api_error(str(e), 500, tools=[])
+
+    return api_success({'tools': tools})
 
 @app.route('/api/tools/upload', methods=['POST'])
 @permission_required('panel.tools.manage')
 def upload_tool():
     """Upload a Python tool file"""
     if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
+        return api_error('No file provided', 400)
+
     file = request.files['file']
-    
+
     if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
+        return api_error('No file selected', 400)
+
     # Validate file extension - only allow .py files
     if not file.filename.lower().endswith('.py'):
-        return jsonify({'error': 'Only Python (.py) files are allowed'}), 400
-    
+        return api_error('Only Python (.py) files are allowed', 400)
+
     # Secure the filename
     filename = secure_filename(file.filename)
-    
+
     # Ensure it still has .py extension after securing
     if not filename.lower().endswith('.py'):
         filename = filename + '.py'
-    
+
     # Validate the file content is valid Python (basic check)
     try:
         content = file.read().decode('utf-8')
         file.seek(0)  # Reset file pointer
-        
+
         # Check if file starts with shebang or comments (typical Python file)
         # Also compile to check for syntax errors
         compile(content, filename, 'exec')
     except SyntaxError as e:
-        return jsonify({'error': f'Invalid Python syntax: {str(e)}'}), 400
+        return api_error(f'Invalid Python syntax: {str(e)}', 400)
     except UnicodeDecodeError:
-        return jsonify({'error': 'File must be valid UTF-8 text'}), 400
+        return api_error('File must be valid UTF-8 text', 400)
     except Exception as e:
-        return jsonify({'error': f'Invalid file: {str(e)}'}), 400
-    
+        return api_error(f'Invalid file: {str(e)}', 400)
+
     # Ensure tools directory exists
     TOOLS_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     # Save the file
     tool_path = TOOLS_DIR / filename
-    
+
     try:
         file.save(str(tool_path))
         return jsonify({
@@ -13263,7 +13263,7 @@ def upload_tool():
             'filename': filename
         })
     except Exception as e:
-        return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
+        return api_error(f'Failed to save file: {str(e)}', 500)
 
 
 @app.route('/api/tools/<tool_name>/delete', methods=['DELETE'])
@@ -13271,18 +13271,18 @@ def upload_tool():
 def delete_tool(tool_name):
     """Delete a tool from the tools directory"""
     tool_path = TOOLS_DIR / f'{tool_name}.py'
-    
+
     if not tool_path.exists():
-        return jsonify({'error': 'Tool not found'}), 404
-    
+        return api_error('Tool not found', 404)
+
     # Security: ensure path is within tools directory
     try:
         tool_path = tool_path.resolve()
         if not str(tool_path).startswith(str(TOOLS_DIR.resolve())):
-            return jsonify({'error': 'Invalid tool path'}), 400
+            return api_error('Invalid tool path', 400)
     except Exception:
-        return jsonify({'error': 'Invalid tool'}), 400
-    
+        return api_error('Invalid tool', 400)
+
     try:
         tool_path.unlink()
         return jsonify({
@@ -13290,7 +13290,7 @@ def delete_tool(tool_name):
             'message': f'Tool "{tool_name}" deleted successfully'
         })
     except Exception as e:
-        return jsonify({'error': f'Failed to delete tool: {str(e)}'}), 500
+        return api_error(f'Failed to delete tool: {str(e)}', 500)
 
 
 @app.route('/api/tools/<tool_name>/run', methods=['POST'])
@@ -13298,33 +13298,33 @@ def delete_tool(tool_name):
 def run_tool(tool_name):
     """Run a tool from the tools directory with optional arguments"""
     tool_path = TOOLS_DIR / f'{tool_name}.py'
-    
+
     if not tool_path.exists():
-        return jsonify({'error': 'Tool not found'}), 404
-    
+        return api_error('Tool not found', 404)
+
     # Security: ensure path is within tools directory
     try:
         tool_path = tool_path.resolve()
         if not str(tool_path).startswith(str(TOOLS_DIR.resolve())):
-            return jsonify({'error': 'Invalid tool path'}), 400
+            return api_error('Invalid tool path', 400)
     except Exception:
-        return jsonify({'error': 'Invalid tool'}), 400
-    
+        return api_error('Invalid tool', 400)
+
     # Get optional arguments from request body
     data = request.get_json() or {}
     args_string = data.get('args', '').strip()
     timeout_seconds = min(data.get('timeout', 300), 600)  # Max 10 minutes
-    
+
     # Parse arguments (split by whitespace, respecting quotes)
     import shlex
     try:
         args_list = shlex.split(args_string) if args_string else []
     except ValueError as e:
-        return jsonify({'error': f'Invalid arguments: {str(e)}'}), 400
-    
+        return api_error(f'Invalid arguments: {str(e)}', 400)
+
     # Build command
     command = ['python3', str(tool_path)] + args_list
-    
+
     try:
         # Run the tool and capture output
         result = subprocess.run(
@@ -13334,7 +13334,10 @@ def run_tool(tool_name):
             timeout=timeout_seconds,
             cwd=str(BASE_DIR)
         )
-        
+
+        # NOTE: `success` here reflects the tool process's own exit code, not
+        # whether this API call succeeded — deliberately NOT api_success(),
+        # since that would always force success:true regardless of returncode.
         return jsonify({
             'success': result.returncode == 0,
             'output': result.stdout,
@@ -13343,9 +13346,9 @@ def run_tool(tool_name):
             'command': ' '.join(command)
         })
     except subprocess.TimeoutExpired:
-        return jsonify({'error': f'Tool execution timed out ({timeout_seconds}s limit)'}), 408
+        return api_error(f'Tool execution timed out ({timeout_seconds}s limit)', 408)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 # ==================== Security Headers Middleware ====================
