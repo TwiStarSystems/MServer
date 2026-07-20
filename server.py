@@ -8402,13 +8402,13 @@ def read_nbt_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, requested_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / requested_path
-    
+
     if not full_path.exists():
-        return jsonify({'error': 'File not found'}), 404
-    
+        return api_error('File not found', 404)
+
     try:
         nbt_data = nbt_editor.read_file(full_path)
         return jsonify({
@@ -8417,7 +8417,7 @@ def read_nbt_file(server_id):
             'compression': nbt_editor.compression
         })
     except Exception as e:
-        return jsonify({'error': f'Failed to parse NBT file: {str(e)}'}), 500
+        return api_error(f'Failed to parse NBT file: {str(e)}', 500)
 
 @app.route('/api/servers/<server_id>/nbt/write', methods=['POST'])
 @server_access_required
@@ -8430,16 +8430,16 @@ def write_nbt_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     try:
         nbt_editor.compression = compression
         nbt_editor.write_file(full_path, nbt_data)
         return jsonify({'success': True, 'message': 'NBT file saved'})
     except Exception as e:
-        return jsonify({'error': f'Failed to write NBT file: {str(e)}'}), 500
+        return api_error(f'Failed to write NBT file: {str(e)}', 500)
 
 @app.route('/api/servers/<server_id>/nbt/update', methods=['POST'])
 @server_access_required
@@ -8452,17 +8452,17 @@ def update_nbt_value(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     try:
         nbt_data = nbt_editor.read_file(full_path)
         nbt_data = nbt_editor.update_value(nbt_data, tag_path, new_value)
         nbt_editor.write_file(full_path, nbt_data)
         return jsonify({'success': True, 'message': 'Value updated'})
     except Exception as e:
-        return jsonify({'error': f'Failed to update NBT value: {str(e)}'}), 500
+        return api_error(f'Failed to update NBT value: {str(e)}', 500)
 
 @app.route('/api/servers/<server_id>/nbt/add', methods=['POST'])
 @server_access_required
@@ -8475,17 +8475,17 @@ def add_nbt_tag(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     try:
         nbt_data = nbt_editor.read_file(full_path)
         nbt_data = nbt_editor.add_tag(nbt_data, parent_path, new_tag)
         nbt_editor.write_file(full_path, nbt_data)
         return jsonify({'success': True, 'message': 'Tag added'})
     except Exception as e:
-        return jsonify({'error': f'Failed to add NBT tag: {str(e)}'}), 500
+        return api_error(f'Failed to add NBT tag: {str(e)}', 500)
 
 @app.route('/api/servers/<server_id>/nbt/delete', methods=['POST'])
 @server_access_required
@@ -8497,17 +8497,17 @@ def delete_nbt_tag(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     try:
         nbt_data = nbt_editor.read_file(full_path)
         nbt_data = nbt_editor.delete_tag(nbt_data, tag_path)
         nbt_editor.write_file(full_path, nbt_data)
         return jsonify({'success': True, 'message': 'Tag deleted'})
     except Exception as e:
-        return jsonify({'error': f'Failed to delete NBT tag: {str(e)}'}), 500
+        return api_error(f'Failed to delete NBT tag: {str(e)}', 500)
 
 
 # ==================== Player Management Endpoints ====================
@@ -10165,8 +10165,8 @@ def check_properties_exists(server_id):
     """Check if server.properties file exists"""
     server_path = server_manager.get_server_path(server_id)
     properties_path = server_path / 'server.properties'
-    
-    return jsonify({'exists': properties_path.exists()})
+
+    return api_success({'exists': properties_path.exists()})
 
 @app.route('/api/servers/<server_id>/properties', methods=['GET'])
 @server_access_required
@@ -10176,8 +10176,8 @@ def get_properties(server_id):
     properties_path = server_path / 'server.properties'
     
     if not properties_path.exists():
-        return jsonify({'error': 'server.properties not found. Start the server at least once to generate it.'}), 404
-    
+        return api_error('server.properties not found. Start the server at least once to generate it.', 404)
+
     try:
         properties = {}
         with open(properties_path, 'r', encoding='utf-8') as f:
@@ -10188,10 +10188,10 @@ def get_properties(server_id):
                     if '=' in line:
                         key, value = line.split('=', 1)
                         properties[key.strip()] = value.strip()
-        
-        return jsonify({'properties': properties})
+
+        return api_success({'properties': properties})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/properties', methods=['POST'])
 @server_access_required
@@ -10201,11 +10201,11 @@ def save_properties(server_id):
     properties_path = server_path / 'server.properties'
     
     if not properties_path.exists():
-        return jsonify({'error': 'server.properties not found'}), 404
-    
+        return api_error('server.properties not found', 404)
+
     data = request.json
     if not data or 'properties' not in data:
-        return jsonify({'error': 'Missing properties'}), 400
+        return api_error('Missing properties', 400)
     
     new_properties = data['properties']
 
@@ -10222,9 +10222,7 @@ def save_properties(server_id):
                 if port == new_port:
                     other_server_config = server_manager.get_server_config(other_server_id)
                     other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
-                    return jsonify({
-                        'error': f'Port {new_port} is already in use by server: {other_server_name}'
-                    }), 400
+                    return api_error(f'Port {new_port} is already in use by server: {other_server_name}', 400)
 
         try:
             # Read existing file to preserve comments and order
@@ -10260,7 +10258,7 @@ def save_properties(server_id):
 
             return jsonify({'success': True})
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
 
 # ==================== Resource Pack API ====================
@@ -10271,28 +10269,28 @@ def get_resourcepack_info(server_id):
     """Get resource pack information for a server"""
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
-        return jsonify({'error': 'Resource packs are not supported for Bedrock servers'}), 400
-    
+        return api_error('Resource packs are not supported for Bedrock servers', 400)
+
     server_path = server_manager.get_server_path(server_id)
     resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
-    
+
     if not resourcepack_path.exists():
-        return jsonify({'exists': False})
-    
+        return api_success({'exists': False})
+
     try:
         stat = resourcepack_path.stat()
-        
+
         # Calculate SHA1 hash
         sha1_hash = hashlib.sha1()
         with open(resourcepack_path, 'rb') as f:
             while chunk := f.read(8192):
                 sha1_hash.update(chunk)
-        
+
         # Get base URL from settings
         base_url = settings_manager.get_branding().get('baseUrl', '')
         pack_url = f"{base_url}/resourcepacks/{server_id}.zip" if base_url else ''
-        
-        return jsonify({
+
+        return api_success({
             'exists': True,
             'filename': resourcepack_path.name,
             'size': stat.st_size,
@@ -10301,7 +10299,7 @@ def get_resourcepack_info(server_id):
             'url': pack_url
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/resourcepack/upload', methods=['POST'])
 @server_access_required
@@ -10309,20 +10307,20 @@ def upload_resourcepack(server_id):
     """Upload a resource pack for a server"""
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
-        return jsonify({'error': 'Resource packs are not supported for Bedrock servers'}), 400
-    
+        return api_error('Resource packs are not supported for Bedrock servers', 400)
+
     if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
+        return api_error('No file provided', 400)
+
     file = request.files['file']
-    
+
     if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
+        return api_error('No file selected', 400)
+
     # Check file extension
     if not file.filename.lower().endswith('.zip'):
-        return jsonify({'error': 'File must be a .zip file'}), 400
-    
+        return api_error('File must be a .zip file', 400)
+
     # Check file size (default 100MB; MAX_RESOURCEPACK_SIZE_MB in .env)
     MAX_SIZE = MAX_RESOURCEPACK_SIZE_MB * 1024 * 1024
     file.seek(0, os.SEEK_END)
@@ -10330,7 +10328,7 @@ def upload_resourcepack(server_id):
     file.seek(0)
 
     if file_size > MAX_SIZE:
-        return jsonify({'error': f'File size exceeds {MAX_RESOURCEPACK_SIZE_MB}MB limit (size: {file_size / (1024*1024):.2f}MB)'}), 400
+        return api_error(f'File size exceeds {MAX_RESOURCEPACK_SIZE_MB}MB limit (size: {file_size / (1024*1024):.2f}MB)', 400)
     
     try:
         # Save the file
@@ -10352,7 +10350,7 @@ def upload_resourcepack(server_id):
         # Get base URL from settings
         base_url = settings_manager.get_branding().get('baseUrl', '')
         if not base_url:
-            return jsonify({'error': 'Base URL is not configured. Please set it in Settings > Branding.'}), 400
+            return api_error('Base URL is not configured. Please set it in Settings > Branding.', 400)
         
         pack_url = f"{base_url}/resourcepacks/{server_id}.zip"
         
@@ -10399,7 +10397,7 @@ def upload_resourcepack(server_id):
             'propertiesUpdated': properties_path.exists()
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/resourcepack', methods=['DELETE'])
 @server_access_required
@@ -10407,16 +10405,16 @@ def delete_resourcepack(server_id):
     """Delete resource pack for a server"""
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
-        return jsonify({'error': 'Resource packs are not supported for Bedrock servers'}), 400
-    
+        return api_error('Resource packs are not supported for Bedrock servers', 400)
+
     resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
-    
+
     if not resourcepack_path.exists():
-        return jsonify({'error': 'No resource pack found'}), 404
-    
+        return api_error('No resource pack found', 404)
+
     try:
         resourcepack_path.unlink()
-        
+
         # Remove from server.properties if it exists
         properties_path = server_manager.get_server_path(server_id) / 'server.properties'
         if properties_path.exists():
@@ -10427,13 +10425,13 @@ def delete_resourcepack(server_id):
                     # Remove resource pack lines
                     if not stripped.startswith('resource-pack=') and not stripped.startswith('resource-pack-sha1='):
                         lines.append(line)
-            
+
             with open(properties_path, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
-        
+
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 # ==================== Backup API ====================
