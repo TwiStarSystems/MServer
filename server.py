@@ -5938,7 +5938,7 @@ def reject_if_not_zip(saved_path):
     Returns None when the file is a valid zip."""
     if not zipfile.is_zipfile(saved_path):
         Path(saved_path).unlink(missing_ok=True)
-        return jsonify({'error': 'Uploaded file is not a valid ZIP/JAR archive'}), 400
+        return api_error('Uploaded file is not a valid ZIP/JAR archive', 400)
     return None
 
 
@@ -8299,16 +8299,16 @@ def list_files(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, requested_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / requested_path
-    
+
     if not full_path.exists():
-        return jsonify({'error': 'Path not found'}), 404
-    
+        return api_error('Path not found', 404)
+
     if full_path.is_file():
-        return jsonify({'isFile': True, 'path': requested_path})
-    
+        return api_success({'isFile': True, 'path': requested_path})
+
     files = []
     try:
         for item in full_path.iterdir():
@@ -8320,9 +8320,9 @@ def list_files(server_id):
                 'modified': datetime.fromtimestamp(stat.st_mtime).isoformat()
             })
     except PermissionError:
-        return jsonify({'error': 'Permission denied'}), 403
-    
-    return jsonify({'files': files, 'currentPath': requested_path})
+        return api_error('Permission denied', 403)
+
+    return api_success({'files': files, 'currentPath': requested_path})
 
 @app.route('/api/servers/<server_id>/files/read', methods=['GET'])
 @server_access_required
@@ -8332,18 +8332,18 @@ def read_server_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, requested_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / requested_path
-    
+
     if not full_path.exists():
-        return jsonify({'error': 'File not found'}), 404
-    
+        return api_error('File not found', 404)
+
     try:
         content = full_path.read_text(encoding='utf-8')
-        return jsonify({'content': content})
+        return api_success({'content': content})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/files/write', methods=['POST'])
 @server_access_required
@@ -8355,15 +8355,15 @@ def write_server_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     try:
         full_path.write_text(content, encoding='utf-8')
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/logs', methods=['GET'])
 @server_access_required
@@ -9552,10 +9552,10 @@ def create_server_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     try:
         if file_type == 'directory':
             full_path.mkdir(parents=True, exist_ok=True)
@@ -9564,7 +9564,7 @@ def create_server_file(server_id):
             full_path.touch()
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/files/delete', methods=['DELETE'])
 @server_access_required
@@ -9575,13 +9575,13 @@ def delete_server_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, file_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / file_path
-    
+
     if not full_path.exists():
-        return jsonify({'error': 'File not found'}), 404
-    
+        return api_error('File not found', 404)
+
     try:
         if full_path.is_dir():
             shutil.rmtree(full_path)
@@ -9589,7 +9589,7 @@ def delete_server_file(server_id):
             full_path.unlink()
         return jsonify({'success': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/files/download', methods=['GET'])
 @server_access_required
@@ -9599,13 +9599,13 @@ def download_server_file(server_id):
     server_path = server_manager.get_server_path(server_id)
     
     if not is_safe_path(server_path, requested_path):
-        return jsonify({'error': 'Access denied'}), 403
-    
+        return api_error('Access denied', 403)
+
     full_path = server_path / requested_path
-    
+
     if not full_path.exists():
-        return jsonify({'error': 'File not found'}), 404
-    
+        return api_error('File not found', 404)
+
     return send_file(full_path, as_attachment=True)
 
 
@@ -9619,15 +9619,15 @@ def zip_server_folder(server_id):
     server_path = server_manager.get_server_path(server_id)
 
     if not is_safe_path(server_path, requested_path):
-        return jsonify({'error': 'Access denied'}), 403
+        return api_error('Access denied', 403)
 
     full_path = server_path / requested_path
 
     if not full_path.exists():
-        return jsonify({'error': 'Path not found'}), 404
+        return api_error('Path not found', 404)
 
     if not full_path.is_dir():
-        return jsonify({'error': 'Path is not a directory'}), 400
+        return api_error('Path is not a directory', 400)
 
     folder_name = full_path.name or 'server'
     cfg = server_manager.get_server_config(server_id) or {}
@@ -9647,14 +9647,14 @@ def upload_server_file(server_id):
     """Upload a file"""
     user_id, user = get_current_user()
     if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
+        return api_error('No file uploaded', 400)
 
     file = request.files['file']
     target_path = request.form.get('path', '')
     server_path = server_manager.get_server_path(server_id)
 
     if not is_safe_path(server_path, target_path):
-        return jsonify({'error': 'Access denied'}), 403
+        return api_error('Access denied', 403)
 
     filename = secure_filename(file.filename)
     cfg = server_manager.get_server_config(server_id) or {}
@@ -9668,7 +9668,7 @@ def upload_server_file(server_id):
             file.save(str(dest_path))
             return jsonify({'success': True}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'fileUpload', user,
@@ -9718,8 +9718,8 @@ def list_mods(server_id):
     # Sort by name
     result['plugins'].sort(key=lambda x: x['name'].lower())
     result['mods'].sort(key=lambda x: x['name'].lower())
-    
-    return jsonify(result)
+
+    return api_success(result)
 
 @app.route('/api/servers/<server_id>/mods/upload', methods=['POST'])
 @limiter.limit("20 per 15 minutes")
@@ -9728,16 +9728,16 @@ def upload_mod(server_id):
     """Upload a mod or plugin"""
     user_id, user = get_current_user()
     if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
+        return api_error('No file uploaded', 400)
 
     file = request.files['file']
     mod_type = request.form.get('type', 'plugins')
 
     if mod_type not in ['plugins', 'mods']:
-        return jsonify({'error': 'Invalid mod type'}), 400
+        return api_error('Invalid mod type', 400)
 
     if not file.filename.endswith('.jar'):
-        return jsonify({'error': 'File must be a JAR file'}), 400
+        return api_error('File must be a JAR file', 400)
 
     server_path = server_manager.get_server_path(server_id)
     filename = secure_filename(file.filename)
@@ -9755,7 +9755,7 @@ def upload_mod(server_id):
                 return rejected
             return jsonify({'success': True, 'filename': filename}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'modManagement', user,
@@ -9770,18 +9770,18 @@ def enable_mod(server_id, mod_type, filename):
     """Enable a disabled mod"""
     user_id, user = get_current_user()
     if mod_type not in ['plugins', 'mods']:
-        return jsonify({'error': 'Invalid mod type'}), 400
+        return api_error('Invalid mod type', 400)
 
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
 
     safe_fn = secure_filename(filename)
     if safe_fn != filename or '..' in filename or '/' in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
+        return api_error('Invalid filename', 400)
 
     disabled_path = mod_dir / filename
     if not disabled_path.exists() or not filename.endswith('.disabled'):
-        return jsonify({'error': 'Disabled mod not found'}), 404
+        return api_error('Disabled mod not found', 404)
 
     enabled_name = filename.rsplit('.disabled', 1)[0]
     cfg = server_manager.get_server_config(server_id) or {}
@@ -9793,7 +9793,7 @@ def enable_mod(server_id, mod_type, filename):
             disabled_path.rename(enabled_path)
             return jsonify({'success': True, 'filename': enabled_name}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'modManagement', user,
@@ -9808,18 +9808,18 @@ def disable_mod(server_id, mod_type, filename):
     """Disable a mod by renaming it"""
     user_id, user = get_current_user()
     if mod_type not in ['plugins', 'mods']:
-        return jsonify({'error': 'Invalid mod type'}), 400
+        return api_error('Invalid mod type', 400)
 
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
 
     safe_fn = secure_filename(filename)
     if safe_fn != filename or '..' in filename or '/' in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
+        return api_error('Invalid filename', 400)
 
     mod_path = mod_dir / filename
     if not mod_path.exists():
-        return jsonify({'error': 'Mod not found'}), 404
+        return api_error('Mod not found', 404)
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
@@ -9830,7 +9830,7 @@ def disable_mod(server_id, mod_type, filename):
             mod_path.rename(disabled_path)
             return jsonify({'success': True, 'filename': filename + '.disabled'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'modManagement', user,
@@ -9845,18 +9845,18 @@ def delete_mod(server_id, mod_type, filename):
     """Delete a mod or plugin"""
     user_id, user = get_current_user()
     if mod_type not in ['plugins', 'mods']:
-        return jsonify({'error': 'Invalid mod type'}), 400
+        return api_error('Invalid mod type', 400)
 
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
 
     safe_fn = secure_filename(filename)
     if safe_fn != filename or '..' in filename or '/' in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
+        return api_error('Invalid filename', 400)
 
     mod_path = mod_dir / filename
     if not mod_path.exists():
-        return jsonify({'error': 'Mod not found'}), 404
+        return api_error('Mod not found', 404)
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
@@ -9866,7 +9866,7 @@ def delete_mod(server_id, mod_type, filename):
             mod_path.unlink()
             return jsonify({'success': True}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'modManagement', user,
@@ -9947,16 +9947,16 @@ def modrinth_search(server_id):
                 'project_type':  h.get('project_type'),
                 'author':        h.get('author'),
             })
-        return jsonify({
+        return api_success({
             'hits':       hits,
             'total_hits': data.get('total_hits', 0),
             'offset':     data.get('offset', 0),
             'limit':      data.get('limit', limit),
         })
     except requests.exceptions.Timeout:
-        return jsonify({'error': 'Modrinth API timed out'}), 504
+        return api_error('Modrinth API timed out', 504)
     except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Modrinth API error: {str(e)}'}), 502
+        return api_error(f'Modrinth API error: {str(e)}', 502)
 
 
 @app.route('/api/servers/<server_id>/mods/modrinth/versions/<project_id>', methods=['GET'])
@@ -9965,7 +9965,7 @@ def modrinth_project_versions(server_id, project_id):
     """Return available versions for a Modrinth project, filtered by loader/mc_version."""
     # Validate project_id is safe (base62 or slug)
     if not re.match(r'^[a-zA-Z0-9_\-]{1,64}$', project_id):
-        return jsonify({'error': 'Invalid project ID'}), 400
+        return api_error('Invalid project ID', 400)
 
     loader     = request.args.get('loader', '')
     mc_version = request.args.get('mc_version', '')
@@ -9999,11 +9999,11 @@ def modrinth_project_versions(server_id, project_id):
                 'sha512':        jar_file.get('hashes', {}).get('sha512'),
                 'sha1':          jar_file.get('hashes', {}).get('sha1'),
             })
-        return jsonify({'versions': slim})
+        return api_success({'versions': slim})
     except requests.exceptions.Timeout:
-        return jsonify({'error': 'Modrinth API timed out'}), 504
+        return api_error('Modrinth API timed out', 504)
     except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Modrinth API error: {str(e)}'}), 502
+        return api_error(f'Modrinth API error: {str(e)}', 502)
 
 
 @app.route('/api/servers/<server_id>/mods/modrinth/install', methods=['POST'])
@@ -10019,19 +10019,19 @@ def modrinth_install(server_id):
 
     # Validate inputs
     if not url or not filename:
-        return jsonify({'error': 'url and filename are required'}), 400
+        return api_error('url and filename are required', 400)
     if mod_type not in ('mods', 'plugins'):
-        return jsonify({'error': 'mod_type must be mods or plugins'}), 400
+        return api_error('mod_type must be mods or plugins', 400)
     if not filename.endswith('.jar'):
-        return jsonify({'error': 'filename must be a .jar file'}), 400
+        return api_error('filename must be a .jar file', 400)
 
     # Only allow downloads from Modrinth CDN
     if not url.startswith('https://cdn.modrinth.com/'):
-        return jsonify({'error': 'Only Modrinth CDN URLs are permitted'}), 400
+        return api_error('Only Modrinth CDN URLs are permitted', 400)
 
     safe_filename = secure_filename(filename)
     if not safe_filename:
-        return jsonify({'error': 'Invalid filename'}), 400
+        return api_error('Invalid filename', 400)
 
     server_path = server_manager.get_server_path(server_id)
     target_dir  = server_path / mod_type
@@ -10051,18 +10051,18 @@ def modrinth_install(server_id):
         # Verify integrity if hash provided
         if sha512_expected and sha512_actual.hexdigest() != sha512_expected:
             dest_path.unlink(missing_ok=True)
-            return jsonify({'error': 'SHA-512 integrity check failed — file deleted'}), 409
+            return api_error('SHA-512 integrity check failed — file deleted', 409)
 
         return jsonify({'success': True, 'filename': safe_filename})
     except requests.exceptions.Timeout:
         dest_path.unlink(missing_ok=True)
-        return jsonify({'error': 'Download timed out'}), 504
+        return api_error('Download timed out', 504)
     except requests.exceptions.RequestException as e:
         dest_path.unlink(missing_ok=True)
-        return jsonify({'error': f'Download failed: {str(e)}'}), 502
+        return api_error(f'Download failed: {str(e)}', 502)
     except Exception as e:
         dest_path.unlink(missing_ok=True)
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/servers/<server_id>/mods/updates', methods=['GET'])
@@ -10082,7 +10082,7 @@ def check_mod_updates(server_id):
                     jar_files.append({'path': item, 'folder': folder})
 
     if not jar_files:
-        return jsonify({'updates': [], 'not_on_modrinth': []})
+        return api_success({'updates': [], 'not_on_modrinth': []})
 
     # Compute SHA-512 hashes for all jars
     hashes = {}
@@ -10097,7 +10097,7 @@ def check_mod_updates(server_id):
             pass
 
     if not hashes:
-        return jsonify({'updates': [], 'not_on_modrinth': []})
+        return api_success({'updates': [], 'not_on_modrinth': []})
 
     # Ask Modrinth for the latest version matching these hashes
     try:
@@ -10120,9 +10120,9 @@ def check_mod_updates(server_id):
         resp.raise_for_status()
         latest_map = resp.json()   # {current_hash: {version object with latest available}}
     except requests.exceptions.Timeout:
-        return jsonify({'error': 'Modrinth API timed out'}), 504
+        return api_error('Modrinth API timed out', 504)
     except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Modrinth API error: {str(e)}'}), 502
+        return api_error(f'Modrinth API error: {str(e)}', 502)
 
     updates = []
     not_on_modrinth = []
@@ -10151,7 +10151,7 @@ def check_mod_updates(server_id):
         else:
             not_on_modrinth.append(entry['path'].name)
 
-    return jsonify({
+    return api_success({
         'updates':         updates,
         'not_on_modrinth': not_on_modrinth,
     })
