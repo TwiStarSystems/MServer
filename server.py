@@ -6880,7 +6880,7 @@ def api_get_server_access(server_id):
     owner_id = server_config.get('owner') if server_config else None
     owner = user_manager.get_user_by_id(owner_id) if owner_id else None
     shared_groups = group_manager.get_server_groups(server_id)
-    return jsonify({
+    return api_success({
         'owner': {'id': owner_id, 'username': owner['username'], 'name': owner.get('name', '')} if owner else None,
         'sharedGroups': shared_groups,
     })
@@ -6893,13 +6893,13 @@ def api_update_server_access(server_id):
     server_config = server_manager.get_server_config(server_id)
     if not user_manager.user_has_permission(user, 'servers.access.all'):
         if not server_config or server_config.get('owner') != user_id:
-            return jsonify({'error': 'Only the server owner can change sharing'}), 403
+            return api_error('Only the server owner can change sharing', 403)
     data = request.get_json()
     group_ids = data.get('groupIds', [])
     group_manager.set_server_groups(server_id, group_ids)
     # Unsharing can revoke access for every connected member of an affected group.
     _resync_all_connected_rooms()
-    return jsonify({'success': True})
+    return api_success()
 
 
 # ==================== Notification API ====================
@@ -7902,21 +7902,21 @@ def delete_server(server_id):
 def check_managed(server_id):
     """Check if a server has managed.conf and validate its fields"""
     is_managed = server_manager.is_managed(server_id)
-    
+
     if not is_managed:
-        return jsonify({'managed': False, 'valid': False, 'missingFields': ['managed.conf file not found']})
-    
+        return api_success({'managed': False, 'valid': False, 'missingFields': ['managed.conf file not found']})
+
     # Validate managed.conf
     is_valid, missing_fields = server_manager.validate_managed_conf(server_id)
-    
+
     # Get current managed.conf data
     server_config = server_manager.get_server_config(server_id)
     server_dir = Path(server_config.get('serverPath', ''))
     managed_data = server_manager._read_managed_conf(server_dir)
-    
-    return jsonify({
-        'managed': True, 
-        'valid': is_valid, 
+
+    return api_success({
+        'managed': True,
+        'valid': is_valid,
         'missingFields': missing_fields,
         'data': managed_data
     })
@@ -7927,33 +7927,33 @@ def enable_management(server_id):
     """Create managed.conf for a server"""
     success, message = server_manager.enable_management(server_id)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success({'message': message})
+    return api_error(message, 400)
 
 @app.route('/api/servers/<server_id>/managed/update', methods=['POST'])
 @server_access_required
 def update_managed_conf(server_id):
     """Update fields in managed.conf"""
     data = request.get_json()
-    
+
     if not data:
-        return jsonify({'error': 'No data provided'}), 400
-    
+        return api_error('No data provided', 400)
+
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
-    
+        return api_error('Server not found', 404)
+
     server_dir = Path(server_config.get('serverPath', ''))
     managed_conf = server_manager._read_managed_conf(server_dir)
-    
+
     # Update provided fields
     for field, value in data.items():
         if field in server_manager.MANAGED_CONF_REQUIRED_FIELDS or field == 'EULAAcceptedAt':
             managed_conf[field] = value
-    
+
     server_manager._write_managed_conf(server_dir, managed_conf)
-    
-    return jsonify({'success': True, 'message': 'Configuration updated'})
+
+    return api_success({'message': 'Configuration updated'})
 
 
 # ==================== Canned Commands API ====================
@@ -7967,9 +7967,9 @@ def get_canned_commands(server_id):
     server_manager._ensure_canned_commands_conf(server_path)
     try:
         data = json.loads(conf_path.read_text(encoding='utf-8'))
-        return jsonify(data)
+        return api_success(data)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/canned-commands', methods=['PUT'])
 @server_access_required
@@ -7978,7 +7978,7 @@ def save_canned_commands(server_id):
     server_path = server_manager.get_server_path(server_id)
     body = request.get_json()
     if body is None:
-        return jsonify({'error': 'Invalid JSON'}), 400
+        return api_error('Invalid JSON', 400)
 
     auto_execute = bool(body.get('auto_execute', False))
     raw_commands = body.get('commands', [])
@@ -7995,9 +7995,9 @@ def save_canned_commands(server_id):
     conf_path = server_path / 'canned_commands.conf'
     try:
         conf_path.write_text(json.dumps(conf_data, indent=2), encoding='utf-8')
-        return jsonify({'success': True})
+        return api_success()
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 @app.route('/api/servers/<server_id>/change-version', methods=['POST'])
@@ -8172,9 +8172,9 @@ def check_eula(server_id):
     # Bedrock servers don't require EULA acceptance
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
-        return jsonify({'accepted': True})
+        return api_success({'accepted': True})
     accepted = server_manager.check_eula_accepted(server_id)
-    return jsonify({'accepted': accepted})
+    return api_success({'accepted': accepted})
 
 @app.route('/api/servers/<server_id>/eula/accept', methods=['POST'])
 @server_access_required
@@ -8182,8 +8182,8 @@ def accept_eula(server_id):
     """Accept the EULA for a server"""
     success, message = server_manager.accept_eula(server_id)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success({'message': message})
+    return api_error(message, 400)
 
 @app.route('/api/servers/<server_id>/start', methods=['POST'])
 @server_access_required
