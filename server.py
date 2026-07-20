@@ -8603,12 +8603,12 @@ def get_online_players(server_id):
     """Get currently online players tracked from console output"""
     instance = server_manager.servers.get(server_id)
     if not instance or not instance.is_running():
-        return jsonify({'online': [], 'count': 0})
+        return api_success({'online': [], 'count': 0})
     players = [
         {'name': name, 'since': since}
         for name, since in instance.online_players.items()
     ]
-    return jsonify({'online': players, 'count': len(players)})
+    return api_success({'online': players, 'count': len(players)})
 
 @app.route('/api/servers/<server_id>/players/<uuid>/stats', methods=['GET'])
 @server_access_required
@@ -8632,7 +8632,7 @@ def get_player_stats(server_id, uuid):
             break
 
     if not stats_file:
-        return jsonify({'error': 'Stats file not found for this player'}), 404
+        return api_error('Stats file not found for this player', 404)
 
     try:
         with open(stats_file, 'r', encoding='utf-8') as f:
@@ -8658,9 +8658,9 @@ def get_player_stats(server_id, uuid):
             'jumps': flat.get('custom.jump', 0),
             'distance_walked_cm': flat.get('custom.walk_one_cm', 0),
         }
-        return jsonify({'stats': flat, 'highlights': highlights})
+        return api_success({'stats': flat, 'highlights': highlights})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/<uuid>/inventory', methods=['GET'])
 @server_access_required
@@ -8682,13 +8682,13 @@ def get_player_inventory(server_id, uuid):
             break
 
     if not player_dat:
-        return jsonify({'error': 'Player data file not found'}), 404
+        return api_error('Player data file not found', 404)
 
     try:
         nbt_data = nbt_editor.read_file(player_dat)
         nbt_json = nbt_editor.to_dict(nbt_data)
 
-        return jsonify({
+        return api_success({
             'inventory': nbt_json.get('Inventory', []),
             'armor': nbt_json.get('ArmorItems', []),
             'enderChest': nbt_json.get('EnderItems', []),
@@ -8699,7 +8699,7 @@ def get_player_inventory(server_id, uuid):
             'gameType': nbt_json.get('playerGameType'),
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/banned-ips', methods=['GET'])
 @server_access_required
@@ -8711,10 +8711,10 @@ def get_banned_ips(server_id):
         if banned_ips_file.exists():
             with open(banned_ips_file, 'r') as f:
                 banned_ips = json.load(f)
-            return jsonify({'banned_ips': banned_ips})
-        return jsonify({'banned_ips': []})
+            return api_success({'banned_ips': banned_ips})
+        return api_success({'banned_ips': []})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/banned-ips', methods=['POST'])
 @server_access_required
@@ -8726,11 +8726,11 @@ def ban_ip(server_id):
     expires = data.get('expires', 'forever')
 
     if not ip_address:
-        return jsonify({'error': 'IP address is required'}), 400
+        return api_error('IP address is required', 400)
 
     # Validate IP address format (IPv4/IPv6/wildcards Minecraft allows)
     if not re.match(r'^[\d\.\:a-fA-F\*]+$', ip_address):
-        return jsonify({'error': 'Invalid IP address format'}), 400
+        return api_error('Invalid IP address format', 400)
 
     server_path = server_manager.get_server_path(server_id)
     banned_ips_file = server_path / 'banned-ips.json'
@@ -8751,7 +8751,7 @@ def ban_ip(server_id):
 
         for entry in banned_ips:
             if entry.get('ip') == ip_address:
-                return jsonify({'error': f'{ip_address} is already banned'}), 400
+                return api_error(f'{ip_address} is already banned', 400)
 
         banned_ips.append({
             'ip': ip_address,
@@ -8766,7 +8766,7 @@ def ban_ip(server_id):
 
         return jsonify({'success': True, 'message': f'{ip_address} has been banned'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/banned-ips/<path:ip_address>', methods=['DELETE'])
 @server_access_required
@@ -8783,7 +8783,7 @@ def unban_ip(server_id, ip_address):
 
     try:
         if not banned_ips_file.exists():
-            return jsonify({'error': 'Banned IPs file not found'}), 404
+            return api_error('Banned IPs file not found', 404)
 
         with open(banned_ips_file, 'r') as f:
             banned_ips = json.load(f)
@@ -8792,14 +8792,14 @@ def unban_ip(server_id, ip_address):
         banned_ips = [e for e in banned_ips if e.get('ip') != ip_address]
 
         if len(banned_ips) == original_len:
-            return jsonify({'error': 'IP not found in ban list'}), 404
+            return api_error('IP not found in ban list', 404)
 
         with open(banned_ips_file, 'w') as f:
             json.dump(banned_ips, f, indent=2)
 
         return jsonify({'success': True, 'message': f'{ip_address} has been unbanned'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/message', methods=['POST'])
 @server_access_required
@@ -8817,9 +8817,9 @@ def message_players(server_id):
     obfuscated = data.get('obfuscated', False)
 
     if not message:
-        return jsonify({'error': 'Message is required'}), 400
+        return api_error('Message is required', 400)
     if not target:
-        return jsonify({'error': 'Invalid target: use @a/@p/@r/@s/@e or a player name'}), 400
+        return api_error('Invalid target: use @a/@p/@r/@s/@e or a player name', 400)
 
     server_config = server_manager.get_server_config(server_id)
     is_bedrock = server_config and server_config.get('category') == 'bedrock'
@@ -8833,7 +8833,7 @@ def message_players(server_id):
         command = f'say {message}'
     elif msg_type == 'msg':
         if not target or target.startswith('@a'):
-            return jsonify({'error': '/msg requires a specific player target, not @a'}), 400
+            return api_error('/msg requires a specific player target, not @a', 400)
         command = f'msg {target} {message}'
     elif msg_type == 'chat':
         if is_bedrock:
@@ -8878,11 +8878,11 @@ def message_players(server_id):
                 parts.append('"bold":true')
             command = f'title {target} actionbar {{{",".join(parts)}}}'
     else:
-        return jsonify({'error': f'Unknown message type: {msg_type}'}), 400
+        return api_error(f'Unknown message type: {msg_type}', 400)
 
     success, msg = server_manager.send_command(server_id, command)
     if not success:
-        return jsonify({'error': msg}), 400
+        return api_error(msg, 400)
 
     type_labels = {
         'say': '/say broadcast',
@@ -8960,10 +8960,10 @@ def get_operators(server_id):
         if ops_file.exists():
             with open(ops_file, 'r') as f:
                 ops = json.load(f)
-            return jsonify({'operators': ops})
-        return jsonify({'operators': []})
+            return api_success({'operators': ops})
+        return api_success({'operators': []})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/ops', methods=['POST'])
 @server_access_required
@@ -8988,7 +8988,7 @@ def add_operator(server_id):
     if inst:
         live_name = _safe_player_token(player_name)
         if not live_name:
-            return jsonify({'error': 'A valid player name is required to op a player on a running server'}), 400
+            return api_error('A valid player name is required to op a player on a running server', 400)
 
         def do_add_op_live():
             inst.send_command(f'op {live_name}')
@@ -9023,9 +9023,9 @@ def add_operator(server_id):
     elif player_name:
         resolved_uuid, actual_name = get_player_uuid(player_name)
         if not resolved_uuid:
-            return jsonify({'error': f'Could not find player "{player_name}". Make sure the name is correct.'}), 404
+            return api_error(f'Could not find player "{player_name}". Make sure the name is correct.', 404)
     else:
-        return jsonify({'error': 'Player name or UUID is required'}), 400
+        return api_error('Player name or UUID is required', 400)
 
     def do_add_op():
         try:
@@ -9035,7 +9035,7 @@ def add_operator(server_id):
                     ops = json.load(f)
             for op in ops:
                 if op.get('uuid') == resolved_uuid:
-                    return jsonify({'error': f'{actual_name} is already an operator'}), 400
+                    return api_error(f'{actual_name} is already an operator', 400)
             ops.append({
                 'uuid': resolved_uuid, 'name': actual_name,
                 'level': int(level), 'bypassesPlayerLimit': bool(bypass_limit)
@@ -9044,7 +9044,7 @@ def add_operator(server_id):
                 json.dump(ops, f, indent=2)
             return jsonify({'success': True, 'message': f'{actual_name} added as operator'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'playerManagement', user,
@@ -9066,11 +9066,11 @@ def update_operator(server_id, uuid):
     
     try:
         if not ops_file.exists():
-            return jsonify({'error': 'Ops file not found'}), 404
-        
+            return api_error('Ops file not found', 404)
+
         with open(ops_file, 'r') as f:
             ops = json.load(f)
-        
+
         found = False
         for op in ops:
             if op.get('uuid') == uuid:
@@ -9078,16 +9078,16 @@ def update_operator(server_id, uuid):
                 op['bypassesPlayerLimit'] = bool(bypass_limit)
                 found = True
                 break
-        
+
         if not found:
-            return jsonify({'error': 'Operator not found'}), 404
-        
+            return api_error('Operator not found', 404)
+
         with open(ops_file, 'w') as f:
             json.dump(ops, f, indent=2)
-        
+
         return jsonify({'success': True, 'message': 'Operator updated'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['DELETE'])
 @server_access_required
@@ -9117,18 +9117,18 @@ def remove_operator(server_id, uuid):
     def do_remove():
         try:
             if not ops_file.exists():
-                return jsonify({'error': 'Ops file not found'}), 404
+                return api_error('Ops file not found', 404)
             with open(ops_file, 'r') as f:
                 ops = json.load(f)
             original_len = len(ops)
             ops = [op for op in ops if op.get('uuid') != uuid]
             if len(ops) == original_len:
-                return jsonify({'error': 'Operator not found'}), 404
+                return api_error('Operator not found', 404)
             with open(ops_file, 'w') as f:
                 json.dump(ops, f, indent=2)
             return jsonify({'success': True, 'message': 'Operator removed'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'playerManagement', user,
@@ -9148,10 +9148,10 @@ def get_whitelist(server_id):
         if whitelist_file.exists():
             with open(whitelist_file, 'r') as f:
                 whitelist = json.load(f)
-            return jsonify({'whitelist': whitelist})
-        return jsonify({'whitelist': []})
+            return api_success({'whitelist': whitelist})
+        return api_success({'whitelist': []})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/whitelist', methods=['POST'])
 @server_access_required
@@ -9173,7 +9173,7 @@ def add_to_whitelist(server_id):
     if inst:
         live_name = _safe_player_token(player_name)
         if not live_name:
-            return jsonify({'error': 'A valid player name is required to whitelist a player on a running server'}), 400
+            return api_error('A valid player name is required to whitelist a player on a running server', 400)
 
         def do_add_live():
             inst.send_command(f'whitelist add {live_name}')
@@ -9207,9 +9207,9 @@ def add_to_whitelist(server_id):
     elif player_name:
         resolved_uuid, actual_name = get_player_uuid(player_name)
         if not resolved_uuid:
-            return jsonify({'error': f'Could not find player "{player_name}"'}), 404
+            return api_error(f'Could not find player "{player_name}"', 404)
     else:
-        return jsonify({'error': 'Player name or UUID is required'}), 400
+        return api_error('Player name or UUID is required', 400)
 
     def do_add():
         try:
@@ -9219,13 +9219,13 @@ def add_to_whitelist(server_id):
                     whitelist = json.load(f)
             for player in whitelist:
                 if player.get('uuid') == resolved_uuid:
-                    return jsonify({'error': f'{actual_name} is already whitelisted'}), 400
+                    return api_error(f'{actual_name} is already whitelisted', 400)
             whitelist.append({'uuid': resolved_uuid, 'name': actual_name})
             with open(whitelist_file, 'w') as f:
                 json.dump(whitelist, f, indent=2)
             return jsonify({'success': True, 'message': f'{actual_name} added to whitelist'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'playerManagement', user,
@@ -9262,18 +9262,18 @@ def remove_from_whitelist(server_id, uuid):
     def do_remove():
         try:
             if not whitelist_file.exists():
-                return jsonify({'error': 'Whitelist file not found'}), 404
+                return api_error('Whitelist file not found', 404)
             with open(whitelist_file, 'r') as f:
                 whitelist = json.load(f)
             original_len = len(whitelist)
             whitelist = [p for p in whitelist if p.get('uuid') != uuid]
             if len(whitelist) == original_len:
-                return jsonify({'error': 'Player not found in whitelist'}), 404
+                return api_error('Player not found in whitelist', 404)
             with open(whitelist_file, 'w') as f:
                 json.dump(whitelist, f, indent=2)
             return jsonify({'success': True, 'message': 'Player removed from whitelist'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'playerManagement', user,
@@ -9293,10 +9293,10 @@ def get_banned_players(server_id):
         if banned_file.exists():
             with open(banned_file, 'r') as f:
                 banned = json.load(f)
-            return jsonify({'banned': banned})
-        return jsonify({'banned': []})
+            return api_success({'banned': banned})
+        return api_success({'banned': []})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/banned', methods=['POST'])
 @server_access_required
@@ -9322,7 +9322,7 @@ def ban_player(server_id):
     if inst:
         live_name = _safe_player_token(player_name)
         if not live_name:
-            return jsonify({'error': 'A valid player name is required to ban a player on a running server'}), 400
+            return api_error('A valid player name is required to ban a player on a running server', 400)
         live_reason = _safe_console_text(reason)
         cmd = f'ban {live_name} {live_reason}'.strip()
 
@@ -9358,9 +9358,9 @@ def ban_player(server_id):
     elif player_name:
         resolved_uuid, actual_name = get_player_uuid(player_name)
         if not resolved_uuid:
-            return jsonify({'error': f'Could not find player "{player_name}"'}), 404
+            return api_error(f'Could not find player "{player_name}"', 404)
     else:
-        return jsonify({'error': 'Player name or UUID is required'}), 400
+        return api_error('Player name or UUID is required', 400)
 
     def do_ban():
         try:
@@ -9370,7 +9370,7 @@ def ban_player(server_id):
                     banned = json.load(f)
             for player in banned:
                 if player.get('uuid') == resolved_uuid:
-                    return jsonify({'error': f'{actual_name} is already banned'}), 400
+                    return api_error(f'{actual_name} is already banned', 400)
             banned.append({
                 'uuid': resolved_uuid, 'name': actual_name,
                 'created': datetime.now().strftime('%Y-%m-%d %H:%M:%S +0000'),
@@ -9380,7 +9380,7 @@ def ban_player(server_id):
                 json.dump(banned, f, indent=2)
             return jsonify({'success': True, 'message': f'{actual_name} has been banned'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'playerManagement', user,
@@ -9417,18 +9417,18 @@ def unban_player(server_id, uuid):
     def do_unban():
         try:
             if not banned_file.exists():
-                return jsonify({'error': 'Banned players file not found'}), 404
+                return api_error('Banned players file not found', 404)
             with open(banned_file, 'r') as f:
                 banned = json.load(f)
             original_len = len(banned)
             banned = [p for p in banned if p.get('uuid') != uuid]
             if len(banned) == original_len:
-                return jsonify({'error': 'Player not found in ban list'}), 404
+                return api_error('Player not found in ban list', 404)
             with open(banned_file, 'w') as f:
                 json.dump(banned, f, indent=2)
             return jsonify({'success': True, 'message': 'Player unbanned'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'playerManagement', user,
@@ -9444,17 +9444,17 @@ def get_whitelist_status(server_id):
     server_path = server_manager.get_server_path(server_id)
     properties_path = server_path / 'server.properties'
     if not properties_path.exists():
-        return jsonify({'enabled': False, 'available': False})
+        return api_success({'enabled': False, 'available': False})
     try:
         with open(properties_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if line.startswith('white-list='):
                     value = line.split('=', 1)[1].strip().lower()
-                    return jsonify({'enabled': value == 'true', 'available': True})
-        return jsonify({'enabled': False, 'available': True})
+                    return api_success({'enabled': value == 'true', 'available': True})
+        return api_success({'enabled': False, 'available': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/whitelist-toggle', methods=['PATCH'])
 @server_access_required
@@ -9463,7 +9463,7 @@ def toggle_whitelist_setting(server_id):
     server_path = server_manager.get_server_path(server_id)
     properties_path = server_path / 'server.properties'
     if not properties_path.exists():
-        return jsonify({'error': 'server.properties not found'}), 404
+        return api_error('server.properties not found', 404)
     try:
         lines = []
         current = False
@@ -9486,7 +9486,7 @@ def toggle_whitelist_setting(server_id):
             inst.send_command('whitelist on' if new_enabled else 'whitelist off')
         return jsonify({'success': True, 'enabled': new_enabled})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/playerdata', methods=['GET'])
 @server_access_required
@@ -9495,8 +9495,8 @@ def get_playerdata(server_id):
     # Check if this is a Bedrock server
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
-        return jsonify({
-            'players': [], 
+        return api_success({
+            'players': [],
             'message': 'Bedrock servers store player data in LevelDB format (worlds/db/). Individual player data files are not accessible. Use permissions.json and allowlist.json to manage players.'
         })
     
@@ -9523,8 +9523,8 @@ def get_playerdata(server_id):
             break
     
     if not playerdata_path or not playerdata_path.exists():
-        return jsonify({'players': [], 'message': 'No playerdata folder found'})
-    
+        return api_success({'players': [], 'message': 'No playerdata folder found'})
+
     try:
         players = []
         for item in playerdata_path.iterdir():
@@ -9537,10 +9537,10 @@ def get_playerdata(server_id):
                     'size': stat.st_size,
                     'modified': datetime.fromtimestamp(stat.st_mtime).isoformat()
                 })
-        
-        return jsonify({'players': players})
+
+        return api_success({'players': players})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/files/create', methods=['POST'])
 @server_access_required
@@ -10445,7 +10445,7 @@ def list_backups(server_id):
     backup_dir = BACKUPS_DIR / server_id
 
     if not backup_dir.exists():
-        return jsonify({'backups': []})
+        return api_success({'backups': []})
 
     # Auto-detect every backup by scanning the folder for .zip files. All backups
     # (manual, scheduled, pre-version-change, pre-jar-update, imported, or files
@@ -10471,7 +10471,7 @@ def list_backups(server_id):
     for i, b in enumerate(backups):
         b['expired'] = bool(max_backups > 0 and i >= max_backups)
 
-    return jsonify({'backups': backups})
+    return api_success({'backups': backups})
 
 @app.route('/api/servers/<server_id>/backups/create', methods=['POST'])
 @limiter.limit("5 per 15 minutes")
@@ -10482,7 +10482,7 @@ def create_backup(server_id):
     server_path = server_manager.get_server_path(server_id)
 
     if not server_path.exists():
-        return jsonify({'error': 'Server path not found'}), 400
+        return api_error('Server path not found', 400)
 
     data = request.get_json(silent=True) or {}
     compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
@@ -10492,11 +10492,11 @@ def create_backup(server_id):
     if custom_name:
         custom_name = secure_filename(custom_name)
         if not custom_name:
-            return jsonify({'error': 'Invalid backup name'}), 400
+            return api_error('Invalid backup name', 400)
         if not custom_name.lower().endswith('.zip'):
             custom_name += '.zip'
         if (BACKUPS_DIR / server_id / custom_name).exists():
-            return jsonify({'error': 'A backup with that name already exists'}), 409
+            return api_error('A backup with that name already exists', 409)
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
@@ -10523,25 +10523,25 @@ def create_backup(server_id):
 def download_backup(server_id):
     """Download a backup"""
     backup_name = request.args.get('name', '')
-    
+
     # Security: sanitize filename and prevent path traversal
     backup_name = secure_filename(backup_name)
     if not backup_name or '..' in backup_name or '/' in backup_name:
-        return jsonify({'error': 'Invalid backup name'}), 400
-    
+        return api_error('Invalid backup name', 400)
+
     backup_path = BACKUPS_DIR / server_id / backup_name
-    
+
     # Additional security check: ensure path is within backups directory
     try:
         backup_path = backup_path.resolve()
         if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
-            return jsonify({'error': 'Invalid backup path'}), 400
+            return api_error('Invalid backup path', 400)
     except Exception:
-        return jsonify({'error': 'Invalid backup path'}), 400
-    
+        return api_error('Invalid backup path', 400)
+
     if not backup_path.exists():
-        return jsonify({'error': 'Backup not found'}), 404
-    
+        return api_error('Backup not found', 404)
+
     return send_file(backup_path, as_attachment=True)
 
 @app.route('/api/servers/<server_id>/backups/delete', methods=['DELETE'])
@@ -10554,19 +10554,19 @@ def delete_backup(server_id):
 
     backup_name = secure_filename(backup_name)
     if not backup_name or '..' in backup_name or '/' in backup_name:
-        return jsonify({'error': 'Invalid backup name'}), 400
+        return api_error('Invalid backup name', 400)
 
     backup_path = BACKUPS_DIR / server_id / backup_name
 
     try:
         backup_path = backup_path.resolve()
         if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
-            return jsonify({'error': 'Invalid backup path'}), 400
+            return api_error('Invalid backup path', 400)
     except Exception:
-        return jsonify({'error': 'Invalid backup path'}), 400
+        return api_error('Invalid backup path', 400)
 
     if not backup_path.exists():
-        return jsonify({'error': 'Backup not found'}), 404
+        return api_error('Backup not found', 404)
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
@@ -10576,7 +10576,7 @@ def delete_backup(server_id):
             backup_path.unlink()
             return jsonify({'success': True}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return api_error(str(e), 500)
 
     result, status = check_action_policy(
         'backupDelete', user,
@@ -10592,7 +10592,7 @@ def rename_backup(server_id):
     old_name = secure_filename(data.get('oldName', ''))
     new_name = secure_filename(data.get('newName', ''))
     if not old_name or not new_name:
-        return jsonify({'error': 'Invalid backup name'}), 400
+        return api_error('Invalid backup name', 400)
     if not new_name.lower().endswith('.zip'):
         new_name += '.zip'
 
@@ -10601,11 +10601,11 @@ def rename_backup(server_id):
     new_path = (BACKUPS_DIR / server_id / new_name).resolve()
 
     if not str(old_path).startswith(str(backup_dir)) or not str(new_path).startswith(str(backup_dir)):
-        return jsonify({'error': 'Invalid backup path'}), 400
+        return api_error('Invalid backup path', 400)
     if not old_path.exists():
-        return jsonify({'error': 'Backup not found'}), 404
+        return api_error('Backup not found', 404)
     if new_path.exists():
-        return jsonify({'error': 'A backup with that name already exists'}), 409
+        return api_error('A backup with that name already exists', 409)
 
     try:
         old_path.rename(new_path)
@@ -10614,7 +10614,7 @@ def rename_backup(server_id):
             checksum_old.rename(new_path.with_suffix('.sha256'))
         return jsonify({'success': True, 'newName': new_name})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/backups/restore', methods=['POST'])
 @server_access_required
@@ -10630,7 +10630,7 @@ def restore_backup(server_id):
     # Security: sanitize filename and prevent path traversal
     backup_name = secure_filename(backup_name)
     if not backup_name or '..' in backup_name or '/' in backup_name:
-        return jsonify({'error': 'Invalid backup name'}), 400
+        return api_error('Invalid backup name', 400)
 
     backup_path = BACKUPS_DIR / server_id / backup_name
 
@@ -10638,12 +10638,12 @@ def restore_backup(server_id):
     try:
         backup_path = backup_path.resolve()
         if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
-            return jsonify({'error': 'Invalid backup path'}), 400
+            return api_error('Invalid backup path', 400)
     except Exception:
-        return jsonify({'error': 'Invalid backup path'}), 400
+        return api_error('Invalid backup path', 400)
 
     if not backup_path.exists():
-        return jsonify({'error': 'Backup not found'}), 404
+        return api_error('Backup not found', 404)
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
@@ -10661,15 +10661,15 @@ def restore_backup(server_id):
 def import_backup(server_id):
     """Import a backup ZIP file uploaded by the user"""
     if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
+        return api_error('No file provided', 400)
 
     f = request.files['file']
     if not f or not f.filename:
-        return jsonify({'error': 'No file selected'}), 400
+        return api_error('No file selected', 400)
 
     filename = secure_filename(f.filename)
     if not filename.lower().endswith('.zip'):
-        return jsonify({'error': 'Only .zip files are supported'}), 400
+        return api_error('Only .zip files are supported', 400)
 
     backup_dir = BACKUPS_DIR / server_id
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -10689,14 +10689,14 @@ def import_backup(server_id):
         # Validate it is a real zip
         if not zipfile.is_zipfile(dest_path):
             dest_path.unlink()
-            return jsonify({'error': 'Uploaded file is not a valid ZIP archive'}), 400
+            return api_error('Uploaded file is not a valid ZIP archive', 400)
 
         size = dest_path.stat().st_size
         return jsonify({'success': True, 'backup': filename, 'size': size})
     except Exception as e:
         if dest_path.exists():
             dest_path.unlink()
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 # ==================== Backup Schedule API ====================
@@ -10707,8 +10707,8 @@ def get_backup_schedule(server_id):
     """Get the backup schedule for a server"""
     schedule = backup_scheduler.get_schedule(server_id)
     if schedule:
-        return jsonify({'schedule': schedule})
-    return jsonify({'schedule': None})
+        return api_success({'schedule': schedule})
+    return api_success({'schedule': None})
 
 @app.route('/api/servers/<server_id>/backups/schedule', methods=['POST'])
 @server_access_required
@@ -10719,8 +10719,8 @@ def set_backup_schedule(server_id):
     # Validate server exists
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
-    
+        return api_error('Server not found', 404)
+
     schedule = backup_scheduler.set_schedule(server_id, {
         'enabled': data.get('enabled', True),
         'type': data.get('type', 'daily'),
@@ -10741,7 +10741,7 @@ def delete_backup_schedule(server_id):
     """Delete the backup schedule for a server"""
     if backup_scheduler.delete_schedule(server_id):
         return jsonify({'success': True})
-    return jsonify({'error': 'No schedule found for this server'}), 404
+    return api_error('No schedule found for this server', 404)
 
 @app.route('/api/backups/schedules', methods=['GET'])
 @login_required
@@ -10767,7 +10767,7 @@ def delete_expired_backups_for_server(server_id):
     """Delete all expired backups for a single server"""
     max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
     if max_backups <= 0:
-        return jsonify({'error': 'No backup retention limit is configured. Set "Hold X Backups" in Game Server Settings first.'}), 400
+        return api_error('No backup retention limit is configured. Set "Hold X Backups" in Game Server Settings first.', 400)
     deleted = backup_scheduler._cleanup_old_backups(server_id, max_backups)
     return jsonify({'success': True, 'deleted': deleted})
 
@@ -10788,7 +10788,7 @@ def delete_all_expired_backups():
 def get_backup_history(server_id):
     """Get the backup event history for a server"""
     events = backup_scheduler.get_backup_history(server_id)
-    return jsonify({'events': events})
+    return api_success({'events': events})
 
 
 @app.route('/api/servers/<server_id>/backups/verify', methods=['POST'])
@@ -10800,18 +10800,18 @@ def verify_backup(server_id):
 
     backup_name = secure_filename(backup_name)
     if not backup_name or '..' in backup_name or '/' in backup_name:
-        return jsonify({'error': 'Invalid backup name'}), 400
+        return api_error('Invalid backup name', 400)
 
     backup_path = BACKUPS_DIR / server_id / backup_name
     try:
         backup_path = backup_path.resolve()
         if not str(backup_path).startswith(str(BACKUPS_DIR.resolve())):
-            return jsonify({'error': 'Invalid backup path'}), 400
+            return api_error('Invalid backup path', 400)
     except Exception:
-        return jsonify({'error': 'Invalid backup path'}), 400
+        return api_error('Invalid backup path', 400)
 
     if not backup_path.exists():
-        return jsonify({'error': 'Backup not found'}), 404
+        return api_error('Backup not found', 404)
 
     ok, checksum, error = verify_backup_file(backup_path)
 
