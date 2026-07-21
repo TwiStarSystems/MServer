@@ -8901,7 +8901,7 @@ def message_players(server_id):
 @server_access_required
 def get_scheduled_messages(server_id):
     """Get all scheduled/event messages for a server."""
-    return jsonify({'messages': message_scheduler.get_messages(server_id)})
+    return api_success({'messages': message_scheduler.get_messages(server_id)})
 
 @app.route('/api/servers/<server_id>/messages', methods=['POST'])
 @server_access_required
@@ -8909,14 +8909,14 @@ def create_scheduled_message(server_id):
     """Create a new scheduled/event message."""
     data = request.get_json()
     if not data.get('message', '').strip():
-        return jsonify({'error': 'Message text is required'}), 400
+        return api_error('Message text is required', 400)
     trigger = data.get('trigger', 'cron')
     if trigger == 'cron' and not data.get('cronExpr', '').strip():
-        return jsonify({'error': 'Cron expression is required for scheduled messages'}), 400
+        return api_error('Cron expression is required for scheduled messages', 400)
     if trigger != 'cron' and trigger not in MessageScheduler.EVENT_TRIGGERS:
-        return jsonify({'error': f'Unknown event trigger: {trigger}'}), 400
+        return api_error(f'Unknown event trigger: {trigger}', 400)
     msg = message_scheduler.create_message(server_id, data)
-    return jsonify({'success': True, 'message': msg}), 201
+    return api_success({'message': msg}, 201)
 
 @app.route('/api/servers/<server_id>/messages/<msg_id>', methods=['PUT'])
 @server_access_required
@@ -8925,16 +8925,16 @@ def update_scheduled_message(server_id, msg_id):
     data = request.get_json()
     msg = message_scheduler.update_message(server_id, msg_id, data)
     if msg is None:
-        return jsonify({'error': 'Message not found'}), 404
-    return jsonify({'success': True, 'message': msg})
+        return api_error('Message not found', 404)
+    return api_success({'message': msg})
 
 @app.route('/api/servers/<server_id>/messages/<msg_id>', methods=['DELETE'])
 @server_access_required
 def delete_scheduled_message(server_id, msg_id):
     """Delete a scheduled/event message."""
     if message_scheduler.delete_message(server_id, msg_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Message not found'}), 404
+        return api_success()
+    return api_error('Message not found', 404)
 
 @app.route('/api/servers/<server_id>/messages/test', methods=['POST'])
 @server_access_required
@@ -8942,11 +8942,11 @@ def test_scheduled_message(server_id):
     """Test-fire a message immediately without saving."""
     data = request.get_json()
     if not data.get('message', '').strip():
-        return jsonify({'error': 'Message text is required'}), 400
+        return api_error('Message text is required', 400)
     success, result = message_scheduler.test_message(server_id, data)
     if not success:
-        return jsonify({'error': result}), 400
-    return jsonify({'success': True, 'command': result})
+        return api_error(result, 400)
+    return api_success({'command': result})
 
 
 @app.route('/api/servers/<server_id>/players/ops', methods=['GET'])
@@ -10828,29 +10828,29 @@ def verify_backup(server_id):
 def get_server_tasks(server_id):
     """Get all tasks for a server"""
     tasks = task_scheduler.get_tasks(server_id)
-    return jsonify({'tasks': tasks})
+    return api_success({'tasks': tasks})
 
 @app.route('/api/servers/<server_id>/tasks', methods=['POST'])
 @server_access_required
 def create_server_task(server_id):
     """Create a new task for a server"""
     data = request.get_json()
-    
+
     # Validate server exists
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
-    
+        return api_error('Server not found', 404)
+
     # Validate required fields
     if not data.get('name'):
-        return jsonify({'error': 'Task name is required'}), 400
-    
+        return api_error('Task name is required', 400)
+
     if not data.get('action'):
-        return jsonify({'error': 'Task action is required'}), 400
-    
+        return api_error('Task action is required', 400)
+
     if data.get('action') == 'COMMAND' and not data.get('command'):
-        return jsonify({'error': 'Command is required for COMMAND action'}), 400
-    
+        return api_error('Command is required for COMMAND action', 400)
+
     task = task_scheduler.create_task(server_id, {
         'name': data.get('name'),
         'action': data.get('action', 'START'),
@@ -10861,8 +10861,8 @@ def create_server_task(server_id):
         'deleteAfterExecution': data.get('deleteAfterExecution', False),
         'deleteAfterRunsCount': data.get('deleteAfterRunsCount', False)
     })
-    
-    return jsonify({'success': True, 'task': task})
+
+    return api_success({'task': task})
 
 @app.route('/api/servers/<server_id>/tasks/<task_id>', methods=['GET'])
 @server_access_required
@@ -10870,15 +10870,15 @@ def get_server_task(server_id, task_id):
     """Get a specific task"""
     task = task_scheduler.get_task(server_id, task_id)
     if task:
-        return jsonify({'task': task})
-    return jsonify({'error': 'Task not found'}), 404
+        return api_success({'task': task})
+    return api_error('Task not found', 404)
 
 @app.route('/api/servers/<server_id>/tasks/<task_id>', methods=['PUT'])
 @server_access_required
 def update_server_task(server_id, task_id):
     """Update an existing task"""
     data = request.get_json()
-    
+
     task = task_scheduler.update_task(server_id, task_id, {
         'name': data.get('name'),
         'action': data.get('action'),
@@ -10889,18 +10889,18 @@ def update_server_task(server_id, task_id):
         'deleteAfterExecution': data.get('deleteAfterExecution'),
         'deleteAfterRunsCount': data.get('deleteAfterRunsCount')
     })
-    
+
     if task:
-        return jsonify({'success': True, 'task': task})
-    return jsonify({'error': 'Task not found'}), 404
+        return api_success({'task': task})
+    return api_error('Task not found', 404)
 
 @app.route('/api/servers/<server_id>/tasks/<task_id>', methods=['DELETE'])
 @server_access_required
 def delete_server_task(server_id, task_id):
     """Delete a task"""
     if task_scheduler.delete_task(server_id, task_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Task not found'}), 404
+        return api_success()
+    return api_error('Task not found', 404)
 
 
 # ==================== Settings API ====================
