@@ -5963,7 +5963,7 @@ def reject_if_not_image(file_storage, file_ext):
     header = file_storage.read(16)
     file_storage.seek(0)
     if not any(header.startswith(sig) for sig in signatures):
-        return jsonify({'success': False, 'error': f'File content does not match a valid {file_ext.upper()} image'}), 400
+        return api_error(f'File content does not match a valid {file_ext.upper()} image', 400)
     return None
 
 
@@ -7088,16 +7088,16 @@ def _execute_approved_action(action):
 @app.route('/api/settings/policies', methods=['GET'])
 @permission_required('panel.settings.manage')
 def api_get_policies():
-    return jsonify({'policies': settings_manager.get_policies()})
+    return api_success({'policies': settings_manager.get_policies()})
 
 @app.route('/api/settings/policies', methods=['PUT'])
 @permission_required('panel.settings.manage')
 def api_update_policies():
     data = request.get_json()
     if not data or not isinstance(data, dict):
-        return jsonify({'error': 'Invalid data'}), 400
+        return api_error('Invalid data', 400)
     updated = settings_manager.update_policies(data)
-    return jsonify({'policies': updated})
+    return api_success({'policies': updated})
 
 
 # ==================== Public API (No Auth Required) ====================
@@ -10908,7 +10908,7 @@ def delete_server_task(server_id, task_id):
 @app.route('/api/settings/branding', methods=['GET'])
 def get_branding():
     """Get branding settings (public)"""
-    return jsonify(settings_manager.get_branding())
+    return api_success(settings_manager.get_branding())
 
 @app.route('/api/settings/branding', methods=['PUT'])
 @permission_required('panel.settings.manage')
@@ -10934,7 +10934,7 @@ def update_branding():
         file_ext = favicon_file.filename.rsplit('.', 1)[1].lower() if '.' in favicon_file.filename else ''
         
         if file_ext not in allowed_extensions:
-            return jsonify({'success': False, 'error': 'Invalid file type. Allowed: PNG, JPEG, GIF, ICO'}), 400
+            return api_error('Invalid file type. Allowed: PNG, JPEG, GIF, ICO', 400)
 
         rejected = reject_if_not_image(favicon_file, file_ext)
         if rejected:
@@ -10952,20 +10952,20 @@ def update_branding():
             favicon_file.save(filepath)
             branding_data['siteIcon'] = filename
         except Exception as e:
-            return jsonify({'success': False, 'error': f'Failed to save favicon: {str(e)}'}), 500
-    
+            return api_error(f'Failed to save favicon: {str(e)}', 500)
+
     # Update branding
     try:
         branding = settings_manager.update_branding(branding_data)
-        return jsonify({'success': True, 'branding': branding})
+        return api_success({'branding': branding})
     except Exception as e:
-        return jsonify({'success': False, 'error': f'Failed to update branding: {str(e)}'}), 500
+        return api_error(f'Failed to update branding: {str(e)}', 500)
 
 @app.route('/api/settings/app', methods=['GET'])
 @permission_required('panel.settings.view')
 def get_app_settings():
     """Get app settings (admin only)"""
-    return jsonify(settings_manager.get_app_settings())
+    return api_success(settings_manager.get_app_settings())
 
 @app.route('/api/settings/app', methods=['PUT'])
 @permission_required('panel.settings.manage')
@@ -10973,34 +10973,34 @@ def update_app_settings():
     """Update app settings (admin only)"""
     data = request.get_json()
     app_settings = settings_manager.update_app_settings(data)
-    return jsonify({'success': True, 'settings': app_settings})
+    return api_success({'settings': app_settings})
 
 @app.route('/api/settings/mfa', methods=['GET'])
 @permission_required('panel.settings.view')
 def get_mfa_settings():
     """Get MFA settings (admin only)"""
     settings = settings_manager.get_settings().get('mfa', {})
-    return jsonify(settings)
+    return api_success(settings)
 
 @app.route('/api/settings/mfa', methods=['PUT'])
 @permission_required('panel.settings.manage')
 def update_mfa_settings():
     """Update MFA settings (admin only)"""
     data = request.get_json()
-    
+
     mfa_settings = {
         'requireMfaForAdmins': data.get('requireMfaForAdmins', False),
         'requireMfaForAllUsers': data.get('requireMfaForAllUsers', False)
     }
-    
+
     settings_manager.update_mfa_settings(mfa_settings)
-    return jsonify({'success': True, 'settings': mfa_settings})
+    return api_success({'settings': mfa_settings})
 
 @app.route('/api/settings/smtp', methods=['GET'])
 @permission_required('panel.settings.view')
 def get_smtp_settings():
     """Get SMTP settings (admin only)"""
-    return jsonify(settings_manager.get_smtp_settings())
+    return api_success(settings_manager.get_smtp_settings())
 
 @app.route('/api/settings/smtp', methods=['PUT'])
 @permission_required('panel.settings.manage')
@@ -11008,7 +11008,7 @@ def update_smtp_settings():
     """Update SMTP settings (admin only)"""
     data = request.get_json()
     smtp_settings = settings_manager.update_smtp_settings(data)
-    return jsonify({'success': True, 'settings': smtp_settings})
+    return api_success({'settings': smtp_settings})
 
 @app.route('/api/settings/smtp/test', methods=['POST'])
 @permission_required('panel.settings.manage')
@@ -11016,15 +11016,15 @@ def test_smtp_settings():
     """Send a test email to verify SMTP configuration"""
     data = request.get_json()
     to_email = data.get('email')
-    
+
     if not to_email:
-        return jsonify({'error': 'Email address required'}), 400
-    
+        return api_error('Email address required', 400)
+
     success, message = email_service.send_test_email(to_email)
-    
+
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success({'message': message})
+    return api_error(message, 400)
 
 
 # ==================== Webhook Settings API ====================
@@ -11033,7 +11033,7 @@ def test_smtp_settings():
 @permission_required('panel.settings.view')
 def get_webhook_settings_api():
     """Get webhook settings (admin only; secret is masked)"""
-    return jsonify(settings_manager.get_webhook_settings())
+    return api_success(settings_manager.get_webhook_settings())
 
 @app.route('/api/settings/webhook', methods=['PUT'])
 @permission_required('panel.settings.manage')
@@ -11042,9 +11042,9 @@ def update_webhook_settings_api():
     data = request.get_json()
     url = data.get('url', '').strip()
     if url and not url.startswith(('http://', 'https://')):
-        return jsonify({'error': 'Webhook URL must start with http:// or https://'}), 400
+        return api_error('Webhook URL must start with http:// or https://', 400)
     updated = settings_manager.update_webhook_settings(data)
-    return jsonify({'success': True, 'settings': updated})
+    return api_success({'settings': updated})
 
 @app.route('/api/settings/webhook/test', methods=['POST'])
 @permission_required('panel.settings.manage')
@@ -11054,8 +11054,8 @@ def test_webhook_api():
         'message': 'This is a test webhook from MServer'
     })
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success({'message': message})
+    return api_error(message, 400)
 
 
 # ==================== Email Templates API ====================
@@ -11064,7 +11064,7 @@ def test_webhook_api():
 @permission_required('panel.settings.view')
 def get_email_templates_api():
     """Get all email templates (admin only)"""
-    return jsonify(settings_manager.get_email_templates())
+    return api_success(settings_manager.get_email_templates())
 
 @app.route('/api/settings/email-template/<name>', methods=['PUT'])
 @permission_required('panel.settings.manage')
@@ -11073,15 +11073,15 @@ def update_email_template_api(name):
     data = request.get_json()
     success, message = settings_manager.update_email_template(name, data)
     if success:
-        return jsonify({'success': True})
-    return jsonify({'error': message}), 400
+        return api_success()
+    return api_error(message, 400)
 
 @app.route('/api/settings/email-template/<name>/reset', methods=['POST'])
 @permission_required('panel.settings.manage')
 def reset_email_template_api(name):
     """Reset an email template to its built-in default (admin only)"""
     settings_manager.reset_email_template(name)
-    return jsonify({'success': True})
+    return api_success()
 
 
 # ==================== Network & Environment Settings API ====================
@@ -11134,7 +11134,7 @@ def _write_env_value(key, value):
 def get_network_settings():
     """Get network/environment settings (admin only)."""
     env = _read_env_file()
-    return jsonify({
+    return api_success({
         'corsOrigins':             env.get('CORS_ORIGINS', '*'),
         'sessionCookieSecure':     env.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true',
         'sessionCookieDomain':     env.get('SESSION_COOKIE_DOMAIN', ''),
@@ -11177,13 +11177,12 @@ def update_network_settings():
         try:
             lifetime = int(data['permanentSessionLifetime'])
         except (TypeError, ValueError):
-            return jsonify({'error': 'permanentSessionLifetime must be an integer number of seconds'}), 400
+            return api_error('permanentSessionLifetime must be an integer number of seconds', 400)
         lifetime = _clamp_session_lifetime(lifetime)
         _write_env_value('PERMANENT_SESSION_LIFETIME', str(lifetime))
         updated_keys.append('PERMANENT_SESSION_LIFETIME')
 
-    return jsonify({
-        'success': True,
+    return api_success({
         'updated': updated_keys,
         'message': 'Settings saved. Restart the service for changes to take effect.'
     })
@@ -11217,7 +11216,7 @@ def update_notification_prefs_api():
 @permission_required('panel.settings.view')
 def get_external_backup_settings_api():
     """Get external backup storage settings (admin only)"""
-    return jsonify(settings_manager.get_external_backup_settings())
+    return api_success(settings_manager.get_external_backup_settings())
 
 
 @app.route('/api/settings/external-backup', methods=['PUT'])
@@ -11226,7 +11225,7 @@ def update_external_backup_settings_api():
     """Update external backup storage settings (admin only)"""
     data = request.get_json()
     updated = settings_manager.update_external_backup_settings(data)
-    return jsonify({'success': True, 'settings': updated})
+    return api_success({'settings': updated})
 
 
 @app.route('/api/settings/external-backup/test', methods=['POST'])
@@ -11237,7 +11236,7 @@ def test_external_backup_settings():
 
     ext = settings_manager.get_external_backup_settings_full()
     if not ext.get('enabled', False):
-        return jsonify({'error': 'External backup is not enabled'}), 400
+        return api_error('External backup is not enabled', 400)
 
     try:
         with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
@@ -11253,10 +11252,10 @@ def test_external_backup_settings():
             sidecar.unlink()
 
         if ok:
-            return jsonify({'success': True, 'message': msg})
-        return jsonify({'error': msg}), 400
+            return api_success({'message': msg})
+        return api_error(msg, 400)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 # ==================== Server Backup/Restore (All Servers) ====================
