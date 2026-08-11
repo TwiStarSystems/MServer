@@ -308,18 +308,12 @@ CREATE INDEX IF NOT EXISTS idx_sga_group ON server_group_access(group_id);
 """
 
 
+# Keep in sync with GroupManager.ALL_PERMISSIONS in server.py — only permissions
+# that are actually enforced belong here (issues #71/#79). Per-server access is
+# all-or-nothing: a user reaches a server by owning it, by group sharing, or via
+# servers.access.all, so the default group only needs to be able to create.
 _DEFAULT_USER_PERMISSIONS = json.dumps([
-    'servers.view', 'servers.create', 'servers.edit', 'servers.delete',
-    'servers.start', 'servers.stop', 'servers.restart', 'servers.console',
-    'servers.files.view', 'servers.files.edit',
-    'servers.properties.view', 'servers.properties.edit',
-    'servers.mods.view', 'servers.mods.manage',
-    'servers.backups.view', 'servers.backups.create', 'servers.backups.delete',
-    'servers.backups.restore', 'servers.backups.schedule',
-    'servers.players.view', 'servers.players.manage',
-    'servers.tasks.view', 'servers.tasks.manage',
-    'servers.messages.view', 'servers.messages.manage',
-    'servers.nbt.view', 'servers.nbt.edit',
+    'servers.create',
 ])
 
 
@@ -339,7 +333,7 @@ def _seed_default_groups():
     conn.execute(
         '''INSERT OR IGNORE INTO groups (id, name, permissions, is_default, is_builtin, priority, created)
            VALUES (?, ?, ?, 0, 1, 10, ?)''',
-        ('builtin-public', 'Public', '["servers.view"]', now)
+        ('builtin-public', 'Public', '[]', now)
     )
     conn.commit()
 

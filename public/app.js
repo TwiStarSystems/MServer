@@ -262,6 +262,16 @@ function updateUserUI() {
     const hasPanel = currentUser.permissions && currentUser.permissions.some(p => p === '*' || p.startsWith('panel.'));
     settingsLink.style.display = hasPanel ? 'inline-block' : 'none';
   }
+
+  // Server creation is gated on servers.create server-side (POST /api/servers and
+  // /api/servers/import) — hide the entry points rather than let them 403.
+  if (currentUser) {
+    const canCreate = currentUser.permissions && currentUser.permissions.some(p => p === '*' || p === 'servers.create');
+    ['add-server-btn', 'welcome-add-btn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.style.display = canCreate ? '' : 'none';
+    });
+  }
 }
 
 async function loadBranding() {

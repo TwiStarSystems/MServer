@@ -2207,6 +2207,10 @@ class MessageScheduler:
 class GroupManager:
     """Manages permission groups backed by SQLite with in-memory cache."""
 
+    # The catalog is the source of truth for the group editor's checkboxes, so it
+    # must only list permissions that are actually enforced somewhere in code
+    # (issues #71/#79) — a checkbox for an unchecked permission is a lie about
+    # what the panel restricts. Anything added here needs a matching guard.
     ALL_PERMISSIONS = [
         # Panel
         'panel.users.view', 'panel.users.manage',
@@ -2216,7 +2220,7 @@ class GroupManager:
         'panel.jars.manage', 'panel.tools.manage',
         'panel.stats.view', 'panel.panel.backup',
         # Server
-        'servers.view', 'servers.create', 'servers.access.all',
+        'servers.create', 'servers.access.all',
     ]
 
     PERMISSION_CATEGORIES = {
@@ -2229,7 +2233,7 @@ class GroupManager:
             'panel.stats.view', 'panel.panel.backup',
         ],
         'Server': [
-            'servers.view', 'servers.create', 'servers.access.all',
+            'servers.create', 'servers.access.all',
         ],
     }
 
@@ -2245,7 +2249,6 @@ class GroupManager:
         'panel.tools.manage': 'Manage Tools',
         'panel.stats.view': 'View System Stats',
         'panel.panel.backup': 'Panel Backup/Restore',
-        'servers.view': 'View Servers',
         'servers.create': 'Create Servers',
         'servers.access.all': 'Access All Servers',
     }
@@ -2269,6 +2272,36 @@ class GroupManager:
     def _invalidate(self):
         with self._lock:
             self._load_cache()
+
+    def prune_stale_permissions(self):
+        """Drop stored permission strings that are no longer in the catalog.
+
+        Groups seeded or saved before #71/#79 still carry the removed granular
+        `servers.*` strings. Nothing enforces them, and update_group() already
+        filters them out on the next save — this just stops them from lingering
+        in the DB and in the /api/auth/me payload. Wildcards are kept, matching
+        create_group()/update_group() validation. Called once after init_db(),
+        which seeds the built-in groups."""
+        try:
+            conn = get_db()
+            rows = conn.execute('SELECT id, permissions FROM groups').fetchall()
+        except Exception:
+            return
+        changed = False
+        for r in rows:
+            try:
+                perms = json.loads(r['permissions'] or '[]')
+            except Exception:
+                continue
+            kept = [p for p in perms
+                    if p in self.ALL_PERMISSIONS or p.endswith('.*') or p == '*']
+            if len(kept) != len(perms):
+                conn.execute('UPDATE groups SET permissions=? WHERE id=?',
+                             (json.dumps(kept), r['id']))
+                changed = True
+        if changed:
+            conn.commit()
+            self._invalidate()
 
     @staticmethod
     def _row_to_dict(row):
@@ -3227,6 +3260,7 @@ admin account has been ENABLED:
 
 # Initialize database (creates tables if not present — safe on every boot)
 init_db()
+group_manager.prune_stale_permissions()
 
 # Initialize managers (settings_manager must be first as UserManager uses it)
 settings_manager = SettingsManager()
@@ -7275,7 +7309,7 @@ def _generate_server_properties(custom_properties, server_name='A Minecraft Serv
 
 
 @app.route('/api/servers', methods=['POST'])
-@login_required
+@permission_required('servers.create')
 def create_server():
     """Create a new server"""
     user_id, user = get_current_user()
@@ -7584,7 +7618,7 @@ def setup_bedrock_server(server_id):
 
 
 @app.route('/api/servers/import', methods=['POST'])
-@login_required
+@permission_required('servers.create')
 @limiter.limit("5 per 15 minutes")
 def import_server():
     """Import a server from a ZIP file"""
