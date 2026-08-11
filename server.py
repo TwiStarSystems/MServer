@@ -2485,6 +2485,10 @@ class UserManager:
     ANTI_LOCKOUT_NAME = 'Admin'
     ANTI_LOCKOUT_EMAIL = 'Admin@local'
 
+    # An account auto-disabled by failed logins unlocks itself this many seconds
+    # after disabled_at; a disabled account with no disabled_at stays locked.
+    LOCKOUT_DURATION_SECONDS = 1800
+
     _DEFAULT_NOTIF_PREFS = {
         'backupComplete': False,
         'backupFailure': False,
@@ -2531,6 +2535,24 @@ class UserManager:
             'isAntiLockout':        bool(row['is_anti_lockout']),
             'notificationPrefs':    prefs,
         }
+
+    @classmethod
+    def _is_locked(cls, row):
+        """True if the account is currently unable to log in.
+
+        A failed-login lockout carries a disabled_at timestamp and expires on its
+        own after LOCKOUT_DURATION_SECONDS, so a stale account_disabled flag past
+        that window is not reported as locked."""
+        if not row['account_disabled']:
+            return False
+        disabled_at = row['disabled_at']
+        if not disabled_at:
+            return True
+        try:
+            elapsed = (datetime.now() - datetime.fromisoformat(disabled_at)).total_seconds()
+        except (TypeError, ValueError):
+            return True
+        return elapsed < cls.LOCKOUT_DURATION_SECONDS
 
     def _ensure_anti_lockout_admin_exists(self):
         """Ensure the permanent hidden anti-lockout 'admin' account exists.
@@ -2612,7 +2634,7 @@ class UserManager:
             if disabled_at:
                 locked_dt = datetime.fromisoformat(disabled_at)
                 elapsed = (datetime.now() - locked_dt).total_seconds()
-                if elapsed >= 1800:
+                if elapsed >= self.LOCKOUT_DURATION_SECONDS:
                     conn.execute(
                         'UPDATE users SET account_disabled=0, failed_login_attempts=0, disabled_at=NULL WHERE id=?',
                         (user_id,)
@@ -2820,6 +2842,9 @@ class UserManager:
             'approved':  bool(row['approved']),
             'created':   row['created'],
             'lastLogin': row['last_login'],
+            'accountDisabled': bool(row['account_disabled']),
+            'disabledAt': row['disabled_at'],
+            'locked':    self._is_locked(row),
         }
 
     def get_all_users(self, include_anti_lockout=False):
@@ -2848,6 +2873,9 @@ class UserManager:
                 'approved':  bool(r['approved']),
                 'created':   r['created'],
                 'lastLogin': r['last_login'],
+                'accountDisabled': bool(r['account_disabled']),
+                'disabledAt': r['disabled_at'],
+                'locked':    self._is_locked(r),
                 'isAntiLockout': bool(r['is_anti_lockout']),
             })
         return result
@@ -6676,8 +6704,8 @@ def api_enable_user_account(user_id):
     """Enable a disabled user account (admin only)"""
     success, message = user_manager.enable_account(user_id)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 404
+        return api_success(message=message)
+    return api_error(message, 404)
 
 @app.route('/api/admin/users/<user_id>', methods=['GET'])
 @permission_required('panel.users.view')

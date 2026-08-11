@@ -2043,6 +2043,7 @@ async function loadUsers() {
               <th>Display Name</th>
               <th>Email</th>
               <th>Group</th>
+              <th>Status</th>
               <th>MFA</th>
               <th>Created</th>
               <th>Last Login</th>
@@ -2056,13 +2057,17 @@ async function loadUsers() {
                 <td>${u.name ? escapeHtml(u.name) : '<span class="text-muted">Not set</span>'}</td>
                 <td>${u.email ? escapeHtml(u.email) : '<span class="text-muted">Not set</span>'}</td>
                 <td><span class="group-badge">${escapeHtml(u.groupName || 'None')}</span></td>
+                <td>${u.locked
+                  ? `<span class="badge badge-danger" title="${u.disabledAt ? 'Locked after too many failed logins on ' + escapeHtml(new Date(u.disabledAt).toLocaleString()) : 'Account disabled'}">🔒 Locked</span>`
+                  : '<span class="badge badge-success">Active</span>'}</td>
                 <td>${u.mfaEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-secondary">Disabled</span>'}</td>
                 <td>${new Date(u.created).toLocaleDateString()}</td>
                 <td>${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString() : 'Never'}</td>
                 <td class="user-mgmt-actions">
                   ${u.isAntiLockout
                     ? '<span class="text-muted" title="Built-in emergency admin. Managed by the system and cannot be edited or deleted.">🔒 System account</span>'
-                    : `<button class="btn btn-small btn-primary" onclick="openEditUserModal('${u.id}')">✏️ Edit</button>
+                    : `${u.locked ? `<button class="btn btn-small btn-success" onclick="unlockUser('${u.id}', '${escapeHtml(u.username)}')">🔓 Unlock</button>` : ''}
+                  <button class="btn btn-small btn-primary" onclick="openEditUserModal('${u.id}')">✏️ Edit</button>
                   <button class="btn btn-small btn-danger" onclick="deleteUser('${u.id}', '${escapeHtml(u.username)}')">🗑️</button>`}
                 </td>
               </tr>
@@ -2224,6 +2229,21 @@ async function approveUser(userId) {
   } catch (err) {
     console.error('Failed to approve user:', err);
     alert('Failed to approve user: ' + err.message);
+  }
+}
+
+async function unlockUser(userId, username) {
+  if (!confirm(`Unlock account "${username}"? This clears the lockout and resets their failed login attempts.`)) return;
+
+  try {
+    const response = await fetch(`/api/admin/users/${userId}/enable`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.error || 'Failed to unlock account');
+    showNotification(`Account "${username}" unlocked`, 'success');
+    loadUsers();
+  } catch (err) {
+    console.error('Failed to unlock user:', err);
+    showNotification('Failed to unlock account: ' + err.message, 'error');
   }
 }
 
