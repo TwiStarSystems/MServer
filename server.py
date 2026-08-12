@@ -4655,16 +4655,38 @@ class ServerManager:
         
         return True, "Management enabled"
     
+    @staticmethod
+    def _eula_txt_accepted(server_dir):
+        """True if the server's own eula.txt carries eula=true.
+
+        This is what the JVM actually enforces, so it is the authority for a
+        server the panel did not create — an imported one, or one whose operator
+        edited eula.txt by hand — where managed.conf has no EULAAccepted at all."""
+        eula_path = Path(server_dir) / 'eula.txt'
+        try:
+            for line in eula_path.read_text(errors='ignore').splitlines():
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                if key.strip().lower() == 'eula':
+                    return value.strip().lower() == 'true'
+        except OSError:
+            return False
+        return False
+
     def check_eula_accepted(self, server_id):
         """Check if EULA has been accepted for a server"""
         server_config = self.get_server_config(server_id)
         if not server_config:
             return False
-        
+
         server_dir = Path(server_config.get('serverPath', ''))
         managed_conf = self._read_managed_conf(server_dir)
-        return managed_conf.get('EULAAccepted', 'false').lower() == 'true'
-    
+        if managed_conf.get('EULAAccepted', 'false').lower() == 'true':
+            return True
+        return self._eula_txt_accepted(server_dir)
+
     def accept_eula(self, server_id):
         """Accept the EULA for a server"""
         server_config = self.get_server_config(server_id)
@@ -4800,7 +4822,13 @@ class ServerManager:
             executable_path = server_path / executable
             if not executable_path.exists():
                 return False, f"Server executable '{executable}' not found"
-            
+
+            # Without an accepted EULA the JVM prints the notice and exits at once,
+            # which looks like a crash in the console (issue #55). Bedrock has no
+            # eula.txt, matching the /eula route's exemption.
+            if not is_bedrock and not self.check_eula_accepted(server_id):
+                return False, "Minecraft EULA has not been accepted for this server. Accept it before starting."
+
             # Ensure canned_commands.conf exists (create if missing for older servers)
             self._ensure_canned_commands_conf(server_path)
 
