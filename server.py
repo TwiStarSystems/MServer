@@ -309,11 +309,14 @@ def read_version_file():
 
 
 # --- Minecraft version era helpers ---
-# MC_LEGACY_MAX: highest version in the pre-1.26 world format.  Legacy servers
-#   may upgrade/downgrade within this tier but cannot cross to the modern era.
+# 26.1 renumbered Java Edition (1.21.x -> 26.x) and restructured the world folder:
+# dimensions moved under world/dimensions/<namespace>/<dim>/ and per-player files
+# under world/players/{data,stats,advancements}/.  Upgrading a world is one-way.
+# MC_LEGACY_MAX: highest version in the old world format.  Legacy servers may
+#   upgrade/downgrade within this tier but cannot cross to the modern era.
 # MC_MODERN_MIN: first version with the new world storage format.
 MC_LEGACY_MAX = '1.21.11'
-MC_MODERN_MIN = '1.26'
+MC_MODERN_MIN = '26.1'
 
 
 def _parse_mc_version_tuple(v):
@@ -330,12 +333,14 @@ def _parse_mc_version_tuple(v):
 
 
 def mc_version_is_modern(v):
-    """Return True if version is in the 1.26+ (new world format) era."""
-    m = re.match(r'(\d+)\.(\d+)', str(v))
+    """Return True if version is in the 26.1+ (new world format) era."""
+    m = re.match(r'(\d+)(?:\.(\d+))?', str(v).strip())
     if not m:
         return False
-    major, minor = int(m.group(1)), int(m.group(2))
-    # '1.26', '1.27' ... OR new-scheme '26.1', '27.x'
+    major, minor = int(m.group(1)), int(m.group(2) or 0)
+    # New scheme '26.1', '26.2', '27.x' — a bare major ('26') and snapshots
+    # ('26w14a') land here too. '1.26'-style names never shipped but are still
+    # accepted, since older configs were written against that guess.
     return major >= 26 or (major == 1 and minor >= 26)
 
 
@@ -7877,7 +7882,7 @@ def download_server_jar(server_id):
         if cur_modern and not new_mod:
             return jsonify({
                 'error': (
-                    f'Cannot assign a legacy JAR ({version}) to a modern (1.26+) server '
+                    f'Cannot assign a legacy JAR ({version}) to a modern (26.1+) server '
                     f'({current_version}). The new world storage format is not backwards-compatible. '
                     f'Create a new server if you need a legacy version.'
                 )
@@ -7889,7 +7894,7 @@ def download_server_jar(server_id):
             return jsonify({
                 'error': (
                     f'Legacy servers cannot exceed {MC_LEGACY_MAX} within the legacy tier. '
-                    f'Select a modern (1.26+) version to migrate to the new world format.'
+                    f'Select a modern (26.1+) version to migrate to the new world format.'
                 )
             }), 400
 
@@ -8097,7 +8102,7 @@ def change_server_version(server_id):
 
     Era rules
     ---------
-    Modern (1.26+): may only upgrade, never downgrade.  Cross-era moves blocked.
+    Modern (26.1+): may only upgrade, never downgrade.  Cross-era moves blocked.
     Legacy (<=1.21.11): may upgrade/downgrade within the legacy tier only.
       Downgrades are allowed but include a warning in the response.
       Upgrades are capped at MC_LEGACY_MAX (1.21.11).
@@ -8128,7 +8133,7 @@ def change_server_version(server_id):
     if current_modern and not new_modern:
         return jsonify({
             'error': (
-                f'Cannot downgrade a modern (1.26+) server to legacy version {new_version}. '
+                f'Cannot downgrade a modern (26.1+) server to legacy version {new_version}. '
                 f'The new world storage format is not backwards-compatible. '
                 f'Create a new server if you need a legacy version.'
             )
@@ -8140,7 +8145,7 @@ def change_server_version(server_id):
         return jsonify({
             'error': (
                 f'Legacy servers cannot be upgraded beyond {MC_LEGACY_MAX} within the legacy tier. '
-                f'Select a modern (1.26+) version to migrate to the new world format.'
+                f'Select a modern (26.1+) version to migrate to the new world format.'
             )
         }), 400
 
@@ -8710,12 +8715,12 @@ def get_player_stats(server_id, uuid):
     for item in server_path.iterdir():
         if not item.is_dir():
             continue
-        # 1.26+ path: world/players/stats/<uuid>.json
+        # 26.1+ path: world/players/stats/<uuid>.json  (see get_playerdata)
         new_path = item / 'players' / 'stats' / f'{uuid}.json'
         if new_path.exists():
             stats_file = new_path
             break
-        # Legacy path: world/stats/<uuid>.json
+        # Legacy (<= 1.21.x) path: world/stats/<uuid>.json
         old_path = item / 'stats' / f'{uuid}.json'
         if old_path.exists():
             stats_file = old_path
@@ -8762,10 +8767,12 @@ def get_player_inventory(server_id, uuid):
     for item in server_path.iterdir():
         if not item.is_dir():
             continue
+        # 26.1+ path: world/players/data/<uuid>.dat  (see get_playerdata)
         new_path = item / 'players' / 'data' / f'{uuid}.dat'
         if new_path.exists():
             player_dat = new_path
             break
+        # Legacy (<= 1.21.x) path: world/playerdata/<uuid>.dat
         old_path = item / 'playerdata' / f'{uuid}.dat'
         if old_path.exists():
             player_dat = old_path
@@ -9593,15 +9600,21 @@ def get_playerdata(server_id):
     server_path = server_manager.get_server_path(server_id)
 
     # Player data lives only in the main world folder (nether/end never had it).
-    # Pre-1.26: world/playerdata/<uuid>.dat
-    # 1.26+:    world/players/data/<uuid>.dat
+    # Legacy (<= 1.21.x): world/playerdata/<uuid>.dat
+    # 26.1+:              world/players/data/<uuid>.dat, next to players/stats/
+    #                     and players/advancements/
+    # Both layouts are live in the wild: 26.1 restructured the world folder and
+    # migrates the old one on first launch, so a panel install can hold servers of
+    # either era — probe for both. The 26.1+ form is identified by the data/
+    # subdirectory, which also keeps it distinct from pre-1.7.6 worlds, where
+    # world/players/ holds <username>.dat files directly (never supported here).
     # Search all subdirectories for either layout.
     playerdata_path = None
-    
+
     for item in server_path.iterdir():
         if not item.is_dir():
             continue
-        # 1.26+ layout first
+        # 26.1+ layout first
         new_path = item / 'players' / 'data'
         if new_path.exists():
             playerdata_path = new_path

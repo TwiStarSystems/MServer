@@ -3052,7 +3052,7 @@ function onVersionChangeSelection() {
   
   const current = versionChangeData.currentVersion;
   
-  // Era classification: legacy (<=1.21.x) vs modern (1.26+ / new world format).
+  // Era classification: legacy (<=1.21.x) vs modern (26.1+ / new world format).
   const currentModern = !isVersionBelow126(current);
   const newModern = !isVersionBelow126(newVersion);
   const cmp = compareVersions(newVersion, current);
@@ -3063,7 +3063,7 @@ function onVersionChangeSelection() {
     warningDiv.innerHTML = `
       <strong>⚠️ Downgrade to a Legacy Version Not Possible</strong>
       <p>You cannot move ${current} back to ${newVersion}.</p>
-      <p><strong>Reason:</strong> Minecraft's modern (1.26+) world storage format is not backwards-compatible. Downgrading to a legacy version is not supported and would corrupt the world. Create a new server if you need a legacy version.</p>
+      <p><strong>Reason:</strong> Minecraft's modern (26.1+) world storage format is not backwards-compatible. Downgrading to a legacy version is not supported and would corrupt the world. Create a new server if you need a legacy version.</p>
     `;
     warningDiv.style.display = 'block';
     backupOption.style.display = 'none';
@@ -3078,7 +3078,7 @@ function onVersionChangeSelection() {
     warningHtml = `
       <strong>⬆️ Upgrading to a Modern Version</strong>
       <p>You are upgrading from ${current} to ${newVersion}.</p>
-      <p><strong>📦 World Storage Changes:</strong> Minecraft 1.26+ uses a new world storage format. Your world will be automatically converted, but this process is one-way and cannot be undone.</p>
+      <p><strong>📦 World Storage Changes:</strong> Minecraft 26.1+ uses a new world storage format. Your world will be automatically converted, but this process is one-way and cannot be undone.</p>
     `;
   } else if (cmp > 0) {
     // Same-generation upgrade: no conversion notice needed.
@@ -3123,7 +3123,7 @@ function parseMcVersionTuple(v) {
 
 function compareVersions(v1, v2) {
   // Enhanced version comparison for Minecraft versioning
-  // Handles both old (1.20.4) and new (1.26.1) numbering systems, plus
+  // Handles both old (1.20.4) and new (26.1) numbering systems, plus
   // pre-release/RC/modloader suffixes (e.g. '1.20.5-pre1', '1.20.1-47.2.0')
   const t1 = parseMcVersionTuple(v1);
   const t2 = parseMcVersionTuple(v2);
@@ -3136,14 +3136,15 @@ function compareVersions(v1, v2) {
 }
 
 function isVersionBelow126(version) {
-  // Check if a version is below 1.26 (i.e. NOT in the modern/1.26+ world
+  // Check if a version predates 26.1 (i.e. NOT in the modern/26.1+ world
   // format era). Mirrors server.py's mc_version_is_modern (inverted) so the
   // client-side warning agrees with the server's actual era-gating.
-  const m = String(version).match(/(\d+)\.(\d+)/);
+  const m = String(version).trim().match(/^(\d+)(?:\.(\d+))?/);
   if (!m) return true;
   const major = parseInt(m[1], 10);
-  const minor = parseInt(m[2], 10);
-  // '1.26', '1.27' ... OR new-scheme '26.1', '27.x'
+  const minor = parseInt(m[2] || '0', 10);
+  // New scheme '26.1', '26.2', '27.x' — a bare major ('26') and snapshots
+  // ('26w14a') land here too, as do '1.26'-style names that never shipped.
   const modern = major >= 26 || (major === 1 && minor >= 26);
   return !modern;
 }
@@ -6503,8 +6504,8 @@ async function openPlayerNbtEditor(uuid, path) {
   }
 
   // Legacy fallback: scan known world folder / layout combinations
-  // Pre-1.26: world/playerdata/<uuid>.dat
-  // 1.26+:    world/players/data/<uuid>.dat
+  // Legacy (<= 1.21.x): world/playerdata/<uuid>.dat
+  // 26.1+:              world/players/data/<uuid>.dat
   const worldFolders = ['world', 'world_nether', 'world_the_end'];
   const layouts = [
     (world) => `${world}/players/data/${uuid}.dat`,
