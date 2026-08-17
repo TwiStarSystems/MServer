@@ -6055,15 +6055,24 @@ def validate_zip_members(zipf, dest_dir):
             raise ValueError(f'Path escapes destination: {name}')
 
 
-def safe_extractall(zipf, dest_dir):
+def safe_extractall(zipf, dest_dir, skip=None):
     """Extract a zip archive, rejecting path-traversal and symlink members.
 
     zipfile.extractall() sanitizes ".."/absolute names but still happily writes
     symlink members, which a crafted archive can use to escape dest_dir on a
     follow-up write. Validate every member before extracting.
+
+    `skip`, if given, is called with each member's name and returning True leaves
+    that member on disk untouched — for archives that must not clobber existing
+    files (the Bedrock update keeps the operator's world and configs this way).
+    Validation still covers every member, skipped ones included, so a hostile
+    archive can't hide behind the skip-list.
     """
     validate_zip_members(zipf, dest_dir)
-    zipf.extractall(dest_dir)
+    members = None
+    if skip is not None:
+        members = [info for info in zipf.infolist() if not skip(info.filename)]
+    zipf.extractall(dest_dir, members)
 
 
 def reject_if_not_zip(saved_path):
@@ -7613,17 +7622,12 @@ def setup_bedrock_server(server_id):
             preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds',
                               BEDROCK_XUID_CACHE}
             
+            def is_preserved(name):
+                return (any(name.startswith(pf) for pf in preserve_files)
+                        and (server_dir / name).exists())
+
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                for member in zip_ref.infolist():
-                    name = member.filename
-                    # Security: skip path traversal and symlink entries
-                    if '..' in name or name.startswith('/'):
-                        continue
-                    if (member.external_attr >> 16) & 0o170000 == 0o120000:
-                        continue
-                    if any(name.startswith(pf) for pf in preserve_files) and (server_dir / name).exists():
-                        continue
-                    zip_ref.extract(member, server_dir)
+                safe_extractall(zip_ref, server_dir, skip=is_preserved)
             
             # Set executable permissions on Linux
             if os.name != 'nt':
