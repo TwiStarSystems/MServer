@@ -93,7 +93,7 @@ Multi-page, classic (non-module) scripts — top-level `function` declarations a
 
 ## Bug-fix workflow
 
-Issues are tracked on GitHub (`TwiStarSystems/MServerController`). For each bug, work the full cycle before moving to the next issue:
+Issues are tracked on GitHub (`TwiStarSystems/MServer`). For each bug, work the full cycle before moving to the next issue:
 
 1. **Find** — `gh issue view <n>` to read the report (root cause/fix are often already diagnosed in the issue body).
 2. **Fix** — make the minimal code change that addresses the root cause.
