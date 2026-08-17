@@ -51,4 +51,7 @@ test-results/
 # Claude stuff
 .claude/
 
+# servers file
+servers.md
+
  
