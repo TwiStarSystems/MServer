@@ -508,6 +508,17 @@
         <!-- Players Tab -->
         <div id="players-tab" class="tab-content">
           <div class="players-container">
+            <!-- Bedrock notice: the Java-only lists below are hidden for Bedrock servers -->
+            <div id="bedrock-players-notice" class="bedrock-notice" style="display:none">
+              <p><strong>Bedrock server:</strong> the Java-only player lists are hidden here because Bedrock stores this data differently.</p>
+              <ul>
+                <li><strong>Operators:</strong> kept in <code>permissions.json</code> keyed by XUID — use the <code>op &lt;gamertag&gt;</code> console command.</li>
+                <li><strong>Allow list:</strong> kept in <code>allowlist.json</code> — use <code>allowlist add "&lt;gamertag&gt;"</code>.</li>
+                <li><strong>Bans:</strong> Bedrock has no ban list — use <code>kick "&lt;gamertag&gt;"</code> plus the allow list.</li>
+                <li><strong>Player data:</strong> lives inside the world's LevelDB (<code>worlds/&lt;level&gt;/db/</code>), not per-player files.</li>
+              </ul>
+            </div>
+
             <!-- Online Players Section -->
             <div class="players-section">
               <div class="players-section-header">
@@ -533,7 +544,7 @@
             </div>
 
             <!-- Operators Section -->
-            <div class="players-section">
+            <div id="ops-section" class="players-section">
               <div class="players-section-header">
                 <h3>👑 Operators (OPs)</h3>
                 <button class="btn btn-small btn-success" onclick="openAddOpModal()">+ Add OP</button>
@@ -564,7 +575,7 @@
             </div>
 
             <!-- Player Data Section -->
-            <div class="players-section">
+            <div id="playerdata-section" class="players-section">
               <div class="players-section-header">
                 <h3>📋 Player Data Files</h3>
                 <button class="btn btn-small" onclick="loadPlayerData()">Refresh</button>
@@ -587,16 +598,17 @@
               <div id="playerdata-pagination" class="pagination-controls"></div>
             </div>
 
-            <!-- Whitelist Section -->
-            <div class="players-section">
+            <!-- Whitelist Section (Bedrock: kept for the allow-list toggle, list hidden) -->
+            <div id="whitelist-section" class="players-section">
               <div class="players-section-header">
-                <h3>📝 Whitelist</h3>
+                <h3 id="whitelist-section-title">📝 Whitelist</h3>
                 <div class="players-section-actions">
                   <button id="whitelist-toggle-btn" class="btn btn-small" onclick="toggleWhitelistSetting()" title="Toggle whitelist on/off">⬜ WL: OFF</button>
-                  <button class="btn btn-small btn-success" onclick="openAddWhitelistModal()">+ Add Player</button>
+                  <button id="add-whitelist-btn" class="btn btn-small btn-success" onclick="openAddWhitelistModal()">+ Add Player</button>
                 </div>
               </div>
-              <table class="players-table">
+              <p id="whitelist-bedrock-note" class="players-info" style="display:none">Allow-list entries live in <code>allowlist.json</code> (gamertag + XUID) and can't be edited from the panel yet — use the Files tab or the <code>allowlist add "&lt;gamertag&gt;"</code> console command. The toggle above flips <code>allow-list</code> in server.properties.</p>
+              <table id="whitelist-table" class="players-table">
                 <thead>
                   <tr>
                     <th>Player</th>
@@ -611,7 +623,7 @@
             </div>
 
             <!-- Banned Players Section -->
-            <div class="players-section">
+            <div id="banned-players-section" class="players-section">
               <div class="players-section-header">
                 <h3>🚫 Banned Players</h3>
                 <button class="btn btn-small btn-danger" onclick="openBanPlayerModal()">+ Ban Player</button>
@@ -634,7 +646,7 @@
             </div>
 
             <!-- Banned IPs Section -->
-            <div class="players-section">
+            <div id="banned-ips-section" class="players-section">
               <div class="players-section-header">
                 <h3>🌐 Banned IPs</h3>
                 <button class="btn btn-small btn-danger" onclick="openBanIpModal()">+ Ban IP</button>

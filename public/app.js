@@ -75,6 +75,7 @@ let wsHasConnectedOnce = false;
 let lastServerStatus = 'stopped';
 let lastServerRunning = false;
 let currentServerId = null;
+let currentServerCategory = null;  // 'unmodded' | 'modded' | 'bedrock' — drives Bedrock-only UI hiding
 let currentPath = '';
 let currentEditingFile = '';
 let fileEditorRequestId = 0;
@@ -1010,6 +1011,7 @@ function updateServerInList(serverId, isRunning, status) {
 
 async function selectServer(serverId) {
   currentServerId = serverId;
+  currentServerCategory = null;  // set from the server details fetch below
   currentPath = '';
   backupHistoryLoaded = false;  // Reset history state on server change
   
@@ -1040,7 +1042,8 @@ async function loadServerDetails() {
   
   try {
     const server = await apiRequest(`/api/servers/${currentServerId}`);
-    
+    currentServerCategory = server.category || null;
+
     // Update header — show Name - Engine - Version
     const _typeLabel = (server.serverType || '').toUpperCase();
     const _verLabel = (server.version && server.version.toLowerCase() !== 'unknown') ? server.version : '';
@@ -1074,6 +1077,9 @@ async function loadServerDetails() {
     } else {
       resourcepackTabBtn.style.display = '';
     }
+
+    // Hide the Java-only Players sections for Bedrock servers
+    applyPlayersTabForCategory();
 
     // Check if server.properties exists and show/hide Properties tab
     const propertiesTabBtn = document.getElementById('properties-tab-btn');
@@ -5497,9 +5503,51 @@ async function applyModUpdate(url, filename, sha512, folder, currentFilename, bt
 
 let currentEditingOpUuid = null;
 
+function isBedrockServer() {
+  return currentServerCategory === 'bedrock';
+}
+
+// Bedrock keeps operators in permissions.json (by XUID), the allow list in
+// allowlist.json, player data in the world's LevelDB, and has no ban list at all —
+// so the Java-only sections are hidden rather than left wired to endpoints that
+// read/write files Bedrock never looks at. The Whitelist section stays visible
+// because its server.properties toggle (allow-list) does work on Bedrock.
+function applyPlayersTabForCategory() {
+  const bedrock = isBedrockServer();
+  const show = bedrock ? 'none' : '';
+
+  const notice = document.getElementById('bedrock-players-notice');
+  if (notice) notice.style.display = bedrock ? '' : 'none';
+
+  ['ops-section', 'playerdata-section', 'banned-players-section', 'banned-ips-section'].forEach(id => {
+    const section = document.getElementById(id);
+    if (section) section.style.display = show;
+  });
+
+  const wlTitle = document.getElementById('whitelist-section-title');
+  if (wlTitle) wlTitle.textContent = bedrock ? '📝 Allow List' : '📝 Whitelist';
+  const wlAddBtn = document.getElementById('add-whitelist-btn');
+  if (wlAddBtn) wlAddBtn.style.display = show;
+  const wlTable = document.getElementById('whitelist-table');
+  if (wlTable) wlTable.style.display = show;
+  const wlNote = document.getElementById('whitelist-bedrock-note');
+  if (wlNote) wlNote.style.display = bedrock ? '' : 'none';
+}
+
 async function loadAllPlayerData() {
   if (!currentServerId) return;
-  
+
+  applyPlayersTabForCategory();
+
+  if (isBedrockServer()) {
+    // Only the online list and the allow-list toggle are meaningful on Bedrock
+    await Promise.all([
+      loadOnlinePlayers(),
+      loadWhitelistStatus()
+    ]);
+    return;
+  }
+
   await Promise.all([
     loadOnlinePlayers(),
     loadOperators(),
@@ -5665,11 +5713,24 @@ async function loadWhitelist() {
   }
 }
 
+// Bedrock only has the allow-list toggle in this section, so fetch it on its own
+async function loadWhitelistStatus() {
+  if (!currentServerId) return;
+  const statusData = await apiRequest(`/api/servers/${currentServerId}/players/whitelist-status`)
+    .catch(() => ({ enabled: false, available: false }));
+  updateWhitelistToggleBtn(statusData.enabled, statusData.available !== false);
+}
+
+function whitelistLabel() {
+  return isBedrockServer() ? 'Allow list' : 'Whitelist';
+}
+
 function updateWhitelistToggleBtn(enabled, available) {
   const btn = document.getElementById('whitelist-toggle-btn');
   if (!btn) return;
+  const short = isBedrockServer() ? 'AL' : 'WL';
   if (!available) {
-    btn.textContent = 'WL: N/A';
+    btn.textContent = `${short}: N/A`;
     btn.className = 'btn btn-small btn-secondary';
     btn.disabled = true;
     btn.title = 'server.properties not found';
@@ -5677,13 +5738,13 @@ function updateWhitelistToggleBtn(enabled, available) {
   }
   btn.disabled = false;
   if (enabled) {
-    btn.textContent = '✅ WL: ON';
+    btn.textContent = `✅ ${short}: ON`;
     btn.className = 'btn btn-small btn-success';
-    btn.title = 'Whitelist is enabled — click to disable';
+    btn.title = `${whitelistLabel()} is enabled — click to disable`;
   } else {
-    btn.textContent = '⬜ WL: OFF';
+    btn.textContent = `⬜ ${short}: OFF`;
     btn.className = 'btn btn-small';
-    btn.title = 'Whitelist is disabled — click to enable';
+    btn.title = `${whitelistLabel()} is disabled — click to enable`;
   }
 }
 
@@ -5693,7 +5754,7 @@ async function toggleWhitelistSetting() {
       method: 'PATCH'
     });
     updateWhitelistToggleBtn(result.enabled, true);
-    showNotification(`Whitelist ${result.enabled ? 'enabled' : 'disabled'}. Restart server for changes to take effect.`, 'success');
+    showNotification(`${whitelistLabel()} ${result.enabled ? 'enabled' : 'disabled'}. Restart server for changes to take effect.`, 'success');
   } catch (error) {
     // Error shown by apiRequest
   }
@@ -5983,13 +6044,16 @@ async function loadOnlinePlayers() {
       tbody.innerHTML = '<tr><td colspan="3" class="empty-message">No players online</td></tr>';
       return;
     }
+    // Bedrock has no ban list — the ban endpoint writes banned-players.json, which
+    // Bedrock ignores, so don't offer the button there.
+    const canBan = !isBedrockServer();
     tbody.innerHTML = online.map(p => `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong></td>
         <td>${p.since ? new Date(p.since * 1000).toLocaleTimeString() : '—'}</td>
         <td class="actions-cell">
           <button class="btn btn-small" onclick="openMessagePlayersModal('${escapeHtml(p.name)}')">Message</button>
-          <button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeHtml(p.name)}')">Ban</button>
+          ${canBan ? `<button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeHtml(p.name)}')">Ban</button>` : ''}
         </td>
       </tr>
     `).join('');
