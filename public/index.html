@@ -1016,6 +1016,34 @@
                 </div>
               </div>
 
+              <!-- Bedrock-only properties -->
+              <div id="u-bedrock-props" style="display: none;">
+                <div class="form-row">
+                  <div class="form-group half">
+                    <label for="u-level-name">Level Name:</label>
+                    <input type="text" id="u-level-name" class="form-control" value="Bedrock level" autocomplete="off">
+                    <small>Folder name of the world under <code>worlds/</code></small>
+                  </div>
+                  <div class="form-group half">
+                    <label for="u-idle-timeout">Idle Timeout (minutes):</label>
+                    <input type="number" id="u-idle-timeout" class="form-control" value="30" min="0" max="10080" autocomplete="off">
+                    <small>Kick idle players after this many minutes (0 = never)</small>
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group half">
+                    <label for="u-view-distance">View Distance:</label>
+                    <input type="number" id="u-view-distance" class="form-control" value="32" min="4" max="255" autocomplete="off">
+                    <small>Max view distance in chunks (4-255)</small>
+                  </div>
+                  <div class="form-group half">
+                    <label for="u-tick-distance">Tick Distance:</label>
+                    <input type="number" id="u-tick-distance" class="form-control" value="4" min="4" max="12" autocomplete="off">
+                    <small>Chunks ticked around a player (4-12)</small>
+                  </div>
+                </div>
+              </div>
+
               <!-- Import Server: hint about managed.conf -->
               <div id="u-import-props-hint" class="import-props-hint" style="display: none;">
                 <small>💡 Leave fields blank to use values from the imported server's managed.conf</small>

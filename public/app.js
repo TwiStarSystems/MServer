@@ -1714,7 +1714,21 @@ function resetUnifiedForm() {
   document.getElementById('u-pvp').checked = true;
   document.getElementById('u-white-list').checked = false;
   document.getElementById('u-hardcore').checked = false;
-  
+
+  // Reset Bedrock-only properties
+  const bedrockDefaults = {
+    'u-level-name': 'Bedrock level',
+    'u-idle-timeout': '30',
+    'u-view-distance': '32',
+    'u-tick-distance': '4'
+  };
+  Object.entries(bedrockDefaults).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+  const bedrockProps = document.getElementById('u-bedrock-props');
+  if (bedrockProps) bedrockProps.style.display = 'none';
+
   // Hide conditional fields
   document.getElementById('u-engine-group').style.display = 'none';
   document.getElementById('u-version-group').style.display = 'none';
@@ -1877,8 +1891,11 @@ function onUnifiedCategoryChange() {
   const engineSelect = document.getElementById('u-engine');
   const pvpOption = document.getElementById('u-pvp-option');
   const hardcoreOption = document.getElementById('u-hardcore-option');
+  const bedrockProps = document.getElementById('u-bedrock-props');
   const bedrockStatus = document.getElementById('u-bedrock-setup-status');
   const jarStatus = document.getElementById('u-jar-download-status');
+
+  if (bedrockProps) bedrockProps.style.display = category === 'bedrock' && !isImport ? '' : 'none';
 
   if (category === 'unmodded') {
     engineGroup.style.display = 'none';
@@ -2128,7 +2145,18 @@ async function createFreshServer(e) {
   const pvp = document.getElementById('u-pvp').checked;
   const whiteList = document.getElementById('u-white-list').checked;
   const hardcore = document.getElementById('u-hardcore').checked;
-  
+
+  // Bedrock-only properties (clamped to the ranges the server accepts)
+  const clampInt = (id, fallback, min, max) => {
+    const el = document.getElementById(id);
+    const parsed = parseInt(el ? el.value : '', 10);
+    return Number.isNaN(parsed) ? fallback : Math.min(max, Math.max(min, parsed));
+  };
+  const levelName = (document.getElementById('u-level-name')?.value || '').trim() || 'Bedrock level';
+  const viewDistance = clampInt('u-view-distance', 32, 4, 255);
+  const tickDistance = clampInt('u-tick-distance', 4, 4, 12);
+  const idleTimeout = clampInt('u-idle-timeout', 30, 0, 10080);
+
   const versionInfo = uVersionAvailability[version] || {};
   const needsDownload = !isBedrock && !versionInfo.downloaded;
   
@@ -2285,6 +2313,10 @@ async function createFreshServer(e) {
                 'difficulty': difficulty,
                 'level-seed': levelSeed,
                 'white-list': whiteList,
+                'level-name': levelName,
+                'view-distance': viewDistance,
+                'tick-distance': tickDistance,
+                'player-idle-timeout': idleTimeout,
               }
             })
           });

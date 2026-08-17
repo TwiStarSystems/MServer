@@ -7337,8 +7337,26 @@ def _generate_server_properties(custom_properties, server_name='A Minecraft Serv
     
     for key, value in sorted(default_properties.items()):
         lines.append(f'{key}={value}')
-    
+
     return '\n'.join(lines) + '\n'
+
+
+def _bedrock_int_property(properties, key, default, minimum, maximum):
+    """Read a numeric Bedrock property from a request body, clamped to its allowed range"""
+    try:
+        value = int(str(properties.get(key, default)).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def _bedrock_level_name(raw, default='Bedrock level'):
+    """Sanitize level-name — it becomes a directory under worlds/ and a properties value"""
+    name = re.sub(r'[\x00-\x1f\x7f]', ' ', str(raw or ''))
+    name = name.replace('/', '').replace('\\', '').strip()
+    if not name or name.strip('.') == '':
+        return default
+    return name[:64]
 
 
 @app.route('/api/servers', methods=['POST'])
@@ -7604,10 +7622,11 @@ def setup_bedrock_server(server_id):
                 'allow-cheats': 'false',
                 'online-mode': 'true',
                 'white-list': 'true' if server_properties.get('white-list') else 'false',
-                'view-distance': 32,
-                'tick-distance': 4,
-                'player-idle-timeout': 30,
-                'level-name': 'Bedrock level',
+                # Allowed ranges come from the Bedrock server.properties documentation
+                'view-distance': _bedrock_int_property(server_properties, 'view-distance', 32, 4, 255),
+                'tick-distance': _bedrock_int_property(server_properties, 'tick-distance', 4, 4, 12),
+                'player-idle-timeout': _bedrock_int_property(server_properties, 'player-idle-timeout', 30, 0, 10080),
+                'level-name': _bedrock_level_name(server_properties.get('level-name')),
                 'default-player-permission-level': 'member',
             }
             lines = [
@@ -7616,7 +7635,8 @@ def setup_bedrock_server(server_id):
                 '',
             ]
             for key, value in bedrock_props.items():
-                lines.append(f'{key}={value}')
+                # Strip control chars so a value can't inject extra properties lines
+                lines.append(f'{key}=' + re.sub(r'[\x00-\x1f\x7f]', '', str(value)))
             properties_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
             
             # Update server config with the correct executable
