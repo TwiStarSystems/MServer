@@ -270,6 +270,13 @@ VERSION_FILE = BASE_DIR / 'version'
 # the only way to manage operators for a player who is not currently online.
 BEDROCK_XUID_CACHE = '.mserver_xuids.json'
 
+# Per-server panel-side ban list for Bedrock, which has no ban list of its own
+# (issue #82). The panel owns the server process and sees every join on the
+# console, so it enforces these by kicking on connect. Note the consequence:
+# this is a panel policy, not a server one — it only holds while the server runs
+# under the panel.
+BEDROCK_BANS_FILE = '.mserver_bans.json'
+
 # ── Tunable configuration (env-overridable) ───────────────────────────────────
 DEFAULT_JAVA_ARGS = _env_str('DEFAULT_JAVA_ARGS', '-Xmx4G -Xms1G')  # default JVM args for new servers
 JAVA_BINARY = _env_str('JAVA_BINARY', 'java')                        # java executable (name on PATH or absolute path)
@@ -5144,6 +5151,7 @@ class ServerInstance:
             self.online_players[name] = time.time()
             self._broadcast({'type': 'player_join', 'serverId': self.server_id, 'player': name})
             self._dispatch_player_event('player_join', name)
+            self._enforce_bedrock_ban(name, line)
             return
 
         bedrock_leave = re.search(r'Player disconnected:\s+([^,]+)', line)
@@ -5153,6 +5161,32 @@ class ServerInstance:
             self.online_players.pop(name, None)
             self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
             self._dispatch_player_event('player_leave', name)
+
+    def _enforce_bedrock_ban(self, name, line):
+        """Kick a banned player the moment they connect (issue #82).
+
+        Bedrock has no ban list of its own, so the panel keeps one and enforces
+        it here — the panel owns the process and sees every join. Best-effort by
+        design and fully guarded: this runs in the console reader thread, where
+        an exception would take down console streaming for this server."""
+        try:
+            if not self.is_bedrock:
+                return
+            match = re.search(r'xuid:\s*(\d+)', line)
+            ban = _bedrock_ban_for(self.server_path, name=name,
+                                   xuid=match.group(1) if match else None)
+            if not ban:
+                return
+            target = _safe_bedrock_name(name)
+            if not target:
+                return
+            reason = _safe_console_text(ban.get('reason')) or 'Banned by an operator'
+            self.send_command(f'kick "{target}" {reason}')
+            notice = f'[MServer] Kicked banned player {name}: {reason}\n'
+            self._broadcast({'type': 'output', 'data': notice, 'serverId': self.server_id})
+            self._add_to_buffer(notice)
+        except Exception:
+            pass
 
     def _remember_bedrock_xuid(self, name, line):
         """Cache the gamertag -> XUID pair carried by a Bedrock connect/disconnect line.
@@ -7620,7 +7654,7 @@ def setup_bedrock_server(server_id):
             
             # Preserve existing user files
             preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds',
-                              BEDROCK_XUID_CACHE}
+                              BEDROCK_XUID_CACHE, BEDROCK_BANS_FILE}
             
             def is_preserved(name):
                 return (any(name.startswith(pf) for pf in preserve_files)
@@ -8774,8 +8808,8 @@ def _name_from_json_by_uuid(server_path, filename, uuid):
 BEDROCK_PERMISSIONS = ('visitor', 'member', 'operator')
 
 BEDROCK_NO_BANS_MESSAGE = (
-    'Bedrock Dedicated Server has no ban list. Kick the player and remove them '
-    'from the allow list (with the allow list enabled) to keep them out.'
+    'Bedrock Dedicated Server does not expose client IPs on the console, so the '
+    'panel cannot enforce IP bans. Ban the player instead, or use the allow list.'
 )
 
 
@@ -8931,6 +8965,70 @@ def _bedrock_permission_label(server_path, xuid, name=None):
     return by_xuid.get(xuid) or xuid
 
 
+# ── Panel-side ban list (issue #82) ───────────────────────────────────────────
+#
+# BDS has no ban list, so the panel keeps its own and enforces it by kicking on
+# connect — see ServerInstance._enforce_bedrock_ban. Two consequences the UI has
+# to be honest about: the ban only holds while the server runs under the panel,
+# and the player is kicked just after connecting rather than blocked at the door.
+
+def _bedrock_ban_expiry(expires):
+    """Parse a ban's expiry into an aware datetime, or None for a permanent ban.
+
+    Raises ValueError on a value that is neither 'forever' nor a parseable
+    timestamp, so a typo can't quietly become a permanent ban."""
+    expires = str(expires or 'forever').strip()
+    if not expires or expires.lower() == 'forever':
+        return None
+    when = datetime.fromisoformat(expires.replace('Z', '+00:00'))
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _bedrock_ban_expired(entry, now=None):
+    """True if this ban entry's expiry has passed."""
+    try:
+        when = _bedrock_ban_expiry(entry.get('expires'))
+    except ValueError:
+        return False  # unparseable: keep enforcing rather than silently lifting it
+    return when is not None and (now or datetime.now(timezone.utc)) >= when
+
+
+def _bedrock_active_bans(server_path):
+    """The panel's Bedrock ban entries that are still in force."""
+    return [e for e in _read_json_list(server_path / BEDROCK_BANS_FILE)
+            if isinstance(e, dict) and not _bedrock_ban_expired(e)]
+
+
+def _bedrock_ban_for(server_path, name=None, xuid=None):
+    """Return the in-force ban entry matching this player, if any.
+
+    The XUID is authoritative; the gamertag is the fallback for a ban placed
+    before the player was ever seen, since Bedrock only reveals an XUID on
+    connect. Read straight from disk on every call: the file is tiny, joins are
+    infrequent, and it keeps the enforcement path free of cache invalidation."""
+    xuid = _safe_xuid(xuid)
+    lname = (name or '').strip().lower()
+    for entry in _bedrock_active_bans(server_path):
+        if xuid and _safe_xuid(entry.get('xuid')) == xuid:
+            return entry
+        if lname and str(entry.get('name', '')).strip().lower() == lname:
+            return entry
+    return None
+
+
+def _bedrock_kick_if_online(server_id, name, reason):
+    """Kick a just-banned player who is already connected. True if a kick was sent."""
+    inst = _running_instance(server_id)
+    if not inst:
+        return False
+    online = next((p for p in inst.online_players if p.lower() == name.lower()), None)
+    target = _safe_bedrock_name(online) if online else None
+    if not target:
+        return False
+    inst.send_command(f'kick "{target}" {_safe_console_text(reason)}'.strip())
+    return True
+
+
 @app.route('/api/servers/<server_id>/players/online', methods=['GET'])
 @server_access_required
 def get_online_players(server_id):
@@ -9040,7 +9138,7 @@ def get_player_inventory(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/banned-ips', methods=['GET'])
 @server_access_required
 def get_banned_ips(server_id):
-    """Get banned IPs list (Bedrock has no ban list)"""
+    """Get banned IPs list (Bedrock exposes no client IPs)"""
     if _is_bedrock_server(server_id):
         return api_success({'banned_ips': [], 'supported': False, 'message': BEDROCK_NO_BANS_MESSAGE})
 
@@ -9058,7 +9156,7 @@ def get_banned_ips(server_id):
 @app.route('/api/servers/<server_id>/players/banned-ips', methods=['POST'])
 @server_access_required
 def ban_ip(server_id):
-    """Ban an IP address (Bedrock has no ban list)"""
+    """Ban an IP address (Bedrock exposes no client IPs)"""
     if _is_bedrock_server(server_id):
         return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
 
@@ -9113,7 +9211,7 @@ def ban_ip(server_id):
 @app.route('/api/servers/<server_id>/players/banned-ips/<path:ip_address>', methods=['DELETE'])
 @server_access_required
 def unban_ip(server_id, ip_address):
-    """Unban an IP address (Bedrock has no ban list)"""
+    """Unban an IP address (Bedrock exposes no client IPs)"""
     if _is_bedrock_server(server_id):
         return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
 
@@ -9797,9 +9895,10 @@ def remove_from_whitelist(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/banned', methods=['GET'])
 @server_access_required
 def get_banned_players(server_id):
-    """Get banned players list (Bedrock has no ban list)"""
+    """Get banned players — banned-players.json on Java, the panel's list on Bedrock"""
     if _is_bedrock_server(server_id):
-        return api_success({'banned': [], 'supported': False, 'message': BEDROCK_NO_BANS_MESSAGE})
+        server_path = server_manager.get_server_path(server_id)
+        return api_success({'banned': _bedrock_active_bans(server_path), 'bedrock': True})
 
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
@@ -9824,15 +9923,55 @@ def ban_player(server_id):
     reason = data.get('reason', 'Banned By Admin')
     expires = data.get('expires', 'forever')
 
-    # Bedrock has no ban list and no ban command — writing banned-players.json
-    # would be a file the server never reads. Say so instead of pretending.
-    if _is_bedrock_server(server_id):
-        return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
-
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Bedrock has no ban list and no ban command, so the panel keeps its own and
+    # enforces it by kicking on connect (issue #82).
+    if _is_bedrock_server(server_id):
+        name = _safe_bedrock_name(player_name)
+        if not name:
+            return api_error('A valid gamertag is required', 400)
+        try:
+            _bedrock_ban_expiry(expires)
+        except ValueError:
+            return api_error('Expiry must be "forever" or an ISO-8601 timestamp', 400)
+        ban_reason = _safe_console_text(reason)[:200] or 'Banned By Admin'
+        xuid = _safe_xuid(data.get('xuid')) or _bedrock_resolve_xuid(server_path, name=name)
+        bans_file = server_path / BEDROCK_BANS_FILE
+
+        def do_bedrock_ban():
+            try:
+                # Drop lapsed entries while we're rewriting the file anyway
+                entries = [e for e in _read_json_list(bans_file)
+                           if isinstance(e, dict) and not _bedrock_ban_expired(e)]
+                for entry in entries:
+                    if ((xuid and _safe_xuid(entry.get('xuid')) == xuid)
+                            or str(entry.get('name', '')).strip().lower() == name.lower()):
+                        return api_error(f'{name} is already banned', 400)
+                entries.append({
+                    'name': name, 'xuid': xuid or '',
+                    'created': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S +0000'),
+                    'source': 'MServer', 'expires': expires, 'reason': ban_reason,
+                })
+                _write_json_list(bans_file, entries)
+                kicked = _bedrock_kick_if_online(server_id, name, ban_reason)
+                return jsonify({
+                    'success': True,
+                    'message': f'{name} has been banned' + (' and kicked' if kicked else '')
+                }), 200
+            except Exception as e:
+                return api_error(str(e), 500)
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'ban', 'player': name,
+             'reason': ban_reason, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_bedrock_ban,
+            description=f'{user.get("username","Unknown")} banned "{name}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     # Running server: ban live via console. This kicks the player immediately,
     # blocks reconnection, and lets the server persist banned-players.json itself
@@ -9912,15 +10051,49 @@ def ban_player(server_id):
 @app.route('/api/servers/<server_id>/players/banned/<uuid>', methods=['DELETE'])
 @server_access_required
 def unban_player(server_id, uuid):
-    """Unban a player (Bedrock has no ban list)"""
-    if _is_bedrock_server(server_id):
-        return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
-
+    """Unban a player (Bedrock: <uuid> is the XUID or gamertag of a panel ban)"""
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Bedrock: drop the entry from the panel's own ban list (issue #82)
+    if _is_bedrock_server(server_id):
+        target_xuid = _safe_xuid(uuid)
+        target_name = None if target_xuid else _safe_bedrock_name(uuid)
+        if not target_xuid and not target_name:
+            return api_error('Invalid ban entry', 400)
+        bans_file = server_path / BEDROCK_BANS_FILE
+
+        def matches(entry):
+            if not isinstance(entry, dict):
+                return False
+            if target_xuid:
+                return _safe_xuid(entry.get('xuid')) == target_xuid
+            return str(entry.get('name', '')).strip().lower() == target_name.lower()
+
+        def do_bedrock_unban():
+            try:
+                entries = _read_json_list(bans_file)
+                remaining = [e for e in entries if not matches(e)]
+                if len(remaining) == len(entries):
+                    return api_error('Player not found in the ban list', 404)
+                _write_json_list(bans_file, remaining)
+                return jsonify({
+                    'success': True,
+                    'message': f'{target_name or target_xuid} unbanned'
+                }), 200
+            except Exception as e:
+                return api_error(str(e), 500)
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'unban',
+             'player': target_name or target_xuid, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_bedrock_unban,
+            description=f'{user.get("username","Unknown")} unbanned "{target_name or target_xuid}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     # Running server: pardon live via console (server persists banned-players.json itself).
     inst = _running_instance(server_id)

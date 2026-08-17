@@ -5509,9 +5509,9 @@ function isBedrockServer() {
 
 // Bedrock stores this data differently everywhere: operators in permissions.json
 // (keyed by XUID), the allow list in allowlist.json, player data inside the world's
-// LevelDB, and no ban list at all. Operators and the allow list are backed by
-// Bedrock-native endpoints and get Bedrock columns/fields here; player data and the
-// two ban lists have no Bedrock equivalent and are hidden.
+// LevelDB, and no ban list at all — the panel keeps that one itself and enforces it
+// by kicking on connect. Those three sections get Bedrock columns/fields here.
+// Player data and IP bans have no Bedrock equivalent at all and stay hidden.
 function applyPlayersTabForCategory() {
   const bedrock = isBedrockServer();
   const hideOnBedrock = bedrock ? 'none' : '';
@@ -5519,10 +5519,18 @@ function applyPlayersTabForCategory() {
   const notice = document.getElementById('bedrock-players-notice');
   if (notice) notice.style.display = bedrock ? '' : 'none';
 
-  ['playerdata-section', 'banned-players-section', 'banned-ips-section'].forEach(id => {
+  ['playerdata-section', 'banned-ips-section'].forEach(id => {
     const section = document.getElementById(id);
     if (section) section.style.display = hideOnBedrock;
   });
+
+  // Bans: the panel's own list on Bedrock, keyed by XUID rather than UUID
+  const bannedThead = document.getElementById('banned-thead');
+  if (bannedThead) {
+    bannedThead.innerHTML = `<tr><th>Player</th><th>${bedrock ? 'XUID' : 'UUID'}</th><th>Reason</th>`
+      + '<th>Expires</th><th>Banned By</th><th>Actions</th></tr>';
+  }
+  setDisplay('banned-bedrock-note', bedrock);
 
   // Operators: XUID + Bedrock permission names instead of UUID + level 1-4
   setDisplay('ops-levels-java', !bedrock);
@@ -5557,11 +5565,12 @@ async function loadAllPlayerData() {
   applyPlayersTabForCategory();
 
   if (isBedrockServer()) {
-    // No player-data files and no ban lists on Bedrock — skip those endpoints
+    // No player-data files and no IP bans on Bedrock — skip those endpoints
     await Promise.all([
       loadOnlinePlayers(),
       loadOperators(),
-      loadWhitelist()
+      loadWhitelist(),
+      loadBannedPlayers()
     ]);
     return;
   }
@@ -5856,19 +5865,23 @@ async function loadBannedPlayers() {
       return;
     }
     
+    // Bedrock entries are keyed by XUID — or by gamertag until the player has
+    // been seen once, since Bedrock only reveals an XUID on connect.
+    const bedrock = isBedrockServer();
     tbody.innerHTML = banned.map(player => {
       const expiresDisplay = (!player.expires || player.expires === 'forever')
         ? '<span class="badge badge-danger">Permanent</span>'
         : escapeHtml(player.expires);
+      const id = bedrock ? (player.xuid || player.name) : player.uuid;
       return `
         <tr>
           <td><strong>${escapeHtml(player.name)}</strong></td>
-          <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
+          <td class="uuid-cell">${escapeHtml((bedrock ? player.xuid : player.uuid) || '—')}</td>
           <td>${escapeHtml(player.reason || 'No reason')}</td>
           <td>${expiresDisplay}</td>
           <td>${escapeHtml(player.source || 'Unknown')}</td>
           <td class="actions-cell">
-            <button class="btn btn-success btn-small" onclick="unbanPlayer('${player.uuid}', '${escapeHtml(player.name)}')">Unban</button>
+            <button class="btn btn-success btn-small" onclick="unbanPlayer('${escapeAttr(encodeURIComponent(id))}', '${escapeAttr(player.name)}')">Unban</button>
           </td>
         </tr>
       `;
@@ -6084,6 +6097,9 @@ async function removeFromWhitelist(uuid, name) {
 
 // Ban Functions
 function openBanPlayerModal() {
+  const bedrock = isBedrockServer();
+  document.getElementById('ban-player-name-label').textContent = bedrock ? 'Gamertag' : 'Player Name';
+  document.getElementById('ban-player-name').placeholder = bedrock ? 'Enter gamertag' : 'Enter player name';
   document.getElementById('ban-player-name').value = '';
   document.getElementById('ban-reason').value = '';
   document.getElementById('ban-expires-type').value = 'forever';
@@ -6156,7 +6172,8 @@ async function loadOnlinePlayers() {
       tbody.innerHTML = '<tr><td colspan="3" class="empty-message">No players online</td></tr>';
       return;
     }
-    // Bedrock has no ban — kick is its only moderation command.
+    // Kick is Bedrock's only server-side command, so it sits alongside the
+    // panel-enforced ban there; Java's ban already kicks on its own.
     const bedrock = isBedrockServer();
     tbody.innerHTML = online.map(p => `
       <tr>
@@ -6164,9 +6181,8 @@ async function loadOnlinePlayers() {
         <td>${p.since ? new Date(p.since * 1000).toLocaleTimeString() : '—'}</td>
         <td class="actions-cell">
           <button class="btn btn-small" onclick="openMessagePlayersModal('${escapeAttr(p.name)}')">Message</button>
-          ${bedrock
-            ? `<button class="btn btn-small btn-danger" onclick="kickPlayerOnline('${escapeAttr(p.name)}')">Kick</button>`
-            : `<button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeAttr(p.name)}')">Ban</button>`}
+          ${bedrock ? `<button class="btn btn-small" onclick="kickPlayerOnline('${escapeAttr(p.name)}')">Kick</button>` : ''}
+          <button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeAttr(p.name)}')">Ban</button>
         </td>
       </tr>
     `).join('');
