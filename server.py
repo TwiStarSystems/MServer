@@ -5146,6 +5146,22 @@ class ServerInstance:
             self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
             self._dispatch_player_event('player_leave', name)
 
+    def _dispatch_start_notification(self):
+        """Fire the server-start notification once per start, in a background thread."""
+        if self._start_notified:
+            return
+        self._start_notified = True
+        try:
+            cfg = server_manager.get_server_config(self.server_id)
+            sname = cfg.get('name', self.server_id) if cfg else self.server_id
+            threading.Thread(
+                target=dispatch_notification,
+                args=('server_start', {'server_name': sname, 'server_id': self.server_id}),
+                daemon=True
+            ).start()
+        except Exception:
+            pass
+
     def _dispatch_player_event(self, event_type, player_name):
         """Fire player join/leave notification in a background thread."""
         try:
@@ -5243,6 +5259,7 @@ class ServerInstance:
                             'status': self.status.value,
                             'running': True
                         })
+                        self._dispatch_start_notification()
             else:
                 # Java servers: TCP port-based detection
                 port = self._get_server_port()
@@ -5272,18 +5289,8 @@ class ServerInstance:
                         'running': self.status in [ServerStatus.STARTING, ServerStatus.RUNNING, ServerStatus.UNRESPONSIVE]
                     })
                     # Dispatch server-start notification once per lifecycle
-                    if new_status == ServerStatus.RUNNING and not self._start_notified:
-                        self._start_notified = True
-                        try:
-                            cfg = server_manager.get_server_config(self.server_id)
-                            sname = cfg.get('name', self.server_id) if cfg else self.server_id
-                            threading.Thread(
-                                target=dispatch_notification,
-                                args=('server_start', {'server_name': sname, 'server_id': self.server_id}),
-                                daemon=True
-                            ).start()
-                        except Exception:
-                            pass
+                    if new_status == ServerStatus.RUNNING:
+                        self._dispatch_start_notification()
             
             time.sleep(2)  # Check every 2 seconds
     
