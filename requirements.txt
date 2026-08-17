@@ -1,43 +1,47 @@
 # MServer - Python Dependencies
 
+# Upper bounds are pinned one major version above the tested floor, so a
+# `pip install -U` (or a fresh install) can't silently pull in a breaking
+# major release — bump the bound deliberately after testing against it.
+
 # Web framework
-Flask>=3.0.0
-Flask-SocketIO>=5.3.6
-python-socketio>=5.10.0
-python-engineio>=4.8.0
+Flask>=3.0.0,<4.0.0
+Flask-SocketIO>=5.3.6,<6.0.0
+python-socketio>=5.10.0,<6.0.0
+python-engineio>=4.8.0,<5.0.0
 
 # Environment variables
-python-dotenv>=1.0.0
+python-dotenv>=1.0.0,<2.0.0
 
 # CSRF Protection
-Flask-WTF>=1.2.0
+Flask-WTF>=1.2.0,<2.0.0
 
 # WebSocket support (simple-websocket provides real WebSocket in threading mode)
-simple-websocket>=1.0.0
+simple-websocket>=1.0.0,<2.0.0
 
 # Rate limiting
-Flask-Limiter>=3.5.0
+Flask-Limiter>=3.5.0,<4.0.0
 
 # File upload security
-Werkzeug>=3.0.0
+Werkzeug>=3.0.0,<4.0.0
 
 # HTTP requests for JAR downloads and client communication
-requests>=2.31.0
+requests>=2.31.0,<3.0.0
 
 # MFA/TOTP support
-pyotp>=2.9.0
-qrcode[pil]>=7.4.2
+pyotp>=2.9.0,<3.0.0
+qrcode[pil]>=7.4.2,<8.0.0
 
 # Task scheduling for automated backups and tasks
-APScheduler>=3.10.0
+APScheduler>=3.10.0,<4.0.0
 
 # WSGI server for production (optional - built-in server works for most deployments)
-gunicorn>=21.2.0
+gunicorn>=21.2.0,<22.0.0
 
 # System monitoring (CPU, RAM, disk)
-psutil>=5.9.0
+psutil>=5.9.0,<6.0.0
 
 # Optional: S3 external backup storage support
 # Uncomment or install separately if you want to use S3/S3-compatible external backup destinations:
-#   pip install boto3>=1.34.0
-# boto3>=1.34.0
+#   pip install boto3>=1.34.0,<2.0.0
+# boto3>=1.34.0,<2.0.0
