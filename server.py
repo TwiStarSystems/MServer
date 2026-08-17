@@ -7628,7 +7628,10 @@ def setup_bedrock_server(server_id):
                 'level-seed': server_properties.get('level-seed', ''),
                 'allow-cheats': 'false',
                 'online-mode': 'true',
-                'white-list': 'true' if server_properties.get('white-list') else 'false',
+                # Bedrock's documented key is 'allow-list'; 'white-list' is accepted
+                # here so older API clients keep working (issue #51)
+                'allow-list': 'true' if server_properties.get(
+                    'allow-list', server_properties.get('white-list')) else 'false',
                 # Allowed ranges come from the Bedrock server.properties documentation
                 'view-distance': _bedrock_int_property(server_properties, 'view-distance', 32, 4, 255),
                 'tick-distance': _bedrock_int_property(server_properties, 'tick-distance', 4, 4, 12),
@@ -9561,54 +9564,95 @@ def unban_player(server_id, uuid):
         description=f'{user.get("username","Unknown")} unbanned a player on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
 
+def _whitelist_property(server_id):
+    """Return (property_key, console_command, legacy_key) for the whitelist toggle.
+
+    Bedrock documents 'allow-list' in server.properties and its only console command
+    is 'allowlist' — 'whitelist' does not exist there. BDS does still honour a
+    'white-list' line as a legacy alias (verified against BDS 1.26.32.2, where
+    'allow-list' takes precedence when both are present), and older panel versions
+    wrote exactly that, so reads fall back to it and the toggle rewrites it."""
+    server_config = server_manager.get_server_config(server_id)
+    if server_config and server_config.get('category') == 'bedrock':
+        return 'allow-list', 'allowlist', 'white-list'
+    return 'white-list', 'whitelist', None
+
+
 @app.route('/api/servers/<server_id>/players/whitelist-status', methods=['GET'])
 @server_access_required
 def get_whitelist_status(server_id):
     """Return whether whitelist is enabled in server.properties"""
+    key, _command, legacy = _whitelist_property(server_id)
     server_path = server_manager.get_server_path(server_id)
     properties_path = server_path / 'server.properties'
     if not properties_path.exists():
         return api_success({'enabled': False, 'available': False})
     try:
+        legacy_value = None
         with open(properties_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if line.startswith('white-list='):
+                if line.startswith(f'{key}='):
                     value = line.split('=', 1)[1].strip().lower()
-                    return api_success({'enabled': value == 'true', 'available': True})
-        return api_success({'enabled': False, 'available': True})
+                    return api_success({'enabled': value == 'true', 'available': True, 'property': key})
+                if legacy and line.startswith(f'{legacy}='):
+                    legacy_value = line.split('=', 1)[1].strip().lower()
+        if legacy_value is not None:
+            return api_success({'enabled': legacy_value == 'true', 'available': True, 'property': legacy})
+        return api_success({'enabled': False, 'available': True, 'property': key})
     except Exception as e:
         return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/players/whitelist-toggle', methods=['PATCH'])
 @server_access_required
 def toggle_whitelist_setting(server_id):
-    """Toggle white-list in server.properties"""
+    """Toggle the whitelist (Java) / allow-list (Bedrock) property in server.properties"""
+    key, command, legacy = _whitelist_property(server_id)
     server_path = server_manager.get_server_path(server_id)
     properties_path = server_path / 'server.properties'
     if not properties_path.exists():
         return api_error('server.properties not found', 404)
     try:
-        lines = []
-        current = False
         with open(properties_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                stripped = line.strip()
-                if stripped.startswith('white-list='):
-                    current = stripped.split('=', 1)[1].strip().lower() == 'true'
-                    new_val = 'false' if current else 'true'
-                    lines.append(f'white-list={new_val}\n')
-                else:
-                    lines.append(line)
-        with open(properties_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
+            lines = f.readlines()
+
+        current = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith(f'{key}='):
+                current = stripped.split('=', 1)[1].strip().lower() == 'true'
+                break
+            if legacy and stripped.startswith(f'{legacy}='):
+                current = stripped.split('=', 1)[1].strip().lower() == 'true'
+
         new_enabled = not current
+        new_line = f'{key}={"true" if new_enabled else "false"}\n'
+        updated = []
+        written = False
+        for line in lines:
+            stripped = line.strip()
+            # A legacy Bedrock 'white-list' line is rewritten under the current key so
+            # the two can never disagree, and an absent key is appended rather than
+            # silently dropped.
+            if stripped.startswith(f'{key}=') or (legacy and stripped.startswith(f'{legacy}=')):
+                if not written:
+                    updated.append(new_line)
+                    written = True
+                continue
+            updated.append(line)
+        if not written:
+            if updated and not updated[-1].endswith('\n'):
+                updated[-1] += '\n'
+            updated.append(new_line)
+
+        with open(properties_path, 'w', encoding='utf-8') as f:
+            f.writelines(updated)
         # server.properties isn't re-read by a running server, so also toggle
         # enforcement live. (The file edit above keeps it persistent across restarts.)
         inst = _running_instance(server_id)
         if inst:
-            inst.send_command('whitelist on' if new_enabled else 'whitelist off')
-        return jsonify({'success': True, 'enabled': new_enabled})
+            inst.send_command(f'{command} on' if new_enabled else f'{command} off')
+        return api_success({'enabled': new_enabled, 'property': key})
     except Exception as e:
         return api_error(str(e), 500)
 

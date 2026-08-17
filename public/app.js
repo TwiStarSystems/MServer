@@ -2312,7 +2312,7 @@ async function createFreshServer(e) {
                 'gamemode': gamemode,
                 'difficulty': difficulty,
                 'level-seed': levelSeed,
-                'white-list': whiteList,
+                'allow-list': whiteList,
                 'level-name': levelName,
                 'view-distance': viewDistance,
                 'tick-distance': tickDistance,
@@ -6871,7 +6871,7 @@ function renderPropertiesEditor(properties) {
   
   // Group properties by category for better organization
   const groups = {
-    'Server Settings': ['server-name', 'server-port', 'server-ip', 'max-players', 'white-list', 'enforce-whitelist', 'online-mode', 'motd'],
+    'Server Settings': ['server-name', 'server-port', 'server-ip', 'max-players', 'white-list', 'allow-list', 'enforce-whitelist', 'online-mode', 'motd'],
     'World Settings': ['level-name', 'level-type', 'level-seed', 'generator-settings', 'generate-structures', 'allow-nether', 'allow-flight', 'max-world-size', 'view-distance', 'simulation-distance'],
     'Gameplay': ['gamemode', 'difficulty', 'hardcore', 'pvp', 'spawn-protection', 'spawn-npcs', 'spawn-animals', 'spawn-monsters', 'max-tick-time'],
     'Performance': ['max-threads', 'rate-limit', 'network-compression-threshold', 'enable-jmx-monitoring', 'sync-chunk-writes'],
@@ -7050,6 +7050,12 @@ function getPropertyMetadata(key) {
       type: 'boolean',
       default: 'false',
       description: 'Whether to accept incoming transfers via a transfer packet',
+      allowedValues: ['true', 'false']
+    },
+    'allow-list': {
+      type: 'boolean',
+      default: 'false',
+      description: 'Bedrock: only players listed in allowlist.json can join',
       allowedValues: ['true', 'false']
     },
     'allow-flight': {
