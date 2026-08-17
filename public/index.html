@@ -508,14 +508,13 @@
         <!-- Players Tab -->
         <div id="players-tab" class="tab-content">
           <div class="players-container">
-            <!-- Bedrock notice: the Java-only lists below are hidden for Bedrock servers -->
+            <!-- Bedrock notice: explains what Bedrock does differently, and why some lists are hidden -->
             <div id="bedrock-players-notice" class="bedrock-notice" style="display:none">
-              <p><strong>Bedrock server:</strong> the Java-only player lists are hidden here because Bedrock stores this data differently.</p>
+              <p><strong>Bedrock server:</strong> operators and the allow list are managed below; the lists Bedrock does not have are hidden.</p>
               <ul>
-                <li><strong>Operators:</strong> kept in <code>permissions.json</code> keyed by XUID — use the <code>op &lt;gamertag&gt;</code> console command.</li>
-                <li><strong>Allow list:</strong> kept in <code>allowlist.json</code> — use <code>allowlist add "&lt;gamertag&gt;"</code>.</li>
-                <li><strong>Bans:</strong> Bedrock has no ban list — use <code>kick "&lt;gamertag&gt;"</code> plus the allow list.</li>
-                <li><strong>Player data:</strong> lives inside the world's LevelDB (<code>worlds/&lt;level&gt;/db/</code>), not per-player files.</li>
+                <li><strong>Operators</strong> live in <code>permissions.json</code>, keyed by XUID. The panel records a player's XUID the first time they connect, so a player must have joined once before you can set their permission — or you can enter their XUID directly.</li>
+                <li><strong>Bans:</strong> Bedrock has no ban list. Kick the player and remove them from the allow list (with the allow list on) to keep them out.</li>
+                <li><strong>Player data</strong> lives inside the world's LevelDB (<code>worlds/&lt;level&gt;/db/</code>), not per-player files.</li>
               </ul>
             </div>
 
@@ -549,7 +548,7 @@
                 <h3>👑 Operators (OPs)</h3>
                 <button class="btn btn-small btn-success" onclick="openAddOpModal()">+ Add OP</button>
               </div>
-              <div class="players-info-box">
+              <div id="ops-levels-java" class="players-info-box">
                 <p><strong>Permission Levels:</strong></p>
                 <ul>
                   <li><strong>Level 1 - Moderator:</strong> Bypass spawn protection</li>
@@ -558,8 +557,16 @@
                   <li><strong>Level 4 - Owner:</strong> All commands including server management</li>
                 </ul>
               </div>
+              <div id="ops-levels-bedrock" class="players-info-box" style="display:none">
+                <p><strong>Permission Levels:</strong></p>
+                <ul>
+                  <li><strong>Visitor:</strong> Can look around but not interact with the world</li>
+                  <li><strong>Member:</strong> Normal play — the server default</li>
+                  <li><strong>Operator:</strong> All commands including server management</li>
+                </ul>
+              </div>
               <table class="players-table">
-                <thead>
+                <thead id="ops-thead">
                   <tr>
                     <th>Player</th>
                     <th>UUID</th>
@@ -607,9 +614,9 @@
                   <button id="add-whitelist-btn" class="btn btn-small btn-success" onclick="openAddWhitelistModal()">+ Add Player</button>
                 </div>
               </div>
-              <p id="whitelist-bedrock-note" class="players-info" style="display:none">Allow-list entries live in <code>allowlist.json</code> (gamertag + XUID) and can't be edited from the panel yet — use the Files tab or the <code>allowlist add "&lt;gamertag&gt;"</code> console command. The toggle above flips <code>allow-list</code> in server.properties.</p>
+              <p id="whitelist-bedrock-note" class="players-info" style="display:none">Entries are written to <code>allowlist.json</code>; a running server is asked to reload it. The toggle above flips <code>allow-list</code> in server.properties. Bedrock fills in each player's XUID itself the first time they join.</p>
               <table id="whitelist-table" class="players-table">
-                <thead>
+                <thead id="whitelist-thead">
                   <tr>
                     <th>Player</th>
                     <th>UUID</th>
@@ -1306,14 +1313,27 @@
     <div id="add-op-modal" class="modal">
       <div class="modal-content modal-small">
         <div class="modal-header">
-          <h2>Add Operator</h2>
+          <h2 id="add-op-title">Add Operator</h2>
           <button class="close-btn" onclick="closeAddOpModal()">&times;</button>
         </div>
         <div class="form-group">
-          <label>Player Name</label>
+          <label id="op-player-name-label">Player Name</label>
           <input type="text" id="op-player-name" class="form-control" placeholder="Enter player name">
         </div>
-        <div class="form-group">
+        <!-- Bedrock: permissions.json is keyed by XUID, so allow entering one directly -->
+        <div class="form-group" id="op-xuid-group" style="display:none">
+          <label>XUID <span class="players-info">(optional — only needed if the player has never joined)</span></label>
+          <input type="text" id="op-xuid" class="form-control" placeholder="e.g. 2535412345678901">
+        </div>
+        <div class="form-group" id="op-permission-group" style="display:none">
+          <label>Permission</label>
+          <select id="op-permission" class="form-control">
+            <option value="operator" selected>Operator (all commands)</option>
+            <option value="member">Member (server default)</option>
+            <option value="visitor">Visitor (look, don't touch)</option>
+          </select>
+        </div>
+        <div class="form-group" id="op-level-group">
           <label>Permission Level</label>
           <select id="op-level" class="form-control">
             <option value="1">Level 1 - Moderator (Bypass spawn protection)</option>
@@ -1322,14 +1342,14 @@
             <option value="4" selected>Level 4 - Owner (All commands)</option>
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="op-bypass-group">
           <label class="checkbox-label">
             <input type="checkbox" id="op-bypass-limit">
             Bypass Player Limit
           </label>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-success" onclick="addOperator()">Add OP</button>
+          <button id="add-op-submit" class="btn btn-success" onclick="addOperator()">Add OP</button>
           <button class="btn" onclick="closeAddOpModal()">Cancel</button>
         </div>
       </div>
@@ -1346,7 +1366,15 @@
           <label>Player Name</label>
           <input type="text" id="edit-op-name" class="form-control" readonly>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="edit-op-permission-group" style="display:none">
+          <label>Permission</label>
+          <select id="edit-op-permission" class="form-control">
+            <option value="operator">Operator (all commands)</option>
+            <option value="member">Member (server default)</option>
+            <option value="visitor">Visitor (look, don't touch)</option>
+          </select>
+        </div>
+        <div class="form-group" id="edit-op-level-group">
           <label>Permission Level</label>
           <select id="edit-op-level" class="form-control">
             <option value="1">Level 1 - Moderator</option>
@@ -1355,7 +1383,7 @@
             <option value="4">Level 4 - Owner</option>
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="edit-op-bypass-group">
           <label class="checkbox-label">
             <input type="checkbox" id="edit-op-bypass">
             Bypass Player Limit
@@ -1372,12 +1400,18 @@
     <div id="add-whitelist-modal" class="modal">
       <div class="modal-content modal-small">
         <div class="modal-header">
-          <h2>Add to Whitelist</h2>
+          <h2 id="add-whitelist-title">Add to Whitelist</h2>
           <button class="close-btn" onclick="closeAddWhitelistModal()">&times;</button>
         </div>
         <div class="form-group">
-          <label>Player Name</label>
+          <label id="whitelist-player-name-label">Player Name</label>
           <input type="text" id="whitelist-player-name" class="form-control" placeholder="Enter player name">
+        </div>
+        <div class="form-group" id="whitelist-ignores-group" style="display:none">
+          <label class="checkbox-label">
+            <input type="checkbox" id="whitelist-ignores-limit">
+            Can join even when the server is full
+          </label>
         </div>
         <div class="modal-footer">
           <button class="btn btn-success" onclick="addToWhitelist()">Add</button>

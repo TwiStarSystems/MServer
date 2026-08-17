@@ -264,6 +264,12 @@ JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 TOOLS_DIR = BASE_DIR / 'tools'
 VERSION_FILE = BASE_DIR / 'version'
 
+# Per-server panel-side cache of Bedrock gamertag -> XUID, learned from the
+# "Player connected: <name>, xuid: <id>" console lines. Bedrock's permissions.json
+# is keyed by XUID only and there is no public gamertag->XUID lookup, so this is
+# the only way to manage operators for a player who is not currently online.
+BEDROCK_XUID_CACHE = '.mserver_xuids.json'
+
 # ── Tunable configuration (env-overridable) ───────────────────────────────────
 DEFAULT_JAVA_ARGS = _env_str('DEFAULT_JAVA_ARGS', '-Xmx4G -Xms1G')  # default JVM args for new servers
 JAVA_BINARY = _env_str('JAVA_BINARY', 'java')                        # java executable (name on PATH or absolute path)
@@ -5130,10 +5136,11 @@ class ServerInstance:
             self._dispatch_player_event('player_leave', name)
             return
 
-        # Bedrock: "Player connected: PlayerName, xuid: ..."
+        # Bedrock: "Player connected: PlayerName, xuid: 2535412345678901"
         bedrock_join = re.search(r'Player connected:\s+([^,]+)', line)
         if bedrock_join:
             name = bedrock_join.group(1).strip()
+            self._remember_bedrock_xuid(name, line)
             self.online_players[name] = time.time()
             self._broadcast({'type': 'player_join', 'serverId': self.server_id, 'player': name})
             self._dispatch_player_event('player_join', name)
@@ -5142,9 +5149,36 @@ class ServerInstance:
         bedrock_leave = re.search(r'Player disconnected:\s+([^,]+)', line)
         if bedrock_leave:
             name = bedrock_leave.group(1).strip()
+            self._remember_bedrock_xuid(name, line)
             self.online_players.pop(name, None)
             self._broadcast({'type': 'player_leave', 'serverId': self.server_id, 'player': name})
             self._dispatch_player_event('player_leave', name)
+
+    def _remember_bedrock_xuid(self, name, line):
+        """Cache the gamertag -> XUID pair carried by a Bedrock connect/disconnect line.
+
+        permissions.json is keyed by XUID and Bedrock exposes no gamertag lookup,
+        so this cache is what lets the Operators tab work for a player who isn't
+        online. Persisted beside the server so it survives a panel restart."""
+        match = re.search(r'xuid:\s*(\d+)', line)
+        if not name or not match:
+            return
+        xuid = match.group(1)
+        try:
+            cache_file = self.server_path / BEDROCK_XUID_CACHE
+            cache = {}
+            if cache_file.exists():
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    cache = loaded
+            if cache.get(name) == xuid:
+                return
+            cache[name] = xuid
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache, f, indent=2)
+        except Exception:
+            pass
 
     def _dispatch_start_notification(self):
         """Fire the server-start notification once per start, in a background thread."""
@@ -7576,7 +7610,8 @@ def setup_bedrock_server(server_id):
             )
             
             # Preserve existing user files
-            preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds'}
+            preserve_files = {'server.properties', 'permissions.json', 'allowlist.json', 'worlds',
+                              BEDROCK_XUID_CACHE}
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 for member in zip_ref.infolist():
@@ -8722,6 +8757,176 @@ def _name_from_json_by_uuid(server_path, filename, uuid):
     return None
 
 
+# ==================== Bedrock player management ====================
+#
+# Bedrock Dedicated Server stores none of the Java files. Operators live in
+# permissions.json keyed by XUID, the allow list lives in allowlist.json
+# (name + optional xuid + ignoresPlayerLimit), player data is inside the world's
+# LevelDB, and there is no ban list at all. Both JSON files are re-read on demand
+# by the 'permission reload' / 'allowlist reload' console commands, so the panel
+# writes the file and then asks a running server to reload it — unlike Java,
+# where the file must be driven through op/whitelist/ban console commands.
+
+BEDROCK_PERMISSIONS = ('visitor', 'member', 'operator')
+
+BEDROCK_NO_BANS_MESSAGE = (
+    'Bedrock Dedicated Server has no ban list. Kick the player and remove them '
+    'from the allow list (with the allow list enabled) to keep them out.'
+)
+
+
+def _is_bedrock_server(server_id):
+    """True if this server is a Bedrock server."""
+    cfg = server_manager.get_server_config(server_id)
+    return bool(cfg and cfg.get('category') == 'bedrock')
+
+
+def _safe_bedrock_name(name):
+    """Sanitize a Bedrock gamertag for use in a single console command line.
+
+    Gamertags are 3-16 characters and may contain spaces, so unlike Java names
+    they get quoted when sent; anything with a quote, backslash or newline is
+    rejected so it cannot close the quoting and smuggle a second command."""
+    name = (name or '').strip()
+    if not re.match(r'^[A-Za-z0-9_][A-Za-z0-9_ .\-]{0,31}$', name):
+        return None
+    return name
+
+
+def _safe_xuid(xuid):
+    """Return the XUID if it is a plain decimal id, else None."""
+    xuid = str(xuid or '').strip()
+    return xuid if re.match(r'^\d{1,20}$', xuid) else None
+
+
+def _read_json_list(path):
+    """Read a JSON array from path, returning [] when missing or unreadable."""
+    if not path.exists():
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _write_json_list(path, data):
+    """Write a JSON array, matching the formatting Bedrock itself uses."""
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+
+
+def _bedrock_known_players(server_path):
+    """Return the known gamertag <-> XUID pairs for a Bedrock server.
+
+    Sources, merged in increasing order of trust: the panel's console-learned
+    cache, then allowlist.json (Bedrock fills in the xuid there itself on first
+    join). Returns (by_name_lower, by_xuid)."""
+    by_name, by_xuid = {}, {}
+
+    def record(name, xuid):
+        if not xuid:
+            return
+        if name:
+            by_name[name.lower()] = xuid
+            by_xuid[xuid] = name
+
+    try:
+        cache_file = server_path / BEDROCK_XUID_CACHE
+        if cache_file.exists():
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if isinstance(cache, dict):
+                for name, xuid in cache.items():
+                    record(name, _safe_xuid(xuid))
+    except Exception:
+        pass
+
+    for entry in _read_json_list(server_path / 'allowlist.json'):
+        if isinstance(entry, dict):
+            record(entry.get('name'), _safe_xuid(entry.get('xuid')))
+
+    return by_name, by_xuid
+
+
+def _bedrock_resolve_xuid(server_path, name=None, xuid=None):
+    """Resolve a Bedrock player's XUID from an explicit value or a known gamertag."""
+    explicit = _safe_xuid(xuid)
+    if explicit:
+        return explicit
+    if not name:
+        return None
+    by_name, _ = _bedrock_known_players(server_path)
+    return by_name.get(name.strip().lower())
+
+
+def _bedrock_reload(server_id, subsystem):
+    """Ask a running Bedrock server to re-read permissions.json / allowlist.json.
+
+    Returns True if the reload was sent (i.e. the change is live), False if the
+    server is stopped and will simply pick the file up at next start."""
+    inst = _running_instance(server_id)
+    if not inst:
+        return False
+    inst.send_command(f'{subsystem} reload')
+    return True
+
+
+def _bedrock_applied_suffix(live):
+    """Say plainly whether a running server was asked to reload the file."""
+    return ' (reloaded on the running server)' if live else ' (applies on next start)'
+
+
+def _bedrock_apply_permission(server_id, server_path, xuid, permission, label):
+    """Upsert a permissions.json entry and reload it on a running server."""
+    try:
+        perms_file = server_path / 'permissions.json'
+        entries = _read_json_list(perms_file)
+        for entry in entries:
+            if isinstance(entry, dict) and _safe_xuid(entry.get('xuid')) == xuid:
+                entry['permission'] = permission
+                break
+        else:
+            # Only the two documented keys — BDS validates this file on load.
+            entries.append({'permission': permission, 'xuid': xuid})
+        _write_json_list(perms_file, entries)
+        live = _bedrock_reload(server_id, 'permission')
+        return jsonify({
+            'success': True,
+            'message': f'{label} set to {permission}{_bedrock_applied_suffix(live)}'
+        }), 200
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+def _bedrock_remove_permission(server_id, server_path, xuid, label):
+    """Drop a permissions.json entry (back to the server-wide default permission)."""
+    try:
+        perms_file = server_path / 'permissions.json'
+        entries = _read_json_list(perms_file)
+        remaining = [e for e in entries
+                     if not (isinstance(e, dict) and _safe_xuid(e.get('xuid')) == xuid)]
+        if len(remaining) == len(entries):
+            return api_error('No permission entry for that XUID', 404)
+        _write_json_list(perms_file, remaining)
+        live = _bedrock_reload(server_id, 'permission')
+        return jsonify({
+            'success': True,
+            'message': f'{label} removed from permissions.json{_bedrock_applied_suffix(live)}'
+        }), 200
+    except Exception as e:
+        return api_error(str(e), 500)
+
+
+def _bedrock_permission_label(server_path, xuid, name=None):
+    """Best display name for a Bedrock player: given name, known gamertag, else XUID."""
+    if name:
+        return name
+    _, by_xuid = _bedrock_known_players(server_path)
+    return by_xuid.get(xuid) or xuid
+
+
 @app.route('/api/servers/<server_id>/players/online', methods=['GET'])
 @server_access_required
 def get_online_players(server_id):
@@ -8831,7 +9036,10 @@ def get_player_inventory(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/banned-ips', methods=['GET'])
 @server_access_required
 def get_banned_ips(server_id):
-    """Get banned IPs list"""
+    """Get banned IPs list (Bedrock has no ban list)"""
+    if _is_bedrock_server(server_id):
+        return api_success({'banned_ips': [], 'supported': False, 'message': BEDROCK_NO_BANS_MESSAGE})
+
     server_path = server_manager.get_server_path(server_id)
     banned_ips_file = server_path / 'banned-ips.json'
     try:
@@ -8846,7 +9054,10 @@ def get_banned_ips(server_id):
 @app.route('/api/servers/<server_id>/players/banned-ips', methods=['POST'])
 @server_access_required
 def ban_ip(server_id):
-    """Ban an IP address"""
+    """Ban an IP address (Bedrock has no ban list)"""
+    if _is_bedrock_server(server_id):
+        return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
+
     data = request.get_json()
     ip_address = data.get('ip', '').strip()
     reason = data.get('reason', 'Banned By Admin')
@@ -8898,7 +9109,10 @@ def ban_ip(server_id):
 @app.route('/api/servers/<server_id>/players/banned-ips/<path:ip_address>', methods=['DELETE'])
 @server_access_required
 def unban_ip(server_id, ip_address):
-    """Unban an IP address"""
+    """Unban an IP address (Bedrock has no ban list)"""
+    if _is_bedrock_server(server_id):
+        return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
+
     server_path = server_manager.get_server_path(server_id)
     banned_ips_file = server_path / 'banned-ips.json'
 
@@ -9079,10 +9293,27 @@ def test_scheduled_message(server_id):
 @app.route('/api/servers/<server_id>/players/ops', methods=['GET'])
 @server_access_required
 def get_operators(server_id):
-    """Get list of operators from ops.json"""
+    """Get list of operators — ops.json on Java, permissions.json on Bedrock"""
     server_path = server_manager.get_server_path(server_id)
+
+    if _is_bedrock_server(server_id):
+        _, by_xuid = _bedrock_known_players(server_path)
+        operators = []
+        for entry in _read_json_list(server_path / 'permissions.json'):
+            if not isinstance(entry, dict):
+                continue
+            xuid = _safe_xuid(entry.get('xuid'))
+            if not xuid:
+                continue
+            operators.append({
+                'xuid': xuid,
+                'name': by_xuid.get(xuid, ''),
+                'permission': str(entry.get('permission', 'member')).lower(),
+            })
+        return api_success({'operators': operators, 'bedrock': True})
+
     ops_file = server_path / 'ops.json'
-    
+
     try:
         if ops_file.exists():
             with open(ops_file, 'r') as f:
@@ -9107,6 +9338,37 @@ def add_operator(server_id):
     ops_file = server_path / 'ops.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Bedrock: permissions.json keyed by XUID, applied with 'permission reload'.
+    if _is_bedrock_server(server_id):
+        permission = str(data.get('permission') or 'operator').strip().lower()
+        if permission not in BEDROCK_PERMISSIONS:
+            return api_error(f'Permission must be one of: {", ".join(BEDROCK_PERMISSIONS)}', 400)
+
+        display = _safe_bedrock_name(player_name) if player_name else None
+        if player_name and not display:
+            return api_error('Invalid gamertag', 400)
+
+        xuid = _bedrock_resolve_xuid(server_path, name=display,
+                                     xuid=data.get('xuid') or player_uuid)
+        if not xuid:
+            return api_error(
+                f'No XUID is known for "{player_name or "that player"}". Bedrock keys operators '
+                'by XUID — have the player join once (the panel records their XUID from the '
+                'console) or enter their XUID directly.', 404)
+
+        label = _bedrock_permission_label(server_path, xuid, display)
+
+        def do_bedrock_permission():
+            return _bedrock_apply_permission(server_id, server_path, xuid, permission, label)
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'add_op', 'player': label,
+             'permission': permission, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_bedrock_permission,
+            description=f'{user.get("username","Unknown")} set "{label}" to {permission} on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     # Running server: apply live via console so it takes effect immediately and
     # the server persists ops.json itself. Uses only the name, so this also works
@@ -9183,14 +9445,25 @@ def add_operator(server_id):
 @app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['PUT'])
 @server_access_required
 def update_operator(server_id, uuid):
-    """Update an operator's settings"""
+    """Update an operator's settings (Bedrock: <uuid> is the player's XUID)"""
     data = request.get_json()
     level = data.get('level', 4)
     bypass_limit = data.get('bypassesPlayerLimit', False)
-    
+
     server_path = server_manager.get_server_path(server_id)
+
+    if _is_bedrock_server(server_id):
+        xuid = _safe_xuid(uuid)
+        if not xuid:
+            return api_error('Invalid XUID', 400)
+        permission = str(data.get('permission') or '').strip().lower()
+        if permission not in BEDROCK_PERMISSIONS:
+            return api_error(f'Permission must be one of: {", ".join(BEDROCK_PERMISSIONS)}', 400)
+        label = _bedrock_permission_label(server_path, xuid)
+        return _bedrock_apply_permission(server_id, server_path, xuid, permission, label)
+
     ops_file = server_path / 'ops.json'
-    
+
     try:
         if not ops_file.exists():
             return api_error('Ops file not found', 404)
@@ -9219,12 +9492,29 @@ def update_operator(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['DELETE'])
 @server_access_required
 def remove_operator(server_id, uuid):
-    """Remove an operator"""
+    """Remove an operator (Bedrock: <uuid> is the player's XUID)"""
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     ops_file = server_path / 'ops.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Bedrock: drop the permissions.json entry and reload it on a running server.
+    if _is_bedrock_server(server_id):
+        xuid = _safe_xuid(uuid)
+        if not xuid:
+            return api_error('Invalid XUID', 400)
+        label = _bedrock_permission_label(server_path, xuid)
+
+        def do_bedrock_remove():
+            return _bedrock_remove_permission(server_id, server_path, xuid, label)
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'remove_op', 'xuid': xuid, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_bedrock_remove,
+            description=f'{user.get("username","Unknown")} removed the permission entry for "{label}" on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     # Running server: deop live via console (server persists ops.json itself).
     inst = _running_instance(server_id)
@@ -9267,10 +9557,23 @@ def remove_operator(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/whitelist', methods=['GET'])
 @server_access_required
 def get_whitelist(server_id):
-    """Get whitelist"""
+    """Get the whitelist — whitelist.json on Java, allowlist.json on Bedrock"""
     server_path = server_manager.get_server_path(server_id)
+
+    if _is_bedrock_server(server_id):
+        entries = []
+        for entry in _read_json_list(server_path / 'allowlist.json'):
+            if not isinstance(entry, dict):
+                continue
+            entries.append({
+                'name': entry.get('name', ''),
+                'xuid': _safe_xuid(entry.get('xuid')) or '',
+                'ignoresPlayerLimit': bool(entry.get('ignoresPlayerLimit', False)),
+            })
+        return api_success({'whitelist': entries, 'bedrock': True})
+
     whitelist_file = server_path / 'whitelist.json'
-    
+
     try:
         if whitelist_file.exists():
             with open(whitelist_file, 'r') as f:
@@ -9293,6 +9596,45 @@ def add_to_whitelist(server_id):
     whitelist_file = server_path / 'whitelist.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Bedrock: allowlist.json entries are name-keyed (Bedrock fills in the xuid
+    # itself on first join), applied with 'allowlist reload'.
+    if _is_bedrock_server(server_id):
+        name = _safe_bedrock_name(player_name)
+        if not name:
+            return api_error('A valid gamertag is required', 400)
+        ignores_limit = bool(data.get('ignoresPlayerLimit', False))
+        xuid = _safe_xuid(data.get('xuid')) or _bedrock_resolve_xuid(server_path, name=name)
+
+        def do_bedrock_allow():
+            try:
+                allow_file = server_path / 'allowlist.json'
+                entries = _read_json_list(allow_file)
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if (str(entry.get('name', '')).strip().lower() == name.lower()
+                            or (xuid and _safe_xuid(entry.get('xuid')) == xuid)):
+                        return api_error(f'{name} is already on the allow list', 400)
+                new_entry = {'ignoresPlayerLimit': ignores_limit, 'name': name}
+                if xuid:
+                    new_entry['xuid'] = xuid
+                entries.append(new_entry)
+                _write_json_list(allow_file, entries)
+                live = _bedrock_reload(server_id, 'allowlist')
+                return jsonify({
+                    'success': True,
+                    'message': f'{name} added to the allow list{_bedrock_applied_suffix(live)}'
+                }), 200
+            except Exception as e:
+                return api_error(str(e), 500)
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'whitelist_add', 'player': name, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_bedrock_allow,
+            description=f'{user.get("username","Unknown")} added "{name}" to the allow list on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     # Running server: apply live via console (server persists whitelist.json
     # itself and reloads enforcement). Name-only, so offline-mode works too.
@@ -9364,12 +9706,51 @@ def add_to_whitelist(server_id):
 @app.route('/api/servers/<server_id>/players/whitelist/<uuid>', methods=['DELETE'])
 @server_access_required
 def remove_from_whitelist(server_id, uuid):
-    """Remove a player from whitelist"""
+    """Remove a player from the whitelist (Bedrock: <uuid> is an XUID or gamertag)"""
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     whitelist_file = server_path / 'whitelist.json'
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
+
+    # Bedrock: allowlist.json entries have no UUID, so the path segment carries
+    # the XUID when Bedrock has filled one in and the gamertag otherwise.
+    if _is_bedrock_server(server_id):
+        target_xuid = _safe_xuid(uuid)
+        target_name = None if target_xuid else _safe_bedrock_name(uuid)
+        if not target_xuid and not target_name:
+            return api_error('Invalid allow-list entry', 400)
+        label = target_name or _bedrock_permission_label(server_path, target_xuid)
+
+        def matches(entry):
+            if not isinstance(entry, dict):
+                return False
+            if target_xuid:
+                return _safe_xuid(entry.get('xuid')) == target_xuid
+            return str(entry.get('name', '')).strip().lower() == target_name.lower()
+
+        def do_bedrock_remove_allow():
+            try:
+                allow_file = server_path / 'allowlist.json'
+                entries = _read_json_list(allow_file)
+                remaining = [e for e in entries if not matches(e)]
+                if len(remaining) == len(entries):
+                    return api_error('Player not found on the allow list', 404)
+                _write_json_list(allow_file, remaining)
+                live = _bedrock_reload(server_id, 'allowlist')
+                return jsonify({
+                    'success': True,
+                    'message': f'{label} removed from the allow list{_bedrock_applied_suffix(live)}'
+                }), 200
+            except Exception as e:
+                return api_error(str(e), 500)
+
+        result, status = check_action_policy(
+            'playerManagement', user,
+            {'server_id': server_id, 'action': 'whitelist_remove', 'player': label, 'server_name': server_name},
+            target_id=server_id, execute_fn=do_bedrock_remove_allow,
+            description=f'{user.get("username","Unknown")} removed "{label}" from the allow list on "{server_name}".')
+        return jsonify(result) if isinstance(result, dict) else result, status
 
     # Running server: remove live via console (server persists whitelist.json itself).
     inst = _running_instance(server_id)
@@ -9412,10 +9793,13 @@ def remove_from_whitelist(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/banned', methods=['GET'])
 @server_access_required
 def get_banned_players(server_id):
-    """Get banned players list"""
+    """Get banned players list (Bedrock has no ban list)"""
+    if _is_bedrock_server(server_id):
+        return api_success({'banned': [], 'supported': False, 'message': BEDROCK_NO_BANS_MESSAGE})
+
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
-    
+
     try:
         if banned_file.exists():
             with open(banned_file, 'r') as f:
@@ -9435,6 +9819,11 @@ def ban_player(server_id):
     player_uuid = data.get('uuid', '').strip()
     reason = data.get('reason', 'Banned By Admin')
     expires = data.get('expires', 'forever')
+
+    # Bedrock has no ban list and no ban command — writing banned-players.json
+    # would be a file the server never reads. Say so instead of pretending.
+    if _is_bedrock_server(server_id):
+        return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
 
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
@@ -9519,7 +9908,10 @@ def ban_player(server_id):
 @app.route('/api/servers/<server_id>/players/banned/<uuid>', methods=['DELETE'])
 @server_access_required
 def unban_player(server_id, uuid):
-    """Unban a player"""
+    """Unban a player (Bedrock has no ban list)"""
+    if _is_bedrock_server(server_id):
+        return api_error(BEDROCK_NO_BANS_MESSAGE, 400, supported=False)
+
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
@@ -9563,6 +9955,50 @@ def unban_player(server_id, uuid):
         target_id=server_id, execute_fn=do_unban,
         description=f'{user.get("username","Unknown")} unbanned a player on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
+
+@app.route('/api/servers/<server_id>/players/kick', methods=['POST'])
+@server_access_required
+def kick_player(server_id):
+    """Kick an online player.
+
+    Bedrock's only moderation command — it has no ban — and it works the same on
+    Java, so both editions share this route."""
+    user_id, user = get_current_user()
+    data = request.get_json() or {}
+    player_name = (data.get('name') or '').strip()
+    reason = _safe_console_text(data.get('reason', ''))
+
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
+
+    inst = _running_instance(server_id)
+    if not inst:
+        return api_error('The server must be running to kick a player', 400)
+
+    if cfg.get('category') == 'bedrock':
+        # Gamertags may contain spaces, so quote the target.
+        name = _safe_bedrock_name(player_name)
+        if not name:
+            return api_error('A valid gamertag is required', 400)
+        command = f'kick "{name}" {reason}'.strip()
+    else:
+        name = _safe_player_token(player_name)
+        if not name:
+            return api_error('A valid player name is required', 400)
+        command = f'kick {name} {reason}'.strip()
+
+    def do_kick():
+        inst.send_command(command)
+        return jsonify({'success': True, 'message': f'{name} has been kicked'}), 200
+
+    result, status = check_action_policy(
+        'playerManagement', user,
+        {'server_id': server_id, 'action': 'kick', 'player': name,
+         'reason': reason, 'server_name': server_name},
+        target_id=server_id, execute_fn=do_kick,
+        description=f'{user.get("username","Unknown")} kicked "{name}" on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
+
 
 def _whitelist_property(server_id):
     """Return (property_key, console_command, legacy_key) for the whitelist toggle.

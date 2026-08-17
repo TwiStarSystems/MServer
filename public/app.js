@@ -5507,31 +5507,48 @@ function isBedrockServer() {
   return currentServerCategory === 'bedrock';
 }
 
-// Bedrock keeps operators in permissions.json (by XUID), the allow list in
-// allowlist.json, player data in the world's LevelDB, and has no ban list at all —
-// so the Java-only sections are hidden rather than left wired to endpoints that
-// read/write files Bedrock never looks at. The Whitelist section stays visible
-// because its server.properties toggle (allow-list) does work on Bedrock.
+// Bedrock stores this data differently everywhere: operators in permissions.json
+// (keyed by XUID), the allow list in allowlist.json, player data inside the world's
+// LevelDB, and no ban list at all. Operators and the allow list are backed by
+// Bedrock-native endpoints and get Bedrock columns/fields here; player data and the
+// two ban lists have no Bedrock equivalent and are hidden.
 function applyPlayersTabForCategory() {
   const bedrock = isBedrockServer();
-  const show = bedrock ? 'none' : '';
+  const hideOnBedrock = bedrock ? 'none' : '';
 
   const notice = document.getElementById('bedrock-players-notice');
   if (notice) notice.style.display = bedrock ? '' : 'none';
 
-  ['ops-section', 'playerdata-section', 'banned-players-section', 'banned-ips-section'].forEach(id => {
+  ['playerdata-section', 'banned-players-section', 'banned-ips-section'].forEach(id => {
     const section = document.getElementById(id);
-    if (section) section.style.display = show;
+    if (section) section.style.display = hideOnBedrock;
   });
 
+  // Operators: XUID + Bedrock permission names instead of UUID + level 1-4
+  setDisplay('ops-levels-java', !bedrock);
+  setDisplay('ops-levels-bedrock', bedrock);
+  const opsThead = document.getElementById('ops-thead');
+  if (opsThead) {
+    opsThead.innerHTML = bedrock
+      ? '<tr><th>Player</th><th>XUID</th><th>Permission</th><th>Actions</th></tr>'
+      : '<tr><th>Player</th><th>UUID</th><th>Level</th><th>Bypass Limit</th><th>Actions</th></tr>';
+  }
+
+  // Allow list: name + XUID + "ignores player limit", no UUID
   const wlTitle = document.getElementById('whitelist-section-title');
   if (wlTitle) wlTitle.textContent = bedrock ? '📝 Allow List' : '📝 Whitelist';
-  const wlAddBtn = document.getElementById('add-whitelist-btn');
-  if (wlAddBtn) wlAddBtn.style.display = show;
-  const wlTable = document.getElementById('whitelist-table');
-  if (wlTable) wlTable.style.display = show;
-  const wlNote = document.getElementById('whitelist-bedrock-note');
-  if (wlNote) wlNote.style.display = bedrock ? '' : 'none';
+  const wlThead = document.getElementById('whitelist-thead');
+  if (wlThead) {
+    wlThead.innerHTML = bedrock
+      ? '<tr><th>Player</th><th>XUID</th><th>Ignores Player Limit</th><th>Actions</th></tr>'
+      : '<tr><th>Player</th><th>UUID</th><th>Actions</th></tr>';
+  }
+  setDisplay('whitelist-bedrock-note', bedrock);
+}
+
+function setDisplay(id, visible) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = visible ? '' : 'none';
 }
 
 async function loadAllPlayerData() {
@@ -5540,10 +5557,11 @@ async function loadAllPlayerData() {
   applyPlayersTabForCategory();
 
   if (isBedrockServer()) {
-    // Only the online list and the allow-list toggle are meaningful on Bedrock
+    // No player-data files and no ban lists on Bedrock — skip those endpoints
     await Promise.all([
       loadOnlinePlayers(),
-      loadWhitelistStatus()
+      loadOperators(),
+      loadWhitelist()
     ]);
     return;
   }
@@ -5560,19 +5578,41 @@ async function loadAllPlayerData() {
 
 async function loadOperators() {
   if (!currentServerId) return;
-  
+
+  const bedrock = isBedrockServer();
+  const cols = bedrock ? 4 : 5;
   const tbody = document.getElementById('ops-list');
-  showTableSkeleton('ops-list', 5, 3);
-  
+  showTableSkeleton('ops-list', cols, 3);
+
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/players/ops`);
     const ops = data.operators || [];
-    
+
     if (ops.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty-message">No operators configured</td></tr>';
+      tbody.innerHTML = `<tr><td colspan="${cols}" class="empty-message">${bedrock ? 'No permission entries — everyone gets the server default' : 'No operators configured'}</td></tr>`;
       return;
     }
-    
+
+    if (bedrock) {
+      // permissions.json is keyed by XUID; the gamertag is only known once the
+      // player has connected at least once with the panel attached.
+      tbody.innerHTML = ops.map(op => {
+        const label = op.name || '(unknown gamertag)';
+        return `
+        <tr>
+          <td><strong>${escapeHtml(label)}</strong></td>
+          <td class="uuid-cell">${escapeHtml(op.xuid)}</td>
+          <td><span class="level-badge level-${op.permission === 'operator' ? 4 : (op.permission === 'visitor' ? 1 : 2)}">${escapeHtml(op.permission)}</span></td>
+          <td class="actions-cell">
+            <button class="btn btn-small" onclick="editBedrockPermission('${escapeAttr(op.xuid)}', '${escapeAttr(label)}', '${escapeAttr(op.permission)}')">Edit</button>
+            <button class="btn btn-danger btn-small" onclick="removeOperator('${escapeAttr(op.xuid)}', '${escapeAttr(label)}')">Remove</button>
+          </td>
+        </tr>
+      `;
+      }).join('');
+      return;
+    }
+
     tbody.innerHTML = ops.map(op => `
       <tr>
         <td><strong>${escapeHtml(op.name)}</strong></td>
@@ -5588,7 +5628,7 @@ async function loadOperators() {
       </tr>
     `).join('');
   } catch (error) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-message error">Failed to load operators</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${cols}" class="empty-message error">Failed to load operators</td></tr>`;
   }
 }
 
@@ -5680,10 +5720,12 @@ function setPlayerDataPage(page) { _playerDataPage = page; renderPlayerDataPage(
 
 async function loadWhitelist() {
   if (!currentServerId) return;
-  
+
+  const bedrock = isBedrockServer();
+  const cols = bedrock ? 4 : 3;
   const tbody = document.getElementById('whitelist-list');
-  showTableSkeleton('whitelist-list', 3, 3);
-  
+  showTableSkeleton('whitelist-list', cols, 3);
+
   try {
     const [data, statusData] = await Promise.all([
       apiRequest(`/api/servers/${currentServerId}/players/whitelist`),
@@ -5693,12 +5735,31 @@ async function loadWhitelist() {
 
     // Update toggle button state
     updateWhitelistToggleBtn(statusData.enabled, statusData.available !== false);
-    
+
     if (whitelist.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Whitelist is empty</td></tr>';
+      tbody.innerHTML = `<tr><td colspan="${cols}" class="empty-message">${bedrock ? 'Allow list is empty' : 'Whitelist is empty'}</td></tr>`;
       return;
     }
-    
+
+    if (bedrock) {
+      // allowlist.json entries have no UUID — the XUID is the key once Bedrock
+      // has filled it in, and the gamertag identifies the entry until then.
+      tbody.innerHTML = whitelist.map(player => {
+        const id = player.xuid || player.name;
+        return `
+        <tr>
+          <td><strong>${escapeHtml(player.name)}</strong></td>
+          <td class="uuid-cell">${escapeHtml(player.xuid || '—')}</td>
+          <td>${player.ignoresPlayerLimit ? '✅' : '❌'}</td>
+          <td class="actions-cell">
+            <button class="btn btn-danger btn-small" onclick="removeFromWhitelist('${escapeAttr(encodeURIComponent(id))}', '${escapeAttr(player.name)}')">Remove</button>
+          </td>
+        </tr>
+      `;
+      }).join('');
+      return;
+    }
+
     tbody.innerHTML = whitelist.map(player => `
       <tr>
         <td><strong>${escapeHtml(player.name)}</strong></td>
@@ -5709,16 +5770,8 @@ async function loadWhitelist() {
       </tr>
     `).join('');
   } catch (error) {
-    tbody.innerHTML = '<tr><td colspan="3" class="empty-message error">Failed to load whitelist</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="${cols}" class="empty-message error">Failed to load ${bedrock ? 'allow list' : 'whitelist'}</td></tr>`;
   }
-}
-
-// Bedrock only has the allow-list toggle in this section, so fetch it on its own
-async function loadWhitelistStatus() {
-  if (!currentServerId) return;
-  const statusData = await apiRequest(`/api/servers/${currentServerId}/players/whitelist-status`)
-    .catch(() => ({ enabled: false, available: false }));
-  updateWhitelistToggleBtn(statusData.enabled, statusData.available !== false);
 }
 
 function whitelistLabel() {
@@ -5827,9 +5880,22 @@ async function loadBannedPlayers() {
 
 // Operator Functions
 function openAddOpModal() {
+  const bedrock = isBedrockServer();
+  // On Bedrock this sets any of visitor/member/operator, not just "add an OP"
+  document.getElementById('add-op-title').textContent = bedrock ? 'Set Player Permission' : 'Add Operator';
+  document.getElementById('add-op-submit').textContent = bedrock ? 'Save' : 'Add OP';
   document.getElementById('op-player-name').value = '';
+  document.getElementById('op-player-name-label').textContent = bedrock ? 'Gamertag' : 'Player Name';
+  document.getElementById('op-player-name').placeholder = bedrock ? 'Enter gamertag' : 'Enter player name';
+  document.getElementById('op-xuid').value = '';
+  document.getElementById('op-permission').value = 'operator';
   document.getElementById('op-level').value = '4';
   document.getElementById('op-bypass-limit').checked = false;
+  // Bedrock: XUID + permission name. Java: level 1-4 + bypass-limit flag.
+  setDisplay('op-xuid-group', bedrock);
+  setDisplay('op-permission-group', bedrock);
+  setDisplay('op-level-group', !bedrock);
+  setDisplay('op-bypass-group', !bedrock);
   document.getElementById('add-op-modal').classList.add('active');
 }
 
@@ -5839,22 +5905,30 @@ function closeAddOpModal() {
 
 async function addOperator() {
   const name = document.getElementById('op-player-name').value.trim();
-  const level = parseInt(document.getElementById('op-level').value);
-  const bypassLimit = document.getElementById('op-bypass-limit').checked;
-  
-  if (!name) {
-    showNotification('Please enter a player name', 'warning');
+  const bedrock = isBedrockServer();
+  const xuid = document.getElementById('op-xuid').value.trim();
+
+  if (!name && !(bedrock && xuid)) {
+    showNotification(bedrock ? 'Please enter a gamertag or XUID' : 'Please enter a player name', 'warning');
     return;
   }
-  
+
+  const payload = bedrock
+    ? { name, xuid, permission: document.getElementById('op-permission').value }
+    : {
+        name,
+        level: parseInt(document.getElementById('op-level').value),
+        bypassesPlayerLimit: document.getElementById('op-bypass-limit').checked
+      };
+
   try {
-    await apiRequest(`/api/servers/${currentServerId}/players/ops`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/ops`, {
       method: 'POST',
-      body: JSON.stringify({ name, level, bypassesPlayerLimit: bypassLimit })
+      body: JSON.stringify(payload)
     });
-    
+
     closeAddOpModal();
-    showNotification(`${name} added as operator`, 'success');
+    showNotification(result.message || `${name} added as operator`, 'success');
     loadOperators();
   } catch (error) {
     // Error shown by apiRequest
@@ -5866,6 +5940,21 @@ function editOperator(uuid, name, level, bypassLimit) {
   document.getElementById('edit-op-name').value = name;
   document.getElementById('edit-op-level').value = level;
   document.getElementById('edit-op-bypass').checked = bypassLimit;
+  setDisplay('edit-op-permission-group', false);
+  setDisplay('edit-op-level-group', true);
+  setDisplay('edit-op-bypass-group', true);
+  document.getElementById('edit-op-modal').classList.add('active');
+}
+
+// Bedrock's permissions.json has no level or bypass flag — just one of
+// visitor/member/operator, keyed by XUID.
+function editBedrockPermission(xuid, name, permission) {
+  currentEditingOpUuid = xuid;
+  document.getElementById('edit-op-name').value = name;
+  document.getElementById('edit-op-permission').value = permission || 'operator';
+  setDisplay('edit-op-permission-group', true);
+  setDisplay('edit-op-level-group', false);
+  setDisplay('edit-op-bypass-group', false);
   document.getElementById('edit-op-modal').classList.add('active');
 }
 
@@ -5876,33 +5965,41 @@ function closeEditOpModal() {
 
 async function saveOperator() {
   if (!currentEditingOpUuid) return;
-  
-  const level = parseInt(document.getElementById('edit-op-level').value);
-  const bypassLimit = document.getElementById('edit-op-bypass').checked;
-  
+
+  const payload = isBedrockServer()
+    ? { permission: document.getElementById('edit-op-permission').value }
+    : {
+        level: parseInt(document.getElementById('edit-op-level').value),
+        bypassesPlayerLimit: document.getElementById('edit-op-bypass').checked
+      };
+
   try {
-    await apiRequest(`/api/servers/${currentServerId}/players/ops/${currentEditingOpUuid}`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/ops/${currentEditingOpUuid}`, {
       method: 'PUT',
-      body: JSON.stringify({ level, bypassesPlayerLimit: bypassLimit })
+      body: JSON.stringify(payload)
     });
-    
+
     closeEditOpModal();
-    showNotification('Operator updated', 'success');
+    showNotification(result.message || 'Operator updated', 'success');
     loadOperators();
   } catch (error) {
     // Error shown by apiRequest
   }
 }
 
+// `uuid` is a Java player UUID, or the XUID of a Bedrock permissions.json entry.
 async function removeOperator(uuid, name) {
-  if (!await confirmAction(`Remove ${name} from operators?`, { title: 'Remove Operator', icon: '👑', okText: 'Remove' })) return;
-  
+  const message = isBedrockServer()
+    ? `Remove the permission entry for ${name}? They fall back to the server's default permission.`
+    : `Remove ${name} from operators?`;
+  if (!await confirmAction(message, { title: 'Remove Operator', icon: '👑', okText: 'Remove' })) return;
+
   try {
-    await apiRequest(`/api/servers/${currentServerId}/players/ops/${uuid}`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/ops/${uuid}`, {
       method: 'DELETE'
     });
-    
-    showNotification(`${name} removed from operators`, 'success');
+
+    showNotification(result.message || `${name} removed from operators`, 'success');
     loadOperators();
   } catch (error) {
     // Error shown by apiRequest
@@ -5925,7 +6022,14 @@ async function makePlayerOp(uuid) {
 
 // Whitelist Functions
 function openAddWhitelistModal() {
+  const bedrock = isBedrockServer();
   document.getElementById('whitelist-player-name').value = '';
+  document.getElementById('whitelist-ignores-limit').checked = false;
+  document.getElementById('add-whitelist-title').textContent = bedrock ? 'Add to Allow List' : 'Add to Whitelist';
+  document.getElementById('whitelist-player-name-label').textContent = bedrock ? 'Gamertag' : 'Player Name';
+  document.getElementById('whitelist-player-name').placeholder = bedrock ? 'Enter gamertag' : 'Enter player name';
+  // ignoresPlayerLimit is an allowlist.json field with no Java equivalent
+  setDisplay('whitelist-ignores-group', bedrock);
   document.getElementById('add-whitelist-modal').classList.add('active');
 }
 
@@ -5935,35 +6039,43 @@ function closeAddWhitelistModal() {
 
 async function addToWhitelist() {
   const name = document.getElementById('whitelist-player-name').value.trim();
-  
+  const bedrock = isBedrockServer();
+
   if (!name) {
-    showNotification('Please enter a player name', 'warning');
+    showNotification(bedrock ? 'Please enter a gamertag' : 'Please enter a player name', 'warning');
     return;
   }
-  
+
+  const payload = bedrock
+    ? { name, ignoresPlayerLimit: document.getElementById('whitelist-ignores-limit').checked }
+    : { name };
+
   try {
-    await apiRequest(`/api/servers/${currentServerId}/players/whitelist`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/whitelist`, {
       method: 'POST',
-      body: JSON.stringify({ name })
+      body: JSON.stringify(payload)
     });
-    
+
     closeAddWhitelistModal();
-    showNotification(`${name} added to whitelist`, 'success');
+    showNotification(result.message || `${name} added to the ${whitelistLabel().toLowerCase()}`, 'success');
     loadWhitelist();
   } catch (error) {
     // Error shown by apiRequest
   }
 }
 
+// `uuid` is a Java player UUID, or on Bedrock the URI-encoded XUID/gamertag
+// that identifies the allowlist.json entry.
 async function removeFromWhitelist(uuid, name) {
-  if (!await confirmAction(`Remove ${name} from whitelist?`, { title: 'Remove from Whitelist', icon: '📝', okText: 'Remove' })) return;
-  
+  const label = whitelistLabel().toLowerCase();
+  if (!await confirmAction(`Remove ${name} from the ${label}?`, { title: `Remove from ${whitelistLabel()}`, icon: '📝', okText: 'Remove' })) return;
+
   try {
-    await apiRequest(`/api/servers/${currentServerId}/players/whitelist/${uuid}`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/whitelist/${uuid}`, {
       method: 'DELETE'
     });
-    
-    showNotification(`${name} removed from whitelist`, 'success');
+
+    showNotification(result.message || `${name} removed from the ${label}`, 'success');
     loadWhitelist();
   } catch (error) {
     // Error shown by apiRequest
@@ -6044,21 +6156,37 @@ async function loadOnlinePlayers() {
       tbody.innerHTML = '<tr><td colspan="3" class="empty-message">No players online</td></tr>';
       return;
     }
-    // Bedrock has no ban list — the ban endpoint writes banned-players.json, which
-    // Bedrock ignores, so don't offer the button there.
-    const canBan = !isBedrockServer();
+    // Bedrock has no ban — kick is its only moderation command.
+    const bedrock = isBedrockServer();
     tbody.innerHTML = online.map(p => `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong></td>
         <td>${p.since ? new Date(p.since * 1000).toLocaleTimeString() : '—'}</td>
         <td class="actions-cell">
-          <button class="btn btn-small" onclick="openMessagePlayersModal('${escapeHtml(p.name)}')">Message</button>
-          ${canBan ? `<button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeHtml(p.name)}')">Ban</button>` : ''}
+          <button class="btn btn-small" onclick="openMessagePlayersModal('${escapeAttr(p.name)}')">Message</button>
+          ${bedrock
+            ? `<button class="btn btn-small btn-danger" onclick="kickPlayerOnline('${escapeAttr(p.name)}')">Kick</button>`
+            : `<button class="btn btn-small btn-danger" onclick="banPlayerOnline('${escapeAttr(p.name)}')">Ban</button>`}
         </td>
       </tr>
     `).join('');
   } catch (error) {
     if (tbody) tbody.innerHTML = '<tr><td colspan="3" class="empty-message">Server offline or no player data</td></tr>';
+  }
+}
+
+async function kickPlayerOnline(name) {
+  const reason = prompt(`Reason for kicking ${name} (optional):`);
+  if (reason === null) return; // cancelled
+  try {
+    const result = await apiRequest(`/api/servers/${currentServerId}/players/kick`, {
+      method: 'POST',
+      body: JSON.stringify({ name, reason: reason.trim() })
+    });
+    showNotification(result.message || `${name} has been kicked`, 'success');
+    loadOnlinePlayers();
+  } catch (error) {
+    // Error shown by apiRequest
   }
 }
 

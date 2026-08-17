@@ -30,6 +30,30 @@ function escapeHtml(text) {
 }
 
 /**
+ * Escape a value being embedded in a single-quoted JS string inside a
+ * double-quoted inline handler: onclick="doThing('${escapeAttr(name)}')".
+ *
+ * escapeHtml() is not enough here. It goes through textContent, which escapes
+ * & < > but leaves quotes and backslashes alone — fine for a text node, not for
+ * this, where a bare ' would close the JS string. Nor is HTML-escaping the quote
+ * to &#39; enough: the HTML parser decodes entities *before* the JS is parsed,
+ * so the quote would come back. The value therefore has to be escaped for JS
+ * first (so it survives entity decoding), then for the HTML attribute.
+ */
+function escapeAttr(text) {
+  const forJs = String(text === null || text === undefined ? '' : text)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+  return forJs
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
  * Global CSRF token (shared across all pages)
  */
 window.csrfToken = null;
