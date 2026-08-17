@@ -173,8 +173,8 @@ MServer is a modern, feature-rich web application for creating, running, and man
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/TwiStarSystems/MServer.git
-cd MServer
+git clone https://github.com/TwiStarSystems/MServerController.git
+cd MServerController
 ```
 
 2. Run the installation script as root:
@@ -225,8 +225,8 @@ sudo apt-get install -y python3 python3-pip python3-venv nginx openjdk-17-jre-he
 
 2. **Clone and setup**:
 ```bash
-git clone https://github.com/TwiStarSystems/MServer.git
-cd MServer
+git clone https://github.com/TwiStarSystems/MServerController.git
+cd MServerController
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -368,7 +368,7 @@ sudo journalctl -u mserver -f
 To update an existing installation:
 
 ```bash
-cd MServer
+cd MServerController
 git pull origin main
 sudo ./install.sh update
 ```
@@ -658,9 +658,11 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details
+MServer is open source under a permissive, MIT-style license: you may use, copy,
+modify, distribute, sublicense, and sell it, provided the copyright and permission
+notice are retained. See [LICENSE](LICENSE) for the full text.
 
 ## Support
 
 For issues, questions, or suggestions, please open an issue on GitHub:
-https://github.com/TwiStarSystems/MServer/issues
+https://github.com/TwiStarSystems/MServerController/issues

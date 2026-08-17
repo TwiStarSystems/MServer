@@ -1,151 +1,40 @@
-PROPRIETARY SOFTWARE LICENSE AGREEMENT
+OPEN-SOURCE LICENSE AGREEMENT — PERMISSIVE / FREE USE
 
-Copyright (C) 2026 TwiStarSystems - All Rights Reserved
-
-================================================================================
-LICENSE TYPE: L1 — Proprietary
-================================================================================
-
-This software and associated documentation files (the "Software"), including 
-all source code, object code, algorithms, architecture, design patterns, 
-documentation, data structures, databases, and any other materials contained 
-herein, are the exclusive property of TwiStarSystems and are protected under 
-international copyright law and international treaty provisions.
-
-ALL RIGHTS RESERVED. No part of this Software may be used, copied, modified, 
-merged, published, distributed, sublicensed, sold, transferred, displayed, 
-performed, reproduced, or transmitted in any form or by any means, electronic 
-or mechanical, without the express prior written permission of TwiStarSystems.
+Copyright (C) 2026 TwiStarSystems
 
 ================================================================================
-PROHIBITIONS
+LICENSE TYPE: L5 — Open-Source, Permissive (MIT-Style)
 ================================================================================
 
-Without the express written authorization of TwiStarSystems, you are 
-explicitly PROHIBITED from:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following condition:
 
-1. COPYING: Making any copies, reproductions, or duplicates of the Software,
-   in whole or in part, by any means whatsoever.
-
-2. MODIFICATION: Altering, adapting, translating, reverse engineering,
-   decompiling, disassembling, or creating derivative works based on the
-   Software or any portion thereof.
-
-3. DISTRIBUTION: Distributing, transferring, lending, leasing, renting,
-   sublicensing, or otherwise making the Software available to any third
-   party.
-
-4. COMMERCIAL USE: Using the Software for any commercial purpose, including
-   but not limited to selling, licensing, or providing services based on
-   the Software.
-
-5. MONETIZATION: Generating revenue or any form of compensation, directly
-   or indirectly, through the use, exploitation, or leveraging of the
-   Software.
-
-6. PUBLIC DISPLAY: Publicly displaying, performing, or broadcasting the
-   Software or any portion thereof.
-
-7. COMPETITIVE USE: Using the Software to develop, test, or distribute
-   competing products or services.
-
-8. REMOVAL OF NOTICES: Removing, altering, or obscuring any proprietary
-   notices, labels, or marks from the Software.
-
-================================================================================
-CONFIDENTIALITY
-================================================================================
-
-This Software contains confidential and proprietary information of 
-TwiStarSystems. The Software is provided solely to authorized individuals who 
-have been granted explicit permission by TwiStarSystems. 
-
-If you have obtained access to this Software without authorization:
-
-1. You are hereby notified that your access is UNAUTHORIZED and UNLAWFUL.
-2. You must IMMEDIATELY cease all access to and use of the Software.
-3. You must DELETE all copies of the Software in your possession or control.
-4. You must NOTIFY TwiStarSystems of the unauthorized access immediately.
-5. You may be subject to legal action for unauthorized access.
-
-================================================================================
-OWNERSHIP AND INTELLECTUAL PROPERTY
-================================================================================
-
-TwiStarSystems retains all right, title, and interest in and to the Software,
-including all copyrights, patents, trade secrets, trademarks, and other
-intellectual property rights. No license or right of any kind is granted
-except as may be expressly provided in a separate written agreement signed by
-an authorized representative of TwiStarSystems.
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
 
 ================================================================================
 NO WARRANTY
 ================================================================================
 
-THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. TWISTARSYSTEMS
-DOES NOT WARRANT THAT THE SOFTWARE WILL MEET YOUR REQUIREMENTS OR THAT THE
-OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE.
-
-================================================================================
-LIMITATION OF LIABILITY
-================================================================================
-
-IN NO EVENT SHALL TWISTARSYSTEMS, ITS OFFICERS, DIRECTORS, EMPLOYEES, OR
-AGENTS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
-OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
-================================================================================
-TERMINATION
-================================================================================
-
-Any unauthorized use of the Software shall result in automatic termination of
-any implied permission and may result in civil and/or criminal prosecution.
-TwiStarSystems reserves the right to pursue all legal remedies available for
-unauthorized use, including but not limited to injunctive relief and monetary
-damages.
-
-================================================================================
-GOVERNING LAW
-================================================================================
-
-This license shall be governed by and construed in accordance with the laws
-applicable to copyright and intellectual property protection, without regard
-to conflicts of law principles.
-
-================================================================================
-ENTIRE AGREEMENT
-================================================================================
-
-This license constitutes the entire agreement between you and TwiStarSystems
-concerning the Software and supersedes any prior agreements or understandings,
-whether written or oral.
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+TWISTARSYSTEMS OR THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ================================================================================
 CONTACT INFORMATION
 ================================================================================
-
-For inquiries regarding licensing, authorized use, or to report unauthorized
-access, please contact:
 
 TwiStarSystems
 Email: legal@twistarsystems.com
 Website: https://twistarsystems.com
 
 ================================================================================
-
-BY ACCESSING, VIEWING, OR USING THIS SOFTWARE, YOU ACKNOWLEDGE THAT YOU HAVE
-READ THIS LICENSE, UNDERSTAND IT, AND AGREE TO BE BOUND BY ITS TERMS.
-
-IF YOU DO NOT AGREE TO THESE TERMS, YOU MUST IMMEDIATELY DELETE ALL COPIES
-OF THE SOFTWARE AND CEASE ALL ACCESS TO IT.
-
-================================================================================
 END OF LICENSE
-================================================================================

@@ -7,7 +7,7 @@ set -e
 
 # Configuration
 INSTALL_DIR="/opt/mserver"
-REPO_URL="https://github.com/TwiStarSystems/MServer.git"
+REPO_URL="https://github.com/TwiStarSystems/MServerController.git"
 SERVICE_NAME="mserver"
 # Root-owned privileged host-control helper (see mserver-hostctl). Lives OUTSIDE
 # the www-data-writable app dir so the panel can only invoke it via sudo, never
