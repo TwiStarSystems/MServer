@@ -60,6 +60,21 @@ def get_db() -> sqlite3.Connection:
     return _local.conn
 
 
+def rollback_stray_transaction():
+    """Roll back the current thread's connection if it's sitting in an open
+    transaction. A write statement (e.g. an INSERT that hits a UNIQUE
+    constraint) implicitly opens a transaction before it runs; if the code
+    that issued it catches the error and returns without an explicit
+    commit()/rollback(), that transaction — and the write lock it holds —
+    stays open on this thread's connection indefinitely, blocking every other
+    writer in the app until the process restarts. Call this once per request
+    (see server.py's teardown_request) so a caught-and-swallowed write error
+    can never leak a stray lock past the request that caused it."""
+    conn = getattr(_local, 'conn', None)
+    if conn is not None and conn.in_transaction:
+        conn.rollback()
+
+
 # ── Schema DDL ────────────────────────────────────────────────────────────────
 _SCHEMA = """
 -- Schema version tracking

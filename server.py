@@ -54,7 +54,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from db import get_db, init_db
+from db import get_db, init_db, rollback_stray_transaction
 
 
 # ── Typed environment-variable helpers ────────────────────────────────────────
@@ -14101,6 +14101,20 @@ def run_tool(tool_name):
         return api_error(f'Tool execution timed out ({timeout_seconds}s limit)', 408)
     except Exception as e:
         return api_error(str(e), 500)
+
+
+# ==================== Database Connection Cleanup ====================
+
+@app.teardown_request
+def _cleanup_db_transaction(exc=None):
+    """Roll back a stray open transaction on this thread's DB connection at
+    the end of every request. Without this, a write that hits an expected,
+    internally-handled error (e.g. a UNIQUE constraint on a duplicate
+    username) leaves its implicit transaction open — and the write lock it
+    holds — for the lifetime of the thread, silently blocking every future
+    write across the whole app. Runs regardless of whether the request itself
+    raised, since the vulnerable case is exactly one where it didn't."""
+    rollback_stray_transaction()
 
 
 # ==================== Security Headers Middleware ====================
