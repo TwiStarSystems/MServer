@@ -6299,13 +6299,13 @@ def api_login():
     password = data.get('password', '')
     
     if not username or not password:
-        return jsonify({'error': 'Username and password required'}), 400
-    
+        return api_error('Username and password required', 400)
+
     user_id, result = user_manager.authenticate(username, password)
-    
+
     if user_id is None:
-        return jsonify({'error': result}), 401
-    
+        return api_error(result, 401)
+
     # Check if MFA is enabled for this user
     if result.get('mfaEnabled', False):
         # Regenerate session before storing any auth state (prevents session fixation)
@@ -6313,12 +6313,8 @@ def api_login():
         session['temp_user_id'] = user_id
         session['mfa_required'] = True
         session['mfa_timestamp'] = time.time()
-        
-        return jsonify({
-            'success': True,
-            'mfaRequired': True,
-            'message': 'MFA verification required'
-        })
+
+        return api_success(mfaRequired=True, message='MFA verification required')
     
     # Check MFA policies. The hidden anti-lockout admin is never subject to MFA
     # enforcement — it is the recovery path and must always be usable.
@@ -6336,12 +6332,9 @@ def api_login():
             session.clear()
             session['mfa_enroll_user_id'] = user_id
             session['mfa_enroll_timestamp'] = time.time()
-            return jsonify({
-                'success': True,
-                'mfaSetupRequired': True,
-                'message': 'MFA is required for your account. Set it up now to continue.'
-            })
-    
+            return api_success(mfaSetupRequired=True,
+                                message='MFA is required for your account. Set it up now to continue.')
+
     # Regenerate session before setting auth data (prevents session fixation)
     session.clear()
     session.permanent = True
@@ -6349,14 +6342,11 @@ def api_login():
     session['username'] = result['username']
     session['group_id'] = result.get('groupId')
 
-    return jsonify({
-        'success': True,
-        'user': {
-            'id': user_id,
-            'username': result['username'],
-            'groupId': result.get('groupId'),
-            'groupName': result.get('groupName'),
-        }
+    return api_success(user={
+        'id': user_id,
+        'username': result['username'],
+        'groupId': result.get('groupId'),
+        'groupName': result.get('groupName'),
     })
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -6364,7 +6354,7 @@ def api_login():
 def api_logout():
     """Log out user"""
     session.clear()
-    return jsonify({'success': True})
+    return api_success()
 
 @app.route('/api/auth/register', methods=['POST'])
 @csrf.exempt
@@ -6373,31 +6363,31 @@ def api_register():
     """Register new user"""
     # Check if registration is enabled
     if not settings_manager.get_app_settings().get('enableRegistration', True):
-        return jsonify({'error': 'Registration is currently disabled'}), 403
-    
+        return api_error('Registration is currently disabled', 403)
+
     data = request.get_json()
     username = data.get('username', '')
     password = data.get('password', '')
-    
+
     if not username or not password:
-        return jsonify({'error': 'Username and password required'}), 400
-    
+        return api_error('Username and password required', 400)
+
     user_id, message = user_manager.register(username, password)
-    
+
     if user_id is None:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({'success': True, 'message': message})
+        return api_error(message, 400)
+
+    return api_success(message=message)
 
 @app.route('/api/auth/me', methods=['GET'])
 def api_current_user():
     """Get current logged in user"""
     user_id, user = get_current_user()
-    
+
     if not user:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    return jsonify({
+        return api_error('Not authenticated', 401)
+
+    return api_success({
         'id': user_id,
         'username': user['username'],
         'name': user.get('name', ''),
@@ -6415,16 +6405,16 @@ def api_change_password():
     """Change current user's password"""
     user_id = session.get('user_id')
     data = request.get_json()
-    
+
     old_password = data.get('oldPassword', '')
     new_password = data.get('newPassword', '')
-    
+
     success, message = user_manager.change_password(user_id, old_password, new_password)
-    
+
     if not success:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({'success': True, 'message': message})
+        return api_error(message, 400)
+
+    return api_success(message=message)
 
 @app.route('/api/auth/profile/username', methods=['PUT'])
 @login_required
@@ -6432,21 +6422,21 @@ def api_update_username():
     """Update current user's username"""
     user_id = session.get('user_id')
     data = request.get_json()
-    
+
     new_username = data.get('username', '').strip()
-    
+
     if not new_username:
-        return jsonify({'error': 'Username is required'}), 400
-    
+        return api_error('Username is required', 400)
+
     success, message = user_manager.update_username(user_id, new_username)
-    
+
     if not success:
-        return jsonify({'error': message}), 400
-    
+        return api_error(message, 400)
+
     # Update session with new username
     session['username'] = new_username
-    
-    return jsonify({'success': True, 'message': message})
+
+    return api_success(message=message)
 
 @app.route('/api/auth/profile/name', methods=['PUT'])
 @login_required
@@ -6454,15 +6444,15 @@ def api_update_name():
     """Update current user's display name"""
     user_id = session.get('user_id')
     data = request.get_json()
-    
+
     name = data.get('name', '').strip()
-    
+
     success, message = user_manager.update_name(user_id, name)
-    
+
     if not success:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({'success': True, 'message': message})
+        return api_error(message, 400)
+
+    return api_success(message=message)
 
 @app.route('/api/auth/profile/email', methods=['PUT'])
 @login_required
@@ -6470,15 +6460,15 @@ def api_update_email():
     """Update current user's email address"""
     user_id = session.get('user_id')
     data = request.get_json()
-    
+
     email = data.get('email', '').strip()
-    
+
     success, message = user_manager.update_email(user_id, email)
-    
+
     if not success:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({'success': True, 'message': message})
+        return api_error(message, 400)
+
+    return api_success(message=message)
 
 # ==================== MFA API ====================
 
@@ -6488,42 +6478,37 @@ def api_mfa_setup():
     """Generate MFA secret and QR code for setup"""
     user_id = session.get('user_id')
     user = user_manager.get_user(user_id)
-    
+
     if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
+        return api_error('User not found', 404)
+
     # Generate secret
     secret, _ = user_manager.generate_mfa_secret(user_id)
-    
+
     # Generate QR code
     username = user['username']
     app_name = settings_manager.get_branding().get('siteTitle', 'MServer')
-    
+
     totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
         name=username,
         issuer_name=app_name
     )
-    
+
     # Generate QR code as base64 image
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
     qr.add_data(totp_uri)
     qr.make(fit=True)
-    
+
     img = qr.make_image(fill_color="black", back_color="white")
-    
+
     # Convert to base64
     img_buffer = io.BytesIO()
     img.save(img_buffer, format='PNG')
     img_buffer.seek(0)
     import base64
     img_base64 = 'data:image/png;base64,' + base64.b64encode(img_buffer.getvalue()).decode()
-    
-    return jsonify({
-        'success': True,
-        'secret': secret,
-        'qrCode': img_base64,
-        'manualEntry': secret
-    })
+
+    return api_success(secret=secret, qrCode=img_base64, manualEntry=secret)
 
 @app.route('/api/auth/mfa/verify', methods=['POST'])
 @login_required
@@ -6531,31 +6516,27 @@ def api_mfa_verify():
     """Verify TOTP code and enable MFA"""
     user_id = session.get('user_id')
     data = request.get_json()
-    
+
     secret = data.get('secret', '')
     code = data.get('code', '')
-    
+
     if not secret or not code:
-        return jsonify({'error': 'Secret and code are required'}), 400
-    
+        return api_error('Secret and code are required', 400)
+
     # Verify the code
     if not user_manager.verify_totp(secret, code):
-        return jsonify({'error': 'Invalid verification code'}), 400
-    
+        return api_error('Invalid verification code', 400)
+
     # Generate recovery code
     recovery_code = user_manager.generate_recovery_code()
-    
+
     # Enable MFA
     success, message = user_manager.enable_mfa(user_id, secret, recovery_code)
-    
+
     if not success:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({
-        'success': True,
-        'message': 'MFA enabled successfully',
-        'recoveryCode': recovery_code
-    })
+        return api_error(message, 400)
+
+    return api_success(message='MFA enabled successfully', recoveryCode=recovery_code)
 
 @app.route('/api/auth/mfa/disable', methods=['POST'])
 @login_required
@@ -6563,23 +6544,23 @@ def api_mfa_disable():
     """Disable MFA for current user"""
     user_id = session.get('user_id')
     data = request.get_json()
-    
+
     password = data.get('password', '')
-    
+
     if not password:
-        return jsonify({'error': 'Password required to disable MFA'}), 400
-    
+        return api_error('Password required to disable MFA', 400)
+
     # Verify password
     user = user_manager.get_user(user_id)
     if not check_password_hash(user['password'], password):
-        return jsonify({'error': 'Invalid password'}), 401
-    
+        return api_error('Invalid password', 401)
+
     success, message = user_manager.disable_mfa(user_id)
-    
+
     if not success:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({'success': True, 'message': message})
+        return api_error(message, 400)
+
+    return api_success(message=message)
 
 @app.route('/api/auth/mfa/verify-login', methods=['POST'])
 @csrf.exempt
@@ -6588,10 +6569,10 @@ def api_mfa_verify_login():
     """Verify MFA code during login"""
     temp_user_id = session.get('temp_user_id')
     mfa_timestamp = session.get('mfa_timestamp')
-    
+
     if not temp_user_id:
-        return jsonify({'error': 'No pending MFA verification'}), 400
-    
+        return api_error('No pending MFA verification', 400)
+
     # Check for MFA timeout (default 5 minutes; MFA_TIMEOUT_SECONDS in .env)
     if mfa_timestamp:
         mfa_age = time.time() - mfa_timestamp
@@ -6599,21 +6580,21 @@ def api_mfa_verify_login():
             session.pop('temp_user_id', None)
             session.pop('mfa_required', None)
             session.pop('mfa_timestamp', None)
-            return jsonify({'error': 'MFA verification timeout. Please login again.'}), 400
-    
+            return api_error('MFA verification timeout. Please login again.', 400)
+
     data = request.get_json()
     code = data.get('code', '')
     use_recovery = data.get('useRecovery', False)
-    
+
     if not code:
-        return jsonify({'error': 'Code is required'}), 400
-    
+        return api_error('Code is required', 400)
+
     user = user_manager.get_user(temp_user_id)
     if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
+        return api_error('User not found', 404)
+
     verified = False
-    
+
     if use_recovery:
         # Verify recovery code
         verified = user_manager.verify_recovery_code(temp_user_id, code)
@@ -6621,17 +6602,17 @@ def api_mfa_verify_login():
             # Recovery code disables MFA
             message = 'MFA has been disabled using recovery code'
         else:
-            return jsonify({'error': 'Invalid recovery code'}), 401
+            return api_error('Invalid recovery code', 401)
     else:
         # Verify TOTP code
         if not user.get('mfaSecret'):
-            return jsonify({'error': 'MFA not enabled for this user'}), 400
-        
+            return api_error('MFA not enabled for this user', 400)
+
         verified = user_manager.verify_totp(user.get('mfaSecret'), code)
         if not verified:
-            return jsonify({'error': 'Invalid verification code'}), 401
+            return api_error('Invalid verification code', 401)
         message = 'Login successful'
-    
+
     if verified:
         # Complete login - clear temp session and regenerate to prevent session fixation
         session.clear()
@@ -6640,18 +6621,14 @@ def api_mfa_verify_login():
         session['username'] = user['username']
         session['group_id'] = user.get('groupId')
 
-        return jsonify({
-            'success': True,
-            'message': message,
-            'user': {
-                'id': temp_user_id,
-                'username': user['username'],
-                'groupId': user.get('groupId'),
-                'groupName': user.get('groupName'),
-            }
+        return api_success(message=message, user={
+            'id': temp_user_id,
+            'username': user['username'],
+            'groupId': user.get('groupId'),
+            'groupName': user.get('groupName'),
         })
-    
-    return jsonify({'error': 'Verification failed'}), 401
+
+    return api_error('Verification failed', 401)
 
 
 # Forced MFA enrollment at login. When a policy (requireMfaForAll/Admins) mandates
@@ -6666,14 +6643,14 @@ def _get_mfa_enroll_user():
     user_id = session.get('mfa_enroll_user_id')
     ts = session.get('mfa_enroll_timestamp')
     if not user_id:
-        return None, (jsonify({'error': 'No pending MFA enrollment'}), 400)
+        return None, api_error('No pending MFA enrollment', 400)
     if ts and time.time() - ts > MFA_ENROLL_TIMEOUT:
         session.pop('mfa_enroll_user_id', None)
         session.pop('mfa_enroll_timestamp', None)
-        return None, (jsonify({'error': 'Enrollment timed out. Please log in again.'}), 400)
+        return None, api_error('Enrollment timed out. Please log in again.', 400)
     user = user_manager.get_user(user_id)
     if not user:
-        return None, (jsonify({'error': 'User not found'}), 404)
+        return None, api_error('User not found', 404)
     return (user_id, user), None
 
 @app.route('/api/auth/mfa/enroll/setup', methods=['POST'])
@@ -6701,12 +6678,7 @@ def api_mfa_enroll_setup():
     import base64
     img_base64 = 'data:image/png;base64,' + base64.b64encode(img_buffer.getvalue()).decode()
 
-    return jsonify({
-        'success': True,
-        'secret': secret,
-        'qrCode': img_base64,
-        'manualEntry': secret
-    })
+    return api_success(secret=secret, qrCode=img_base64, manualEntry=secret)
 
 @app.route('/api/auth/mfa/enroll/verify', methods=['POST'])
 @csrf.exempt
@@ -6722,14 +6694,14 @@ def api_mfa_enroll_verify():
     secret = data.get('secret', '')
     code = data.get('code', '')
     if not secret or not code:
-        return jsonify({'error': 'Secret and code are required'}), 400
+        return api_error('Secret and code are required', 400)
     if not user_manager.verify_totp(secret, code):
-        return jsonify({'error': 'Invalid verification code'}), 400
+        return api_error('Invalid verification code', 400)
 
     recovery_code = user_manager.generate_recovery_code()
     success, message = user_manager.enable_mfa(user_id, secret, recovery_code)
     if not success:
-        return jsonify({'error': message}), 400
+        return api_error(message, 400)
 
     # Promote the limited enrollment session into a full authenticated session.
     session.clear()
@@ -6738,11 +6710,7 @@ def api_mfa_enroll_verify():
     session['username'] = user['username']
     session['group_id'] = user.get('groupId')
 
-    return jsonify({
-        'success': True,
-        'message': 'MFA enabled successfully',
-        'recoveryCode': recovery_code
-    })
+    return api_success(message='MFA enabled successfully', recoveryCode=recovery_code)
 
 
 # ==================== Admin API ====================
@@ -6754,7 +6722,7 @@ def api_get_users():
     when the requester IS that account."""
     _uid, _user = get_current_user()
     include_hidden = bool(_user and _user.get('isAntiLockout'))
-    return jsonify({'users': user_manager.get_all_users(include_anti_lockout=include_hidden)})
+    return api_success(users=user_manager.get_all_users(include_anti_lockout=include_hidden))
 
 @app.route('/api/admin/users', methods=['POST'])
 @permission_required('panel.users.manage')
@@ -6767,25 +6735,25 @@ def api_create_user():
     email = data.get('email', '').strip()
 
     if not username or not password:
-        return jsonify({'error': 'Username and password required'}), 400
+        return api_error('Username and password required', 400)
 
     if not group_manager.get_group(group_id):
-        return jsonify({'error': 'Invalid group'}), 400
+        return api_error('Invalid group', 400)
 
     user_id, message = user_manager.create_user(username, password, group_id, email)
-    
+
     if not user_id:
-        return jsonify({'error': message}), 400
-    
-    return jsonify({'success': True, 'userId': user_id, 'message': message})
+        return api_error(message, 400)
+
+    return api_success(userId=user_id, message=message)
 
 @app.route('/api/admin/users/<user_id>/approve', methods=['POST'])
 @permission_required('panel.users.manage')
 def api_approve_user(user_id):
     """Approve a pending user"""
     if user_manager.approve_user(user_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'User not found'}), 404
+        return api_success()
+    return api_error('User not found', 404)
 
 def _actor_is_admin():
     """True if the current session user belongs to an admin (wildcard) group."""
@@ -6800,21 +6768,21 @@ def api_update_user_group(user_id):
     group_id = data.get('groupId')
 
     if not group_id:
-        return jsonify({'error': 'Group ID required'}), 400
+        return api_error('Group ID required', 400)
 
     if user_id == session.get('user_id'):
-        return jsonify({'error': 'Cannot change your own group'}), 400
+        return api_error('Cannot change your own group', 400)
 
     # Only an admin may grant an admin (wildcard) group, so a delegated
     # user-manager can't mint new admins through another account.
     if group_manager.is_admin_group(group_id) and not _actor_is_admin():
-        return jsonify({'error': 'Only an administrator can assign an admin group'}), 403
+        return api_error('Only an administrator can assign an admin group', 403)
 
     if user_manager.update_user_group(user_id, group_id):
         # Drop the target's live socket from any room the new group no longer covers.
         _resync_user_rooms(user_id)
-        return jsonify({'success': True})
-    return jsonify({'error': 'Invalid group or user not found'}), 400
+        return api_success()
+    return api_error('Invalid group or user not found', 400)
 
 @app.route('/api/admin/users/<user_id>/password', methods=['POST'])
 @permission_required('panel.users.manage')
@@ -6824,17 +6792,17 @@ def api_reset_user_password(user_id):
     new_password = data.get('password', '')
 
     if len(new_password) < 12:
-        return jsonify({'error': 'Password must be at least 12 characters'}), 400
+        return api_error('Password must be at least 12 characters', 400)
     if not any(c.isupper() for c in new_password):
-        return jsonify({'error': 'Password must contain at least one uppercase letter'}), 400
+        return api_error('Password must contain at least one uppercase letter', 400)
     if not any(c.islower() for c in new_password):
-        return jsonify({'error': 'Password must contain at least one lowercase letter'}), 400
+        return api_error('Password must contain at least one lowercase letter', 400)
     if not any(c.isdigit() for c in new_password):
-        return jsonify({'error': 'Password must contain at least one number'}), 400
+        return api_error('Password must contain at least one number', 400)
 
     if user_manager.reset_password(user_id, new_password):
-        return jsonify({'success': True})
-    return jsonify({'error': 'User not found'}), 404
+        return api_success()
+    return api_error('User not found', 404)
 
 @app.route('/api/admin/users/<user_id>/mfa', methods=['DELETE'])
 @permission_required('panel.users.manage')
@@ -6842,12 +6810,12 @@ def api_clear_user_mfa(user_id):
     """Clear user MFA (admin only)"""
     # Prevent clearing own MFA
     if user_id == session.get('user_id'):
-        return jsonify({'error': 'Cannot clear your own MFA. Use the profile settings instead.'}), 400
-    
+        return api_error('Cannot clear your own MFA. Use the profile settings instead.', 400)
+
     success, message = user_manager.disable_mfa(user_id)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 404
+        return api_success(message=message)
+    return api_error(message, 404)
 
 @app.route('/api/admin/users/<user_id>/enable', methods=['POST'])
 @permission_required('panel.users.manage')
@@ -6864,8 +6832,8 @@ def api_get_user(user_id):
     """Get a specific user's details (admin only)"""
     user = user_manager.get_user_by_id(user_id)
     if user:
-        return jsonify({'user': user})
-    return jsonify({'error': 'User not found'}), 404
+        return api_success(user=user)
+    return api_error('User not found', 404)
 
 @app.route('/api/admin/users/<user_id>/username', methods=['PUT'])
 @permission_required('panel.users.manage')
@@ -6873,14 +6841,14 @@ def api_admin_update_username(user_id):
     """Update a user's username (admin only)"""
     data = request.get_json()
     new_username = data.get('username', '').strip()
-    
+
     if not new_username:
-        return jsonify({'error': 'Username required'}), 400
-    
+        return api_error('Username required', 400)
+
     success, message = user_manager.update_username(user_id, new_username)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success(message=message)
+    return api_error(message, 400)
 
 @app.route('/api/admin/users/<user_id>/name', methods=['PUT'])
 @permission_required('panel.users.manage')
@@ -6888,11 +6856,11 @@ def api_admin_update_name(user_id):
     """Update a user's display name (admin only)"""
     data = request.get_json()
     name = data.get('name', '').strip()
-    
+
     success, message = user_manager.update_name(user_id, name)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success(message=message)
+    return api_error(message, 400)
 
 @app.route('/api/admin/users/<user_id>/email', methods=['PUT'])
 @permission_required('panel.users.manage')
@@ -6900,11 +6868,11 @@ def api_admin_update_email(user_id):
     """Update a user's email address (admin only)"""
     data = request.get_json()
     email = data.get('email', '').strip()
-    
+
     success, message = user_manager.update_email(user_id, email)
     if success:
-        return jsonify({'success': True, 'message': message})
-    return jsonify({'error': message}), 400
+        return api_success(message=message)
+    return api_error(message, 400)
 
 @app.route('/api/admin/users/<user_id>', methods=['DELETE'])
 @permission_required('panel.users.manage')
@@ -6912,13 +6880,13 @@ def api_delete_user(user_id):
     """Delete a user"""
     # Prevent deleting self
     if user_id == session.get('user_id'):
-        return jsonify({'error': 'Cannot delete your own account'}), 400
-    
+        return api_error('Cannot delete your own account', 400)
+
     if user_manager.delete_user(user_id):
         # Drop any live socket the deleted user still holds open from every room.
         _resync_user_rooms(user_id)
-        return jsonify({'success': True})
-    return jsonify({'error': 'User not found'}), 404
+        return api_success()
+    return api_error('User not found', 404)
 
 
 # ==================== Admin Server Approval API ====================
@@ -6934,23 +6902,23 @@ def api_get_pending_servers():
         if owner_id:
             user = user_manager.get_user_by_id(owner_id)
             server['owner'] = user.get('username', 'Unknown') if user else 'Unknown'
-    return jsonify({'servers': pending})
+    return api_success(servers=pending)
 
 @app.route('/api/admin/servers/<server_id>/approve', methods=['POST'])
 @permission_required('panel.approvals.manage')
 def api_approve_server(server_id):
     """Approve a pending server"""
     if server_manager.approve_server(server_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Server not found'}), 404
+        return api_success()
+    return api_error('Server not found', 404)
 
 @app.route('/api/admin/servers/<server_id>/reject', methods=['DELETE'])
 @permission_required('panel.approvals.manage')
 def api_reject_server(server_id):
     """Reject (delete) a pending server"""
     if server_manager.reject_server(server_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Server not found'}), 404
+        return api_success()
+    return api_error('Server not found', 404)
 
 
 # ==================== Group Management API ====================
@@ -6962,13 +6930,13 @@ def api_get_groups():
     groups = group_manager.get_all_groups()
     for g in groups:
         g['userCount'] = group_manager.get_user_count(g['id'])
-    return jsonify({'groups': groups})
+    return api_success(groups=groups)
 
 @app.route('/api/admin/groups/permissions', methods=['GET'])
 @permission_required('panel.groups.view')
 def api_get_permissions_catalog():
     """Return the full permission catalog for UI rendering."""
-    return jsonify({
+    return api_success({
         'permissions': group_manager.ALL_PERMISSIONS,
         'categories': group_manager.PERMISSION_CATEGORIES,
         'labels': group_manager.PERMISSION_LABELS,
@@ -6981,19 +6949,19 @@ def api_create_group():
     data = request.get_json()
     name = (data.get('name') or '').strip()
     if not name:
-        return jsonify({'error': 'Group name is required'}), 400
+        return api_error('Group name is required', 400)
     permissions = data.get('permissions', [])
     is_default = bool(data.get('isDefault', False))
     # Only an admin may author an admin (wildcard) group.
     if '*' in (permissions or []) and not _actor_is_admin():
-        return jsonify({'error': 'Only an administrator can create an admin group'}), 403
+        return api_error('Only an administrator can create an admin group', 403)
     try:
         group_id = group_manager.create_group(name, permissions, is_default)
     except Exception as e:
         if 'UNIQUE' in str(e).upper():
-            return jsonify({'error': 'A group with that name already exists'}), 400
+            return api_error('A group with that name already exists', 400)
         raise
-    return jsonify({'success': True, 'groupId': group_id})
+    return api_success(groupId=group_id)
 
 @app.route('/api/admin/groups/<group_id>', methods=['GET'])
 @permission_required('panel.groups.view')
@@ -7001,10 +6969,10 @@ def api_get_group(group_id):
     """Get a single group's details."""
     group = group_manager.get_group(group_id)
     if not group:
-        return jsonify({'error': 'Group not found'}), 404
+        return api_error('Group not found', 404)
     group = dict(group)
     group['userCount'] = group_manager.get_user_count(group_id)
-    return jsonify({'group': group})
+    return api_success(group=group)
 
 @app.route('/api/admin/groups/<group_id>', methods=['PUT'])
 @permission_required('panel.groups.manage')
@@ -7014,7 +6982,7 @@ def api_update_group(group_id):
     permissions = data.get('permissions')
     # Only an admin may grant a group admin (wildcard) permissions.
     if permissions is not None and '*' in permissions and not _actor_is_admin():
-        return jsonify({'error': 'Only an administrator can grant admin permissions'}), 403
+        return api_error('Only an administrator can grant admin permissions', 403)
     ok, msg = group_manager.update_group(
         group_id,
         name=data.get('name'),
@@ -7023,11 +6991,11 @@ def api_update_group(group_id):
         priority=data.get('priority'),
     )
     if not ok:
-        return jsonify({'error': msg}), 400
+        return api_error(msg, 400)
     if permissions is not None:
         # Permission changes can affect every connected member of this group at once.
         _resync_all_connected_rooms()
-    return jsonify({'success': True, 'message': msg})
+    return api_success(message=msg)
 
 @app.route('/api/admin/groups/<group_id>', methods=['DELETE'])
 @permission_required('panel.groups.manage')
@@ -7035,18 +7003,18 @@ def api_delete_group(group_id):
     """Delete a custom permission group."""
     ok, msg = group_manager.delete_group(group_id)
     if not ok:
-        return jsonify({'error': msg}), 400
+        return api_error(msg, 400)
     # Deleting a group reassigns its members elsewhere — resync everyone connected.
     _resync_all_connected_rooms()
-    return jsonify({'success': True, 'message': msg})
+    return api_success(message=msg)
 
 @app.route('/api/admin/groups/<group_id>/default', methods=['POST'])
 @permission_required('panel.groups.manage')
 def api_set_default_group(group_id):
     """Set a group as the default for new registrations."""
     if group_manager.set_default_group(group_id):
-        return jsonify({'success': True})
-    return jsonify({'error': 'Group not found'}), 404
+        return api_success()
+    return api_error('Group not found', 404)
 
 
 # ==================== Server Sharing API ====================
@@ -7139,7 +7107,7 @@ def api_get_pending_actions():
         user = user_manager.get_user_by_id(action.get('userId'))
         action['username'] = user.get('username', 'Unknown') if user else 'Unknown'
         action['actionLabel'] = POLICY_ACTION_LABELS.get(action['actionType'], action['actionType'])
-    return jsonify({'actions': pending})
+    return api_success(actions=pending)
 
 @app.route('/api/admin/pending-actions/<action_id>/approve', methods=['POST'])
 @permission_required('panel.approvals.manage')
@@ -7150,10 +7118,10 @@ def api_approve_pending_action(action_id):
 
     action = pending_action_manager.approve(action_id, admin_id, note)
     if not action:
-        return jsonify({'error': 'Pending action not found'}), 404
+        return api_error('Pending action not found', 404)
 
     result = _execute_approved_action(action)
-    return jsonify({'success': True, 'executionResult': result})
+    return api_success(executionResult=result)
 
 @app.route('/api/admin/pending-actions/<action_id>/reject', methods=['POST'])
 @permission_required('panel.approvals.manage')
@@ -7164,8 +7132,8 @@ def api_reject_pending_action(action_id):
 
     action = pending_action_manager.reject(action_id, admin_id, note)
     if not action:
-        return jsonify({'error': 'Pending action not found'}), 404
-    return jsonify({'success': True})
+        return api_error('Pending action not found', 404)
+    return api_success()
 
 
 def _execute_approved_action(action):
@@ -11984,8 +11952,8 @@ def get_notification_prefs_api():
     user_id = session['user_id']
     prefs = user_manager.get_notification_prefs(user_id)
     if prefs is None:
-        return jsonify({'error': 'User not found'}), 404
-    return jsonify(prefs)
+        return api_error('User not found', 404)
+    return api_success(prefs)
 
 @app.route('/api/auth/profile/notifications', methods=['PUT'])
 @login_required
@@ -11995,8 +11963,8 @@ def update_notification_prefs_api():
     user_id = session['user_id']
     success = user_manager.update_notification_prefs(user_id, data)
     if success:
-        return jsonify({'success': True})
-    return jsonify({'error': 'User not found'}), 404
+        return api_success()
+    return api_error('User not found', 404)
 
 
 @app.route('/api/settings/external-backup', methods=['GET'])
