@@ -6225,7 +6225,7 @@ def public_page():
 @csrf.exempt
 def api_setup_status():
     """Whether the panel still needs its first admin account created."""
-    return jsonify({'needsSetup': user_manager.needs_setup()})
+    return api_success(needsSetup=user_manager.needs_setup())
 
 @app.route('/api/setup/admin', methods=['POST'])
 @csrf.exempt
@@ -6235,18 +6235,18 @@ def api_setup_create_admin():
     needs_setup() so it is inert once any real admin exists (and during a lockout,
     where the hidden admin is the recovery path instead)."""
     if not user_manager.needs_setup():
-        return jsonify({'error': 'Setup has already been completed'}), 403
+        return api_error('Setup has already been completed', 403)
     data = request.get_json(silent=True) or {}
     username = data.get('username', '')
     password = data.get('password', '')
     name = data.get('name', '')
     email = data.get('email', '')
     if not username or not password:
-        return jsonify({'error': 'Username and password required'}), 400
+        return api_error('Username and password required', 400)
     user_id, message = user_manager.create_first_admin(username, password, name, email)
     if not user_id:
-        return jsonify({'error': message}), 400
-    return jsonify({'success': True, 'message': message})
+        return api_error(message, 400)
+    return api_success(message=message)
 
 @app.route('/settings.html')
 @login_required
@@ -7057,7 +7057,7 @@ def api_get_notifications():
     user_id, _ = get_current_user()
     include_dismissed = request.args.get('includeDismissed', 'false').lower() == 'true'
     limit = min(int(request.args.get('limit', 50)), 200)
-    return jsonify({
+    return api_success({
         'notifications': notification_manager.get_for_user(user_id, include_dismissed, limit),
         'unreadCount': notification_manager.unread_count(user_id)
     })
@@ -7066,35 +7066,35 @@ def api_get_notifications():
 @login_required
 def api_notification_unread_count():
     user_id, _ = get_current_user()
-    return jsonify({'unreadCount': notification_manager.unread_count(user_id)})
+    return api_success(unreadCount=notification_manager.unread_count(user_id))
 
 @app.route('/api/notifications/<notification_id>/read', methods=['POST'])
 @login_required
 def api_notification_read(notification_id):
     user_id, _ = get_current_user()
     notification_manager.mark_read(notification_id, user_id)
-    return jsonify({'success': True})
+    return api_success()
 
 @app.route('/api/notifications/<notification_id>/dismiss', methods=['POST'])
 @login_required
 def api_notification_dismiss(notification_id):
     user_id, _ = get_current_user()
     notification_manager.dismiss(notification_id, user_id)
-    return jsonify({'success': True})
+    return api_success()
 
 @app.route('/api/notifications/read-all', methods=['POST'])
 @login_required
 def api_notifications_read_all():
     user_id, _ = get_current_user()
     notification_manager.mark_all_read(user_id)
-    return jsonify({'success': True})
+    return api_success()
 
 @app.route('/api/notifications/dismiss-all', methods=['POST'])
 @login_required
 def api_notifications_dismiss_all():
     user_id, _ = get_current_user()
     notification_manager.dismiss_all(user_id)
-    return jsonify({'success': True})
+    return api_success()
 
 
 # ==================== Pending Action Approval API ====================
@@ -7279,7 +7279,7 @@ def api_public_servers():
             'serverType': s.get('serverType'),
             'version': s.get('version'),
         })
-    return jsonify({'servers': public_servers})
+    return api_success(servers=public_servers)
 
 
 # ==================== JAR/Version API ====================
@@ -7288,34 +7288,34 @@ def api_public_servers():
 @login_required
 def get_server_types():
     """Get list of available server types"""
-    return jsonify({'types': jar_manager.get_server_types()})
+    return api_success(types=jar_manager.get_server_types())
 
 @app.route('/api/server-types/<server_type>/versions', methods=['GET'])
 @login_required
 def get_server_versions(server_type):
     """Get available versions for a server type"""
     versions = jar_manager.get_versions(server_type)
-    return jsonify({'versions': versions})
+    return api_success(versions=versions)
 
 @app.route('/api/server-engines', methods=['GET'])
 @login_required
 def get_server_engines():
     """Get list of available server engines, optionally filtered by category"""
     category = request.args.get('category')
-    return jsonify({'engines': jar_manager.get_server_engines(category)})
+    return api_success(engines=jar_manager.get_server_engines(category))
 
 @app.route('/api/server-engines/<engine>/versions', methods=['GET'])
 @login_required
 def get_engine_versions(engine):
     """Get available versions for a server engine"""
     versions = jar_manager.get_versions(engine)
-    return jsonify({'versions': versions})
+    return api_success(versions=versions)
 
 @app.route('/api/default-server-path', methods=['GET'])
 @login_required
 def get_default_server_path():
     """Get the default server installation path"""
-    return jsonify({'path': str(SERVERS_DIR)})
+    return api_success(path=str(SERVERS_DIR))
 
 
 # ==================== Server Management API ====================
@@ -11504,14 +11504,14 @@ def get_all_backup_schedules():
     all_schedules = backup_scheduler.get_all_schedules()
 
     if user_manager.user_has_permission(user, 'servers.access.all'):
-        return jsonify({'schedules': all_schedules})
+        return api_success(schedules=all_schedules)
 
     user_schedules = {}
     for server_id, schedule in all_schedules.items():
         if can_access_server(server_id):
             user_schedules[server_id] = schedule
-    
-    return jsonify({'schedules': user_schedules})
+
+    return api_success(schedules=user_schedules)
 
 
 @app.route('/api/servers/<server_id>/backups/delete-expired', methods=['POST'])
@@ -11530,11 +11530,11 @@ def delete_all_expired_backups():
     """Delete expired backups across all servers (admin only)"""
     max_backups = settings_manager.get_app_settings().get('globalMaxBackups', 0)
     if max_backups <= 0:
-        return jsonify({'error': 'No backup retention limit is configured. Set "Hold X Backups" in Game Server Settings first.'}), 400
+        return api_error('No backup retention limit is configured. Set "Hold X Backups" in Game Server Settings first.', 400)
     total_deleted = 0
     for server_id in list(server_manager.get_all_server_ids()):
         total_deleted += backup_scheduler._cleanup_old_backups(server_id, max_backups)
-    return jsonify({'success': True, 'deleted': total_deleted})
+    return api_success(deleted=total_deleted)
 
 @app.route('/api/servers/<server_id>/backups/history', methods=['GET'])
 @server_access_required
@@ -12218,7 +12218,7 @@ def api_get_current_version():
         except:
             pass
 
-        return jsonify({
+        return api_success({
             'version': version,
             'version_source': source,
             'commit_date': commit_date,
@@ -12226,7 +12226,7 @@ def api_get_current_version():
         })
     except Exception as e:
         print(f"[API] Error getting version: {e}")
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 
 # ==================== Host / OS Update API ====================
@@ -12272,14 +12272,14 @@ def api_system_os_status():
             capture_output=True, text=True, timeout=30
         )
     except FileNotFoundError:
-        return jsonify({'error': 'host-control helper not installed', 'detail': HOSTCTL_PATH}), 503
+        return api_error('host-control helper not installed', 503, detail=HOSTCTL_PATH)
     except subprocess.TimeoutExpired:
-        return jsonify({'error': 'host status timed out'}), 504
+        return api_error('host status timed out', 504)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
     if result.returncode != 0:
-        return jsonify({'error': 'host status failed', 'detail': (result.stderr or '').strip()}), 500
+        return api_error('host status failed', 500, detail=(result.stderr or '').strip())
 
     data = {}
     for line in result.stdout.splitlines():
@@ -12290,7 +12290,7 @@ def api_system_os_status():
         pending = int(data.get('pending', '0'))
     except ValueError:
         pending = 0
-    return jsonify({
+    return api_success({
         'version': data.get('version', 'unknown'),
         'pending': pending,
         'reboot_required': data.get('reboot_required') == '1',
@@ -12308,26 +12308,28 @@ def api_system_os_update():
     mode = data.get('mode', 'check')
     password = data.get('password', '')
     if mode not in ('check', 'apply'):
-        return jsonify({'error': "mode must be 'check' or 'apply'"}), 400
+        return api_error("mode must be 'check' or 'apply'", 400)
     if not password:
-        return jsonify({'error': 'Root password is required'}), 400
+        return api_error('Root password is required', 400)
 
     subcmd = 'os-check' if mode == 'check' else 'os-update'
     timeout = 180 if mode == 'check' else 1800  # apt upgrade can take a while
     try:
         rc, output = _run_hostctl_sudo(subcmd, password, timeout)
     except subprocess.TimeoutExpired:
-        return jsonify({'ok': False, 'error': 'operation timed out'}), 504
+        return api_error('operation timed out', 504, ok=False)
     except FileNotFoundError:
-        return jsonify({'ok': False, 'error': 'sudo or host-control helper not found'}), 503
+        return api_error('sudo or host-control helper not found', 503, ok=False)
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return api_error(str(e), 500, ok=False)
     finally:
         # Best-effort: drop our reference to the password (Python strings are
         # immutable, so this cannot truly wipe it from memory).
         password = None
 
-    resp = {'ok': rc == 0, 'output': output, 'returncode': rc}
+    # 'ok' reflects the hostctl command's own outcome (mirrored into 'success' for
+    # the standard envelope) — always HTTP 200, since the call itself succeeded.
+    resp = {'ok': rc == 0, 'success': rc == 0, 'output': output, 'returncode': rc}
     if rc != 0 and _hostctl_auth_failed(output):
         resp['error'] = ('Authentication failed — check the root password. '
                          '(Requires the root account to have a password set.)')
@@ -12343,19 +12345,19 @@ def api_system_service_restart():
     data = request.get_json(silent=True) or {}
     password = data.get('password', '')
     if not password:
-        return jsonify({'error': 'Root password is required'}), 400
+        return api_error('Root password is required', 400)
     try:
         rc, output = _run_hostctl_sudo('restart', password, 30)
     except subprocess.TimeoutExpired:
-        return jsonify({'ok': False, 'error': 'operation timed out'}), 504
+        return api_error('operation timed out', 504, ok=False)
     except FileNotFoundError:
-        return jsonify({'ok': False, 'error': 'sudo or host-control helper not found'}), 503
+        return api_error('sudo or host-control helper not found', 503, ok=False)
     except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return api_error(str(e), 500, ok=False)
     finally:
         password = None
 
-    resp = {'ok': rc == 0, 'output': output, 'returncode': rc}
+    resp = {'ok': rc == 0, 'success': rc == 0, 'output': output, 'returncode': rc}
     if rc != 0 and _hostctl_auth_failed(output):
         resp['error'] = 'Authentication failed — check the root password.'
     return jsonify(resp)
@@ -13523,7 +13525,7 @@ jar_bucket = JarBucketManager()
 @permission_required('panel.jars.manage')
 def api_jar_bucket_types():
     """Get available server types organized by category"""
-    return jsonify(jar_bucket.get_server_types())
+    return api_success(jar_bucket.get_server_types())
 
 def is_stable_version(version_string):
     """Check if a version is a stable release (not snapshot, RC, pre-release, or beta)"""
@@ -13566,8 +13568,8 @@ def api_jar_bucket_versions(server_type):
         # Filter out non-stable versions (snapshots, RC, etc.)
         if is_stable_version(version_str):
             normalized.append(version_str)
-    
-    return jsonify({
+
+    return api_success({
         'server_type': server_type,
         'versions': normalized,
         'count': len(normalized)
@@ -13580,14 +13582,14 @@ def api_jar_bucket_download():
     data = request.get_json()
     server_type = data.get('type', '').strip().lower()
     version = data.get('version', '').strip()
-    
+
     if not server_type or not version:
-        return jsonify({'error': 'Missing server type or version'}), 400
-    
+        return api_error('Missing server type or version', 400)
+
     # Validate server type
     import re
     if not re.match(r'^[a-z0-9-]+$', server_type):
-        return jsonify({'error': 'Invalid server type'}), 400
+        return api_error('Invalid server type', 400)
     
     # Generate progress ID
     progress_id = str(uuid.uuid4())
@@ -13613,10 +13615,8 @@ def api_jar_bucket_download():
     thread = threading.Thread(target=do_download, daemon=True)
     thread.start()
 
-    return jsonify({
-        'progress_id': progress_id,
-        'message': f'Starting download of {server_type} {version}'
-    })
+    return api_success(progress_id=progress_id,
+                        message=f'Starting download of {server_type} {version}')
 
 @app.route('/api/jar-bucket/queue-download', methods=['POST'])
 @permission_required('panel.jars.manage')
@@ -13633,11 +13633,11 @@ def api_jar_bucket_queue_download():
     version = data.get('version', '').strip()
 
     if not server_type or not version:
-        return jsonify({'error': 'Missing server type or version'}), 400
+        return api_error('Missing server type or version', 400)
 
     import re
     if not re.match(r'^[a-z0-9-]+$', server_type):
-        return jsonify({'error': 'Invalid server type'}), 400
+        return api_error('Invalid server type', 400)
 
     user_id, user = get_current_user()
     is_admin = group_manager.is_admin_group(user.get('groupId'))
@@ -13652,8 +13652,8 @@ def api_jar_bucket_queue_download():
         and (j.get('params') or {}).get('version') == version
     ]
     if existing:
-        return jsonify({'job_id': existing[0]['id'], 'duplicate': True,
-                        'message': f'{server_type} {version} is already downloading'})
+        return api_success(job_id=existing[0]['id'], duplicate=True,
+                            message=f'{server_type} {version} is already downloading')
 
     job_id = job_manager.submit(
         'jar_download',
@@ -13661,8 +13661,8 @@ def api_jar_bucket_queue_download():
         params={'type': server_type, 'version': version},
         created_by=user_id,
     )
-    return jsonify({'job_id': job_id,
-                    'message': f'Queued download of {server_type} {version}'})
+    return api_success(job_id=job_id,
+                        message=f'Queued download of {server_type} {version}')
 
 @app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
 @limiter.exempt
@@ -13671,14 +13671,14 @@ def api_jar_bucket_progress(progress_id):
     """Get download progress"""
     progress = jar_bucket.get_progress(progress_id)
     if progress:
-        return jsonify(progress)
-    return jsonify({'status': 'unknown'}), 404
+        return api_success(progress)
+    return api_error('Unknown progress ID', 404)
 
 @app.route('/api/jar-bucket/list', methods=['GET'])
 @permission_required('panel.jars.manage')
 def api_jar_bucket_list():
     """List all downloaded JAR files"""
-    return jsonify({'jars': jar_bucket.list_downloaded_jars()})
+    return api_success(jars=jar_bucket.list_downloaded_jars())
 
 @app.route('/api/jar-bucket/delete', methods=['DELETE'])
 @permission_required('panel.jars.manage')
@@ -13687,10 +13687,10 @@ def api_jar_bucket_delete():
     data = request.get_json()
     server_type = data.get('type', '').strip().lower()
     filename = data.get('filename', '').strip()
-    
+
     if not server_type or not filename:
-        return jsonify({'error': 'Missing type or filename'}), 400
-    
+        return api_error('Missing type or filename', 400)
+
     result = jar_bucket.delete_jar(server_type, filename)
     if result.get('success'):
         return jsonify(result)
@@ -13721,20 +13721,20 @@ def api_jar_bucket_backup_all():
         tmp_path.unlink(missing_ok=True)
         return response
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/jar-bucket/restore-all', methods=['POST'])
 @permission_required('panel.jars.manage')
 def api_jar_bucket_restore_all():
     """Restore server JARs from an uploaded backup ZIP (merges with existing files)."""
     if 'backup' not in request.files:
-        return jsonify({'error': 'No backup file provided'}), 400
+        return api_error('No backup file provided', 400)
 
     backup_file = request.files['backup']
     if not backup_file.filename:
-        return jsonify({'error': 'Empty filename'}), 400
+        return api_error('Empty filename', 400)
     if not backup_file.filename.lower().endswith('.zip'):
-        return jsonify({'error': 'Only ZIP archives are supported'}), 400
+        return api_error('Only ZIP archives are supported', 400)
 
     import tempfile
     tmp_path = None
@@ -13751,7 +13751,7 @@ def api_jar_bucket_restore_all():
 
         result = jar_bucket.restore_from_zip(tmp_path)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
     finally:
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
@@ -13765,14 +13765,14 @@ def api_jar_bucket_info(server_type, version):
     """Get download info for a specific version (URL, hash, etc.)"""
     info = jar_bucket.get_download_info(server_type, version)
     if info:
-        return jsonify(info)
-    return jsonify({'error': 'Version not found'}), 404
+        return api_success(info)
+    return api_error('Version not found', 404)
 
 @app.route('/api/jar-bucket/links', methods=['GET'])
 @admin_required
 def api_jar_bucket_links_get():
     """Get the per-type download link configuration (defaults, overrides, effective)"""
-    return jsonify({'types': jar_bucket.get_links_config()})
+    return api_success(types=jar_bucket.get_links_config())
 
 @app.route('/api/jar-bucket/links', methods=['PUT'])
 @admin_required
@@ -13785,15 +13785,13 @@ def api_jar_bucket_links_update():
     data = request.get_json(silent=True) or {}
     overrides = data.get('overrides')
     if not isinstance(overrides, dict):
-        return jsonify({'error': 'Missing or invalid "overrides" object'}), 400
+        return api_error('Missing or invalid "overrides" object', 400)
 
     result = jar_bucket.save_link_overrides(overrides)
     if not result['success']:
-        return jsonify({'error': 'Validation failed', 'errors': result['errors']}), 400
-    return jsonify({
-        'message': 'Download links updated',
-        'types': jar_bucket.get_links_config()
-    })
+        return api_error('Validation failed', 400, errors=result['errors'])
+    return api_success(message='Download links updated',
+                        types=jar_bucket.get_links_config())
 
 @app.route('/api/jar-bucket/links/test/<server_type>', methods=['POST'])
 @admin_required
@@ -13812,11 +13810,11 @@ def api_jar_bucket_refresh():
 
     if server_type:
         jar_bucket.get_versions(server_type, force_refresh=True)
-        return jsonify({'message': f'Refreshed {server_type} versions'})
+        return api_success(message=f'Refreshed {server_type} versions')
     else:
         for st in jar_bucket.SERVER_TYPES.keys():
             jar_bucket.get_versions(st, force_refresh=True)
-        return jsonify({'message': 'Refreshed all versions'})
+        return api_success(message='Refreshed all versions')
 
 @app.route('/api/jar-bucket/refresh-all', methods=['POST'])
 @permission_required('panel.jars.manage')
@@ -13853,10 +13851,10 @@ def api_jar_bucket_refresh_all():
 
     threading.Thread(target=do_refresh, daemon=True).start()
 
-    return jsonify({
-        'refresh_id': refresh_id,
-        'message': 'Full version refresh started — poll /api/jar-bucket/progress/' + refresh_id
-    })
+    return api_success(
+        refresh_id=refresh_id,
+        message='Full version refresh started — poll /api/jar-bucket/progress/' + refresh_id
+    )
 
 @app.route('/api/jar-bucket/check/<server_type>/<version>', methods=['GET'])
 @login_required
@@ -13866,14 +13864,14 @@ def api_jar_bucket_check(server_type, version):
     local_jar = jar_manager.get_local_jar_info(server_type, version)
     
     if local_jar:
-        return jsonify({
-            'downloaded': True,
-            'filename': local_jar.get('filename'),
-            'size': local_jar.get('size'),
-            'path': local_jar.get('path')
-        })
-    
-    return jsonify({'downloaded': False})
+        return api_success(
+            downloaded=True,
+            filename=local_jar.get('filename'),
+            size=local_jar.get('size'),
+            path=local_jar.get('path')
+        )
+
+    return api_success(downloaded=False)
 
 @app.route('/api/jar-bucket/all-types', methods=['GET'])
 @login_required
@@ -13889,7 +13887,7 @@ def api_jar_bucket_all_types():
             'icon': info.get('icon', '📦')
         })
     types.sort(key=lambda x: x['name'])
-    return jsonify({'types': types})
+    return api_success(types=types)
 
 @app.route('/api/jar-bucket/all-versions/<server_type>', methods=['GET'])
 @login_required
@@ -13915,8 +13913,8 @@ def api_jar_bucket_all_versions(server_type):
                 'version': version_str,
                 'downloaded': version_str in downloaded
             })
-    
-    return jsonify({
+
+    return api_success({
         'server_type': server_type,
         'versions': result,
         'count': len(result)
@@ -14190,7 +14188,7 @@ def list_jobs_route():
         ]
     jobs = job_manager.list_jobs(is_admin=is_admin, user_id=user_id,
                                  owned_server_ids=owned_server_ids)
-    return jsonify({'jobs': jobs})
+    return api_success(jobs=jobs)
 
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
@@ -14199,10 +14197,10 @@ def get_job_route(job_id):
     """Poll a single job's status (Socket.IO is the primary push channel)."""
     job = job_manager.get_job(job_id)
     if not job:
-        return jsonify({'error': 'Job not found'}), 404
+        return api_error('Job not found', 404)
     if not can_access_job(job):
-        return jsonify({'error': 'Access denied'}), 403
-    return jsonify({'job': job})
+        return api_error('Access denied', 403)
+    return api_success(job=job)
 
 
 @app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
@@ -14211,13 +14209,13 @@ def cancel_job_route(job_id):
     """Request cooperative cancellation of an active job."""
     job = job_manager.get_job(job_id)
     if not job:
-        return jsonify({'error': 'Job not found'}), 404
+        return api_error('Job not found', 404)
     if not can_access_job(job):
-        return jsonify({'error': 'Access denied'}), 403
+        return api_error('Access denied', 403)
     cancelled = job_manager.cancel(job_id)
     if not cancelled:
-        return jsonify({'error': 'Job is not active'}), 400
-    return jsonify({'success': True})
+        return api_error('Job is not active', 400)
+    return api_success()
 
 
 @app.route('/api/jobs/<job_id>', methods=['DELETE'])
@@ -14226,11 +14224,11 @@ def dismiss_job_route(job_id):
     """Remove a finished job from the list (and delete its temp artifact)."""
     job = job_manager.get_job(job_id)
     if not job:
-        return jsonify({'error': 'Job not found'}), 404
+        return api_error('Job not found', 404)
     if not can_access_job(job):
-        return jsonify({'error': 'Access denied'}), 403
+        return api_error('Access denied', 403)
     if job['status'] in JobManager.ACTIVE_STATUSES:
-        return jsonify({'error': 'Cannot dismiss an active job; cancel it first'}), 400
+        return api_error('Cannot dismiss an active job; cancel it first', 400)
     # Clean up any prepared zip artifact.
     tmp = JOBS_TMP_DIR / f'{job_id}.zip'
     try:
@@ -14241,7 +14239,7 @@ def dismiss_job_route(job_id):
     conn = get_db()
     conn.execute('DELETE FROM jobs WHERE id=?', (job_id,))
     conn.commit()
-    return jsonify({'success': True})
+    return api_success()
 
 
 @app.route('/api/jobs/<job_id>/download', methods=['GET'])
@@ -14250,14 +14248,14 @@ def download_job_route(job_id):
     """Download the artifact produced by a completed zip_download job."""
     job = job_manager.get_job(job_id)
     if not job:
-        return jsonify({'error': 'Job not found'}), 404
+        return api_error('Job not found', 404)
     if not can_access_job(job):
-        return jsonify({'error': 'Access denied'}), 403
+        return api_error('Access denied', 403)
     if job['type'] != 'zip_download' or job['status'] != 'completed':
-        return jsonify({'error': 'No downloadable artifact for this job'}), 400
+        return api_error('No downloadable artifact for this job', 400)
     tmp = JOBS_TMP_DIR / f'{job_id}.zip'
     if not tmp.exists():
-        return jsonify({'error': 'Artifact no longer available'}), 404
+        return api_error('Artifact no longer available', 404)
     download_name = (job.get('result') or {}).get('filename', 'download.zip')
     return send_file(tmp, as_attachment=True, download_name=download_name,
                      mimetype='application/zip')
