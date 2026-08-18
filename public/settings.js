@@ -1196,7 +1196,7 @@ async function loadVersionInfo() {
     const data = await response.json();
     
     document.getElementById('current-version').textContent = data.version || 'Unknown';
-    document.getElementById('current-date').textContent = data.commit_date ? new Date(data.commit_date).toLocaleString() : '--';
+    document.getElementById('current-date').textContent = data.commitDate ? new Date(data.commitDate).toLocaleString() : '--';
   } catch (error) {
     console.error('Error loading version:', error);
     document.getElementById('current-version').textContent = 'Error';
@@ -1237,7 +1237,7 @@ async function loadOsUpdateStatus() {
 
     const rebootEl = document.getElementById('os-status-reboot');
     if (rebootEl) {
-      if (data.reboot_required) {
+      if (data.rebootRequired) {
         rebootEl.textContent = '⚠ Reboot required';
         rebootEl.style.color = '#e0a800';
       } else {
@@ -1940,7 +1940,7 @@ async function saveJarLinks() {
     renderJarLinks(data.types || {});
     setJarLinksStatus('Download links saved. Version cache cleared.');
     showNotification('JAR download links updated', 'success');
-    loadJarBucketTypes(); // type cards show the effective api_url
+    loadJarBucketTypes(); // type cards show the effective apiUrl
   } catch (err) {
     setJarLinksStatus('Error: ' + err.message, true);
   }
@@ -2826,9 +2826,9 @@ function displayApiKeys(keys) {
   const keyCards = keys.map(key => {
     const statusClass = key.active ? 'online' : 'offline';
     const statusText = key.active ? 'Active' : 'Inactive';
-    const createdAt = key.created_at ? new Date(key.created_at).toLocaleString() : 'Unknown';
-    const lastUsed = key.last_used ? new Date(key.last_used).toLocaleString() : 'Never';
-    const expiresAt = key.expires_at ? new Date(key.expires_at).toLocaleString() : 'Never';
+    const createdAt = key.createdAt ? new Date(key.createdAt).toLocaleString() : 'Unknown';
+    const lastUsed = key.lastUsed ? new Date(key.lastUsed).toLocaleString() : 'Never';
+    const expiresAt = key.expiresAt ? new Date(key.expiresAt).toLocaleString() : 'Never';
     
     // Mask the key for display (show first 8 and last 4 characters)
     const maskedKey = key.key ? `${key.key.substring(0, 8)}...${key.key.substring(key.key.length - 4)}` : '••••••••';
@@ -2869,11 +2869,11 @@ function displayApiKeys(keys) {
             </div>
             <div class="info-item">
               <span class="info-label">Requests:</span>
-              <span class="info-value">${key.request_count || 0}</span>
+              <span class="info-value">${key.requestCount || 0}</span>
             </div>
             <div class="info-item">
               <span class="info-label">Rate Limit:</span>
-              <span class="info-value">${key.rate_limit || 'Default'}/min</span>
+              <span class="info-value">${key.rateLimit || 'Default'}/min</span>
             </div>
           </div>
           
@@ -2902,9 +2902,9 @@ async function loadApiStats() {
     
     const data = await response.json();
     
-    document.getElementById('api-total-requests').textContent = data.total_requests || 0;
-    document.getElementById('api-successful-requests').textContent = data.successful_requests || 0;
-    document.getElementById('api-failed-requests').textContent = data.failed_requests || 0;
+    document.getElementById('api-total-requests').textContent = data.totalRequests || 0;
+    document.getElementById('api-successful-requests').textContent = data.successfulRequests || 0;
+    document.getElementById('api-failed-requests').textContent = data.failedRequests || 0;
   } catch (err) {
     console.error('Failed to load API stats:', err);
   }
@@ -3237,13 +3237,13 @@ async function testWebhookSettings() {
 // ==================== Email Templates ====================
 
 const _TEMPLATE_LABELS = {
-  backup_complete: { label: 'Backup Completed', vars: 'server_name, backup_name, size, timestamp, site_title' },
-  backup_failure:  { label: 'Backup Failed',    vars: 'server_name, error, timestamp, site_title' },
-  server_start:    { label: 'Server Started',   vars: 'server_name, server_id, timestamp, site_title' },
-  server_stop:     { label: 'Server Stopped',   vars: 'server_name, server_id, timestamp, site_title' },
-  player_join:     { label: 'Player Joined',    vars: 'player, server_name, server_id, timestamp, site_title' },
-  player_leave:    { label: 'Player Left',      vars: 'player, server_name, server_id, timestamp, site_title' },
-  critical_alert:  { label: 'Critical Alert',   vars: 'alert_type, details, timestamp, site_title' },
+  backup_complete: { label: 'Backup Completed', vars: 'serverName, backupName, size, timestamp, siteTitle' },
+  backup_failure:  { label: 'Backup Failed',    vars: 'serverName, error, timestamp, siteTitle' },
+  server_start:    { label: 'Server Started',   vars: 'serverName, serverId, timestamp, siteTitle' },
+  server_stop:     { label: 'Server Stopped',   vars: 'serverName, serverId, timestamp, siteTitle' },
+  player_join:     { label: 'Player Joined',    vars: 'player, serverName, serverId, timestamp, siteTitle' },
+  player_leave:    { label: 'Player Left',      vars: 'player, serverName, serverId, timestamp, siteTitle' },
+  critical_alert:  { label: 'Critical Alert',   vars: 'alertType, details, timestamp, siteTitle' },
 };
 
 let _emailTemplates = {};
@@ -3446,7 +3446,7 @@ async function loadPendingActions() {
     list.innerHTML = `<div class="approval-items">
       ${actions.map(a => {
         const payloadPreview = Object.entries(a.payload || {})
-          .filter(([k]) => k !== 'server_name')
+          .filter(([k]) => k !== 'serverName')
           .map(([k, v]) => `${escapeHtml(k)}: ${escapeHtml(String(v))}`)
           .join('\n');
         return `<div class="pending-action-item">
@@ -3455,7 +3455,7 @@ async function loadPendingActions() {
           </div>
           <div class="pending-action-meta">
             Requested by <strong>${escapeHtml(a.username || 'Unknown')}</strong>
-            ${a.payload?.server_name ? ` for server <strong>${escapeHtml(a.payload.server_name)}</strong>` : ''}
+            ${a.payload?.serverName ? ` for server <strong>${escapeHtml(a.payload.serverName)}</strong>` : ''}
             &mdash; ${new Date(a.created).toLocaleString()}
           </div>
           ${payloadPreview ? `<div class="pending-action-details">${escapeHtml(payloadPreview)}</div>` : ''}

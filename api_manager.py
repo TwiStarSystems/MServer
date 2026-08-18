@@ -79,17 +79,17 @@ def load_api_stats():
     conn = get_db()
     row = conn.execute('SELECT * FROM api_stats WHERE id=1').fetchone()
     stats = {
-        'total_requests':       row['total_requests']      if row else 0,
-        'successful_requests':  row['successful_requests'] if row else 0,
-        'failed_requests':      row['failed_requests']     if row else 0,
-        'last_reset':           row['last_reset']          if row else datetime.now().isoformat(),
-        'requests_by_key':      {},
-        'requests_by_endpoint': {},
+        'totalRequests':      row['total_requests']      if row else 0,
+        'successfulRequests': row['successful_requests'] if row else 0,
+        'failedRequests':     row['failed_requests']     if row else 0,
+        'lastReset':          row['last_reset']          if row else datetime.now().isoformat(),
+        'requestsByKey':      {},
+        'requestsByEndpoint': {},
     }
     for r in conn.execute('SELECT * FROM api_requests_by_key').fetchall():
-        stats['requests_by_key'][r['key_id']] = r['count']
+        stats['requestsByKey'][r['key_id']] = r['count']
     for r in conn.execute('SELECT * FROM api_requests_by_endpoint').fetchall():
-        stats['requests_by_endpoint'][r['endpoint']] = r['count']
+        stats['requestsByEndpoint'][r['endpoint']] = r['count']
     return stats
 
 
@@ -138,17 +138,17 @@ def _row_to_key_dict(row):
     if row is None:
         return None
     return {
-        'id':            row['id'],
-        'name':          row['name'],
-        'key_hash':      row['key_hash'],
-        'key_prefix':    row['key_prefix'],
-        'permissions':   json.loads(row['permissions']),
-        'rate_limit':    row['rate_limit'],
-        'created_at':    row['created'],
-        'expires_at':    row['expires'],
-        'last_used':     row['last_used'],
-        'request_count': row['use_count'],
-        'active':        bool(row['enabled']),
+        'id':           row['id'],
+        'name':         row['name'],
+        'keyHash':      row['key_hash'],
+        'keyPrefix':    row['key_prefix'],
+        'permissions':  json.loads(row['permissions']),
+        'rateLimit':    row['rate_limit'],
+        'createdAt':    row['created'],
+        'expiresAt':    row['expires'],
+        'lastUsed':     row['last_used'],
+        'requestCount': row['use_count'],
+        'active':       bool(row['enabled']),
     }
 
 
@@ -233,9 +233,9 @@ def update_api_key(key_id, updates):
         return None
 
     current    = _row_to_key_dict(row)
-    name       = updates.get('name',        current['name'])
+    name       = updates.get('name',       current['name'])
     perms      = json.dumps(updates.get('permissions', current['permissions']))
-    rate_limit = updates.get('rate_limit',  current['rate_limit'])
+    rate_limit = updates.get('rateLimit',  current['rateLimit'])
     enabled    = 1 if updates.get('active', current['active']) else 0
 
     conn.execute(
@@ -261,16 +261,16 @@ def list_api_keys():
     for row in rows:
         k = _row_to_key_dict(row)
         result.append({
-            'id':            k['id'],
-            'name':          k['name'],
-            'key':           k['key_prefix'] + '...', 
-            'permissions':   k['permissions'],
-            'rate_limit':    k['rate_limit'],
-            'created_at':    k['created_at'],
-            'expires_at':    k['expires_at'],
-            'last_used':     k['last_used'],
-            'request_count': k['request_count'],
-            'active':        k['active'],
+            'id':           k['id'],
+            'name':         k['name'],
+            'key':          k['keyPrefix'] + '...',
+            'permissions':  k['permissions'],
+            'rateLimit':    k['rateLimit'],
+            'createdAt':    k['createdAt'],
+            'expiresAt':    k['expiresAt'],
+            'lastUsed':     k['lastUsed'],
+            'requestCount': k['requestCount'],
+            'active':       k['active'],
         })
     return result
 
@@ -370,7 +370,7 @@ def require_api_key(permissions=None):
                         }), 403
 
             # Enforce the per-key rate limit and advertise the documented headers.
-            limit = key_data.get('rate_limit') or 60
+            limit = key_data.get('rateLimit') or 60
             allowed, remaining, reset_ts = _check_rate_limit(key_data['id'], limit)
 
             @after_this_request
@@ -422,8 +422,8 @@ def api_create_key():
     data = request.get_json() or {}
     name = data.get('name', 'Unnamed Key')
     permissions = data.get('permissions', [APIPermission.READ])
-    rate_limit = data.get('rate_limit', 60)
-    expires_days = data.get('expires_days')
+    rate_limit = data.get('rateLimit', 60)
+    expires_days = data.get('expiresDays')
     
     key_id, full_key, key_data = create_api_key(
         name=name,
@@ -494,7 +494,7 @@ def api_docs():
         'authentication': {
             'method': 'API Key',
             'header': 'X-API-Key',
-            'query_param': 'api_key'
+            'queryParam': 'api_key'
         },
         'permissions': {
             'read': 'Read server information and status',
@@ -552,7 +552,7 @@ def api_docs():
                 'response': {'success': 'boolean', 'message': 'string', 'error': 'string (on failure)'}
             }
         },
-        'rate_limiting': {
+        'rateLimiting': {
             'default': '60 requests/minute per API key',
             'headers': {
                 'X-RateLimit-Limit': 'Request limit',

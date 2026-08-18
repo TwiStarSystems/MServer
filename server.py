@@ -721,107 +721,107 @@ class EmailService:
 
     DEFAULT_TEMPLATES = {
         'backup_complete': {
-            'subject': '[{{ site_title }}] Backup Complete: {{ server_name }}',
+            'subject': '[{{ siteTitle }}] Backup Complete: {{ serverName }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#10b981;margin-top:0;">✅ Backup Completed Successfully</h2>'
-                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
-                '<p style="margin:10px 0;"><strong>Backup Name:</strong> {{ backup_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
+                '<p style="margin:10px 0;"><strong>Backup Name:</strong> {{ backupName }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Backup Completed Successfully\nServer: {{ server_name }}\nBackup: {{ backup_name }}\nTime: {{ timestamp }}'
+            'text': 'Backup Completed Successfully\nServer: {{ serverName }}\nBackup: {{ backupName }}\nTime: {{ timestamp }}'
         },
         'backup_failure': {
-            'subject': '[{{ site_title }}] Backup Failed: {{ server_name }}',
+            'subject': '[{{ siteTitle }}] Backup Failed: {{ serverName }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#ef4444;margin-top:0;">❌ Backup Failed</h2>'
-                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
                 '<p style="margin:10px 0;"><strong>Error:</strong> {{ error }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Backup Failed\nServer: {{ server_name }}\nError: {{ error }}\nTime: {{ timestamp }}'
+            'text': 'Backup Failed\nServer: {{ serverName }}\nError: {{ error }}\nTime: {{ timestamp }}'
         },
         'server_start': {
-            'subject': '[{{ site_title }}] Server Started: {{ server_name }}',
+            'subject': '[{{ siteTitle }}] Server Started: {{ serverName }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#10b981;margin-top:0;">🟢 Server Started</h2>'
-                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Server Started\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+            'text': 'Server Started\nServer: {{ serverName }}\nTime: {{ timestamp }}'
         },
         'server_stop': {
-            'subject': '[{{ site_title }}] Server Stopped: {{ server_name }}',
+            'subject': '[{{ siteTitle }}] Server Stopped: {{ serverName }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#e0a800;margin-top:0;">🔴 Server Stopped</h2>'
-                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Server Stopped\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+            'text': 'Server Stopped\nServer: {{ serverName }}\nTime: {{ timestamp }}'
         },
         'player_join': {
-            'subject': '[{{ site_title }}] Player Joined: {{ player }} on {{ server_name }}',
+            'subject': '[{{ siteTitle }}] Player Joined: {{ player }} on {{ serverName }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#667eea;margin-top:0;">👤 Player Joined</h2>'
                 '<p style="margin:10px 0;"><strong>Player:</strong> {{ player }}</p>'
-                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Player Joined\nPlayer: {{ player }}\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+            'text': 'Player Joined\nPlayer: {{ player }}\nServer: {{ serverName }}\nTime: {{ timestamp }}'
         },
         'player_leave': {
-            'subject': '[{{ site_title }}] Player Left: {{ player }} on {{ server_name }}',
+            'subject': '[{{ siteTitle }}] Player Left: {{ player }} on {{ serverName }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#9ca3af;margin-top:0;">👋 Player Left</h2>'
                 '<p style="margin:10px 0;"><strong>Player:</strong> {{ player }}</p>'
-                '<p style="margin:10px 0;"><strong>Server:</strong> {{ server_name }}</p>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Player Left\nPlayer: {{ player }}\nServer: {{ server_name }}\nTime: {{ timestamp }}'
+            'text': 'Player Left\nPlayer: {{ player }}\nServer: {{ serverName }}\nTime: {{ timestamp }}'
         },
         'critical_alert': {
-            'subject': '[{{ site_title }}] ⚠️ Critical Alert: {{ alert_type }}',
+            'subject': '[{{ siteTitle }}] ⚠️ Critical Alert: {{ alertType }}',
             'html': (
                 '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
                 '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
                 '<h2 style="color:#ef4444;margin-top:0;">⚠️ Critical Alert</h2>'
-                '<p style="margin:10px 0;"><strong>Alert Type:</strong> {{ alert_type }}</p>'
+                '<p style="margin:10px 0;"><strong>Alert Type:</strong> {{ alertType }}</p>'
                 '<p style="margin:10px 0;"><strong>Details:</strong> {{ details }}</p>'
                 '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
                 '<hr style="border:1px solid #333;margin:20px 0;">'
-                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ site_title }}.</p>'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
                 '</div></body></html>'
             ),
-            'text': 'Critical Alert\nType: {{ alert_type }}\nDetails: {{ details }}\nTime: {{ timestamp }}'
+            'text': 'Critical Alert\nType: {{ alertType }}\nDetails: {{ details }}\nTime: {{ timestamp }}'
         },
     }
 
@@ -900,8 +900,8 @@ class EmailService:
             app.logger.warning(f'[Email] No template found for event type: {event_type}')
             return []
         site_title = self.settings_manager.get_branding().get('siteTitle', 'MServer')
-        ctx = {'site_title': site_title, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), **context}
-        subject = self._render(template.get('subject', '[{{ site_title }}] Notification'), ctx, html=False)
+        ctx = {'siteTitle': site_title, 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), **context}
+        subject = self._render(template.get('subject', '[{{ siteTitle }}] Notification'), ctx, html=False)
         html_content = self._render(template.get('html', '<p>Notification</p>'), ctx, html=True)
         text_tpl = template.get('text', '')
         text_content = self._render(text_tpl, ctx, html=False) if text_tpl else None
@@ -1424,7 +1424,7 @@ class BackupScheduler:
 
             self._log_backup_event(server_id, {
                 'type': 'scheduled',
-                'backup_name': backup_name,
+                'backupName': backup_name,
                 'size': size,
                 'success': True,
                 'checksum': checksum,
@@ -1447,9 +1447,9 @@ class BackupScheduler:
             }, to=f'server_{server_id}', namespace='/')
 
             _backup_ctx = {
-                'server_id':   server_id,
-                'server_name': server_config.get('name', server_id),
-                'backup_name': backup_name,
+                'serverId':   server_id,
+                'serverName': server_config.get('name', server_id),
+                'backupName': backup_name,
                 'size':        size,
             }
             threading.Thread(
@@ -1463,7 +1463,7 @@ class BackupScheduler:
             print(f"[Scheduler] Backup failed for server {server_id}: {e}")
             self._log_backup_event(server_id, {
                 'type':        'scheduled',
-                'backup_name': None,
+                'backupName': None,
                 'success':     False,
                 'error':       str(e),
             })
@@ -1476,7 +1476,7 @@ class BackupScheduler:
                 _fail_name = server_id
             threading.Thread(
                 target=dispatch_notification,
-                args=('backup_failure', {'server_name': _fail_name, 'error': str(e)}),
+                args=('backup_failure', {'serverName': _fail_name, 'error': str(e)}),
                 daemon=True
             ).start()
 
@@ -1493,7 +1493,7 @@ class BackupScheduler:
                 (server_id,
                  event.get('timestamp', datetime.now().isoformat()),
                  event.get('type', 'manual'),
-                 event.get('backup_name'),
+                 event.get('backupName'),
                  event.get('size'),
                  1 if event.get('success', True) else 0,
                  event.get('error'),
@@ -1521,14 +1521,14 @@ class BackupScheduler:
         ).fetchall()
         return [
             {
-                'id':          r['id'],
-                'timestamp':   r['timestamp'],
-                'type':        r['type'],
-                'backup_name': r['backup_name'],
-                'size':        r['size'],
-                'success':     bool(r['success']),
-                'error':       r['error'],
-                'checksum':    r['checksum'],
+                'id':         r['id'],
+                'timestamp':  r['timestamp'],
+                'type':       r['type'],
+                'backupName': r['backup_name'],
+                'size':       r['size'],
+                'success':    bool(r['success']),
+                'error':      r['error'],
+                'checksum':   r['checksum'],
             }
             for r in rows
         ]
@@ -3323,7 +3323,7 @@ def dispatch_notification(event_type, context):
         app.logger.error(f'[Notify] Webhook dispatch error for {event_type}: {e}')
 
     # Fire event-triggered server messages
-    server_id = context.get('server_id')
+    server_id = context.get('serverId')
     if server_id and event_type in MessageScheduler.EVENT_TRIGGERS:
         try:
             message_scheduler.fire_event(server_id, event_type)
@@ -4966,7 +4966,7 @@ class ServerManager:
         """Create canned_commands.conf in server_dir if it does not already exist."""
         conf_path = Path(server_dir) / 'canned_commands.conf'
         if not conf_path.exists():
-            default = {'auto_execute': False, 'commands': []}
+            default = {'autoExecute': False, 'commands': []}
             conf_path.write_text(json.dumps(default, indent=2), encoding='utf-8')
 
     def get_server_path(self, server_id):
@@ -5117,7 +5117,7 @@ class ServerInstance:
                 sname = cfg.get('name', self.server_id) if cfg else self.server_id
                 threading.Thread(
                     target=dispatch_notification,
-                    args=('server_stop', {'server_name': sname, 'server_id': self.server_id}),
+                    args=('server_stop', {'serverName': sname, 'serverId': self.server_id}),
                     daemon=True
                 ).start()
             except Exception:
@@ -5224,7 +5224,7 @@ class ServerInstance:
             sname = cfg.get('name', self.server_id) if cfg else self.server_id
             threading.Thread(
                 target=dispatch_notification,
-                args=('server_start', {'server_name': sname, 'server_id': self.server_id}),
+                args=('server_start', {'serverName': sname, 'serverId': self.server_id}),
                 daemon=True
             ).start()
         except Exception:
@@ -5237,7 +5237,7 @@ class ServerInstance:
             sname = cfg.get('name', self.server_id) if cfg else self.server_id
             threading.Thread(
                 target=dispatch_notification,
-                args=(event_type, {'server_name': sname, 'server_id': self.server_id, 'player': player_name}),
+                args=(event_type, {'serverName': sname, 'serverId': self.server_id, 'player': player_name}),
                 daemon=True
             ).start()
         except Exception:
@@ -5720,9 +5720,9 @@ job_manager = JobManager(socketio, server_manager)
 # time, so registering before those are defined is fine.
 
 def _job_backup(job_id, params, progress, cancel):
-    server_id = params['server_id']
-    compression_level = max(0, min(9, int(params.get('compression_level', 6))))
-    backup_type = str(params.get('backup_type', 'manual'))
+    server_id = params['serverId']
+    compression_level = max(0, min(9, int(params.get('compressionLevel', 6))))
+    backup_type = str(params.get('backupType', 'manual'))
     server_path = server_manager.get_server_path(server_id)
     if not server_path.exists():
         raise Exception('Server path not found')
@@ -5744,7 +5744,7 @@ def _job_backup(job_id, params, progress, cancel):
             if inst is None or not inst.is_running():
                 break
 
-    custom_name = params.get('custom_name', '')
+    custom_name = params.get('customName', '')
     backup_name = custom_name if custom_name else f'backup-{timestamp}.zip'
     backup_path = backup_dir / backup_name
     try:
@@ -5772,8 +5772,8 @@ def _job_backup(job_id, params, progress, cancel):
             print(f"[Backup] External upload warning: {ext_msg}")
 
         backup_scheduler._log_backup_event(server_id, {
-            'type': backup_type, 'backup_name': backup_name, 'size': size,
-            'compression_level': compression_level, 'verified': ok,
+            'type': backup_type, 'backupName': backup_name, 'size': size,
+            'compressionLevel': compression_level, 'verified': ok,
             'checksum': checksum, 'uploaded_to_external': ext_ok, 'success': True
         })
 
@@ -5800,7 +5800,7 @@ def _job_backup(job_id, params, progress, cancel):
         raise
     except Exception as e:
         backup_scheduler._log_backup_event(server_id, {
-            'type': backup_type, 'backup_name': backup_name, 'success': False, 'error': str(e)
+            'type': backup_type, 'backupName': backup_name, 'success': False, 'error': str(e)
         })
         if was_running:
             try:
@@ -5811,8 +5811,8 @@ def _job_backup(job_id, params, progress, cancel):
 
 
 def _job_restore(job_id, params, progress, cancel):
-    server_id = params['server_id']
-    backup_name = params['backup_name']  # already sanitized in the route
+    server_id = params['serverId']
+    backup_name = params['backupName']  # already sanitized in the route
     backup_path = BACKUPS_DIR / server_id / backup_name
     server_path = server_manager.get_server_path(server_id)
 
@@ -5858,8 +5858,8 @@ def _job_restore(job_id, params, progress, cancel):
 
 
 def _job_delete_server(job_id, params, progress, cancel):
-    server_id = params['server_id']
-    delete_files = bool(params.get('delete_files', False))
+    server_id = params['serverId']
+    delete_files = bool(params.get('deleteFiles', False))
     progress(10, 'Stopping server…')
     # delete_server() stops the server, removes files (if requested), and the DB row.
     # rmtree is not interruptible mid-call, so this job is best-effort cancellable.
@@ -5871,10 +5871,10 @@ def _job_delete_server(job_id, params, progress, cancel):
 
 
 def _job_swap_jar(job_id, params, progress, cancel):
-    server_id = params['server_id']
-    server_type = params['server_type']
+    server_id = params['serverId']
+    server_type = params['serverType']
     version = params['version']
-    has_existing_world = bool(params.get('has_existing_world', False))
+    has_existing_world = bool(params.get('hasExistingWorld', False))
     executable = 'server.jar'
 
     server_config = server_manager.get_server_config(server_id)
@@ -5907,8 +5907,8 @@ def _job_swap_jar(job_id, params, progress, cancel):
             bk_size = bk_path.stat().st_size
             ok, checksum, _ = verify_backup_file(bk_path)
             backup_scheduler._log_backup_event(server_id, {
-                'type': 'pre-jar-update', 'backup_name': bk_name, 'size': bk_size,
-                'is_incremental': False, 'compression_level': 6, 'verified': ok,
+                'type': 'pre-jar-update', 'backupName': bk_name, 'size': bk_size,
+                'is_incremental': False, 'compressionLevel': 6, 'verified': ok,
                 'checksum': checksum, 'success': True
             })
         except JobCancelled:
@@ -5931,8 +5931,8 @@ def _job_swap_jar(job_id, params, progress, cancel):
 
 
 def _job_zip_download(job_id, params, progress, cancel):
-    server_id = params['server_id']
-    requested_path = params.get('requested_path', '')
+    server_id = params['serverId']
+    requested_path = params.get('requestedPath', '')
     server_path = server_manager.get_server_path(server_id)
     full_path = server_path / requested_path
     if not full_path.exists() or not full_path.is_dir():
@@ -6180,7 +6180,7 @@ def api_error(message, status=400, **extra):
 def get_csrf_token():
     """Get CSRF token for authenticated sessions"""
     token = generate_csrf()
-    return jsonify({'csrf_token': token})
+    return jsonify({'csrfToken': token})
 
 
 # ==================== Static Files & Page Routes ====================
@@ -7145,10 +7145,10 @@ def _execute_approved_action(action):
 
     try:
         if action_type == 'serverDelete':
-            sid = payload.get('server_id', target_id)
+            sid = payload.get('serverId', target_id)
             job_id = job_manager.submit(
-                'delete_server', f'Delete: {payload.get("server_name", sid)}',
-                params={'server_id': sid, 'delete_files': payload.get('delete_files', False)},
+                'delete_server', f'Delete: {payload.get("serverName", sid)}',
+                params={'serverId': sid, 'deleteFiles': payload.get('deleteFiles', False)},
                 created_by=user_id, server_id=sid)
             return {'jobId': job_id}
 
@@ -7160,7 +7160,7 @@ def _execute_approved_action(action):
 
         if action_type == 'serverLifecycle':
             act = payload.get('action', 'start')
-            sid = payload.get('server_id', target_id)
+            sid = payload.get('serverId', target_id)
             if act == 'start':
                 ok, msg = server_manager.start_server(sid)
             elif act == 'stop':
@@ -7172,8 +7172,8 @@ def _execute_approved_action(action):
             return {'success': ok, 'message': msg}
 
         if action_type == 'backupCreate':
-            sid = payload.get('server_id', target_id)
-            job_params = {k: v for k, v in payload.items() if k != 'server_name'}
+            sid = payload.get('serverId', target_id)
+            job_params = {k: v for k, v in payload.items() if k != 'serverName'}
             cfg = server_manager.get_server_config(sid) or {}
             job_id = job_manager.submit(
                 'backup', f'Backup: {cfg.get("name", sid)}',
@@ -7181,8 +7181,8 @@ def _execute_approved_action(action):
             return {'jobId': job_id}
 
         if action_type == 'backupDelete':
-            sid = payload.get('server_id', target_id)
-            backup_name = payload.get('backup_name', '')
+            sid = payload.get('serverId', target_id)
+            backup_name = payload.get('backupName', '')
             backup_path = (BACKUPS_DIR / sid / backup_name).resolve()
             if str(backup_path).startswith(str(BACKUPS_DIR.resolve())) and backup_path.exists():
                 backup_path.unlink()
@@ -7193,9 +7193,9 @@ def _execute_approved_action(action):
             return {'note': 'File uploads must be re-submitted after approval.'}
 
         if action_type == 'modManagement':
-            sid = payload.get('server_id', target_id)
+            sid = payload.get('serverId', target_id)
             act = payload.get('action')
-            mod_type = payload.get('mod_type', 'plugins')
+            mod_type = payload.get('modType', 'plugins')
             fname = payload.get('filename', '')
             server_path = server_manager.get_server_path(sid)
             mod_dir = server_path / mod_type
@@ -7546,7 +7546,7 @@ def setup_bedrock_server(server_id):
         'status': 'initializing',
         'message': 'Starting Bedrock server download...',
         'kind': 'bedrock',
-        'server_id': server_id,
+        'serverId': server_id,
         'progress': 0,
         'step': 1
     })
@@ -7713,7 +7713,7 @@ def setup_bedrock_server(server_id):
     thread = threading.Thread(target=do_bedrock_setup, daemon=True)
     thread.start()
 
-    return api_success(progress_id=progress_id, message='Starting Bedrock server setup...')
+    return api_success(progressId=progress_id, message='Starting Bedrock server setup...')
 
 
 @app.route('/api/servers/import', methods=['POST'])
@@ -7964,8 +7964,8 @@ def download_server_jar(server_id):
     server_name = server_config.get('name', server_id)
     job_id = job_manager.submit(
         'swap_jar', f'Install {server_type} {version}: {server_name}',
-        params={'server_id': server_id, 'server_type': server_type,
-                'version': version, 'has_existing_world': has_existing_world},
+        params={'serverId': server_id, 'serverType': server_type,
+                'version': version, 'hasExistingWorld': has_existing_world},
         created_by=get_current_user()[0],
         server_id=server_id
     )
@@ -8041,13 +8041,13 @@ def delete_server(server_id):
     def do_delete():
         job_id = job_manager.submit(
             'delete_server', f'Delete: {server_name}',
-            params={'server_id': server_id, 'delete_files': delete_files},
+            params={'serverId': server_id, 'deleteFiles': delete_files},
             created_by=user_id, server_id=server_id)
         return jsonify({'started': True, 'jobId': job_id}), 202
 
     result, status = check_action_policy(
         'serverDelete', user,
-        {'server_id': server_id, 'delete_files': delete_files, 'server_name': server_name},
+        {'serverId': server_id, 'deleteFiles': delete_files, 'serverName': server_name},
         target_id=server_id, execute_fn=do_delete,
         description=f'{user.get("username","Unknown")} deleted server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -8122,6 +8122,14 @@ def get_canned_commands(server_id):
     server_manager._ensure_canned_commands_conf(server_path)
     try:
         data = json.loads(conf_path.read_text(encoding='utf-8'))
+        # Migrate pre-rename (snake_case) files written before issue #29's camelCase pass
+        data = {
+            'autoExecute': data.get('autoExecute', data.get('auto_execute', False)),
+            'commands': [
+                {'cmdName': c.get('cmdName', c.get('cmd_name', '')), 'cmd': c.get('cmd', '')}
+                for c in data.get('commands', [])
+            ],
+        }
         return api_success(data)
     except Exception as e:
         return api_error(str(e), 500)
@@ -8135,18 +8143,18 @@ def save_canned_commands(server_id):
     if body is None:
         return api_error('Invalid JSON', 400)
 
-    auto_execute = bool(body.get('auto_execute', False))
+    auto_execute = bool(body.get('autoExecute', False))
     raw_commands = body.get('commands', [])
 
     # Sanitise each command entry
     commands = []
     for item in raw_commands:
-        cmd_name = str(item.get('cmd_name', '')).strip()[:25]
+        cmd_name = str(item.get('cmdName', '')).strip()[:25]
         cmd = str(item.get('cmd', '')).strip()
         if cmd_name and cmd:
-            commands.append({'cmd_name': cmd_name, 'cmd': cmd})
+            commands.append({'cmdName': cmd_name, 'cmd': cmd})
 
-    conf_data = {'auto_execute': auto_execute, 'commands': commands}
+    conf_data = {'autoExecute': auto_execute, 'commands': commands}
     conf_path = server_path / 'canned_commands.conf'
     try:
         conf_path.write_text(json.dumps(conf_data, indent=2), encoding='utf-8')
@@ -8259,10 +8267,10 @@ def change_server_version(server_id):
         ok, checksum, _ = verify_backup_file(backup_path)
         backup_scheduler._log_backup_event(server_id, {
             'type': 'pre-version-change',
-            'backup_name': backup_name,
+            'backupName': backup_name,
             'size': bk_size,
             'is_incremental': False,
-            'compression_level': 6,
+            'compressionLevel': 6,
             'verified': ok,
             'checksum': checksum,
             'success': True
@@ -8346,7 +8354,7 @@ def start_server(server_id):
         return api_error(message, 400)
 
     result, status = check_action_policy(
-        'serverLifecycle', user, {'server_id': server_id, 'action': 'start', 'server_name': server_name},
+        'serverLifecycle', user, {'serverId': server_id, 'action': 'start', 'serverName': server_name},
         target_id=server_id, execute_fn=do_start,
         description=f'{user.get("username","Unknown")} started server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -8366,7 +8374,7 @@ def stop_server(server_id):
         return api_error(message, 400)
 
     result, status = check_action_policy(
-        'serverLifecycle', user, {'server_id': server_id, 'action': 'stop', 'server_name': server_name},
+        'serverLifecycle', user, {'serverId': server_id, 'action': 'stop', 'serverName': server_name},
         target_id=server_id, execute_fn=do_stop,
         description=f'{user.get("username","Unknown")} stopped server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -8386,7 +8394,7 @@ def restart_server(server_id):
         return api_error(message, 400)
 
     result, status = check_action_policy(
-        'serverLifecycle', user, {'server_id': server_id, 'action': 'restart', 'server_name': server_name},
+        'serverLifecycle', user, {'serverId': server_id, 'action': 'restart', 'serverName': server_name},
         target_id=server_id, execute_fn=do_restart,
         description=f'{user.get("username","Unknown")} restarted server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -8406,7 +8414,7 @@ def kill_server(server_id):
         return api_error(message, 400)
 
     result, status = check_action_policy(
-        'serverLifecycle', user, {'server_id': server_id, 'action': 'kill', 'server_name': server_name},
+        'serverLifecycle', user, {'serverId': server_id, 'action': 'kill', 'serverName': server_name},
         target_id=server_id, execute_fn=do_kill,
         description=f'{user.get("username","Unknown")} killed server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -9029,14 +9037,14 @@ def get_player_stats(server_id, uuid):
                     flat[f'{display_cat}.{display_key}'] = value
 
         highlights = {
-            'playtime_ticks': flat.get('custom.play_time', flat.get('custom.play_one_minute', 0)),
+            'playtimeTicks': flat.get('custom.play_time', flat.get('custom.play_one_minute', 0)),
             'deaths': flat.get('custom.deaths', 0),
-            'player_kills': flat.get('custom.player_kills', 0),
-            'mob_kills': flat.get('custom.mob_kills', 0),
-            'damage_dealt': flat.get('custom.damage_dealt', 0),
-            'damage_taken': flat.get('custom.damage_taken', 0),
+            'playerKills': flat.get('custom.player_kills', 0),
+            'mobKills': flat.get('custom.mob_kills', 0),
+            'damageDealt': flat.get('custom.damage_dealt', 0),
+            'damageTaken': flat.get('custom.damage_taken', 0),
             'jumps': flat.get('custom.jump', 0),
-            'distance_walked_cm': flat.get('custom.walk_one_cm', 0),
+            'distanceWalkedCm': flat.get('custom.walk_one_cm', 0),
         }
         return api_success({'stats': flat, 'highlights': highlights})
     except Exception as e:
@@ -9088,7 +9096,7 @@ def get_player_inventory(server_id, uuid):
 def get_banned_ips(server_id):
     """Get banned IPs list (Bedrock exposes no client IPs)"""
     if _is_bedrock_server(server_id):
-        return api_success({'banned_ips': [], 'supported': False, 'message': BEDROCK_NO_BANS_MESSAGE})
+        return api_success({'bannedIps': [], 'supported': False, 'message': BEDROCK_NO_BANS_MESSAGE})
 
     server_path = server_manager.get_server_path(server_id)
     banned_ips_file = server_path / 'banned-ips.json'
@@ -9096,8 +9104,8 @@ def get_banned_ips(server_id):
         if banned_ips_file.exists():
             with open(banned_ips_file, 'r') as f:
                 banned_ips = json.load(f)
-            return api_success({'banned_ips': banned_ips})
-        return api_success({'banned_ips': []})
+            return api_success({'bannedIps': banned_ips})
+        return api_success({'bannedIps': []})
     except Exception as e:
         return api_error(str(e), 500)
 
@@ -9414,8 +9422,8 @@ def add_operator(server_id):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'add_op', 'player': label,
-             'permission': permission, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'add_op', 'player': label,
+             'permission': permission, 'serverName': server_name},
             target_id=server_id, execute_fn=do_bedrock_permission,
             description=f'{user.get("username","Unknown")} set "{label}" to {permission} on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9435,7 +9443,7 @@ def add_operator(server_id):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'add_op', 'player': live_name, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'add_op', 'player': live_name, 'serverName': server_name},
             target_id=server_id, execute_fn=do_add_op_live,
             description=f'{user.get("username","Unknown")} added operator "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9487,7 +9495,7 @@ def add_operator(server_id):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'add_op', 'player': actual_name, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'add_op', 'player': actual_name, 'serverName': server_name},
         target_id=server_id, execute_fn=do_add_op,
         description=f'{user.get("username","Unknown")} added operator "{actual_name}" on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -9561,7 +9569,7 @@ def remove_operator(server_id, uuid):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'remove_op', 'xuid': xuid, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'remove_op', 'xuid': xuid, 'serverName': server_name},
             target_id=server_id, execute_fn=do_bedrock_remove,
             description=f'{user.get("username","Unknown")} removed the permission entry for "{label}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9576,7 +9584,7 @@ def remove_operator(server_id, uuid):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'remove_op', 'uuid': uuid, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'remove_op', 'uuid': uuid, 'serverName': server_name},
             target_id=server_id, execute_fn=do_remove_live,
             description=f'{user.get("username","Unknown")} removed operator "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9599,7 +9607,7 @@ def remove_operator(server_id, uuid):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'remove_op', 'uuid': uuid, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'remove_op', 'uuid': uuid, 'serverName': server_name},
         target_id=server_id, execute_fn=do_remove,
         description=f'{user.get("username","Unknown")} removed operator on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -9681,7 +9689,7 @@ def add_to_whitelist(server_id):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'whitelist_add', 'player': name, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'whitelist_add', 'player': name, 'serverName': server_name},
             target_id=server_id, execute_fn=do_bedrock_allow,
             description=f'{user.get("username","Unknown")} added "{name}" to the allow list on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9700,7 +9708,7 @@ def add_to_whitelist(server_id):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'whitelist_add', 'player': live_name, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'whitelist_add', 'player': live_name, 'serverName': server_name},
             target_id=server_id, execute_fn=do_add_live,
             description=f'{user.get("username","Unknown")} whitelisted "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9748,7 +9756,7 @@ def add_to_whitelist(server_id):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'whitelist_add', 'player': actual_name, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'whitelist_add', 'player': actual_name, 'serverName': server_name},
         target_id=server_id, execute_fn=do_add,
         description=f'{user.get("username","Unknown")} whitelisted "{actual_name}" on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -9797,7 +9805,7 @@ def remove_from_whitelist(server_id, uuid):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'whitelist_remove', 'player': label, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'whitelist_remove', 'player': label, 'serverName': server_name},
             target_id=server_id, execute_fn=do_bedrock_remove_allow,
             description=f'{user.get("username","Unknown")} removed "{label}" from the allow list on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9812,7 +9820,7 @@ def remove_from_whitelist(server_id, uuid):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'whitelist_remove', 'uuid': uuid, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'whitelist_remove', 'uuid': uuid, 'serverName': server_name},
             target_id=server_id, execute_fn=do_remove_live,
             description=f'{user.get("username","Unknown")} removed "{live_name}" from whitelist on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9835,7 +9843,7 @@ def remove_from_whitelist(server_id, uuid):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'whitelist_remove', 'uuid': uuid, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'whitelist_remove', 'uuid': uuid, 'serverName': server_name},
         target_id=server_id, execute_fn=do_remove,
         description=f'{user.get("username","Unknown")} removed player from whitelist on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -9915,8 +9923,8 @@ def ban_player(server_id):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'ban', 'player': name,
-             'reason': ban_reason, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'ban', 'player': name,
+             'reason': ban_reason, 'serverName': server_name},
             target_id=server_id, execute_fn=do_bedrock_ban,
             description=f'{user.get("username","Unknown")} banned "{name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9939,7 +9947,7 @@ def ban_player(server_id):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'ban', 'player': live_name, 'reason': reason, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'ban', 'player': live_name, 'reason': reason, 'serverName': server_name},
             target_id=server_id, execute_fn=do_ban_live,
             description=f'{user.get("username","Unknown")} banned "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -9991,7 +9999,7 @@ def ban_player(server_id):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'ban', 'player': actual_name, 'reason': reason, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'ban', 'player': actual_name, 'reason': reason, 'serverName': server_name},
         target_id=server_id, execute_fn=do_ban,
         description=f'{user.get("username","Unknown")} banned "{actual_name}" on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10037,8 +10045,8 @@ def unban_player(server_id, uuid):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'unban',
-             'player': target_name or target_xuid, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'unban',
+             'player': target_name or target_xuid, 'serverName': server_name},
             target_id=server_id, execute_fn=do_bedrock_unban,
             description=f'{user.get("username","Unknown")} unbanned "{target_name or target_xuid}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -10053,7 +10061,7 @@ def unban_player(server_id, uuid):
 
         result, status = check_action_policy(
             'playerManagement', user,
-            {'server_id': server_id, 'action': 'unban', 'uuid': uuid, 'server_name': server_name},
+            {'serverId': server_id, 'action': 'unban', 'uuid': uuid, 'serverName': server_name},
             target_id=server_id, execute_fn=do_unban_live,
             description=f'{user.get("username","Unknown")} unbanned "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
@@ -10076,7 +10084,7 @@ def unban_player(server_id, uuid):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'unban', 'uuid': uuid, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'unban', 'uuid': uuid, 'serverName': server_name},
         target_id=server_id, execute_fn=do_unban,
         description=f'{user.get("username","Unknown")} unbanned a player on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10118,8 +10126,8 @@ def kick_player(server_id):
 
     result, status = check_action_policy(
         'playerManagement', user,
-        {'server_id': server_id, 'action': 'kick', 'player': name,
-         'reason': reason, 'server_name': server_name},
+        {'serverId': server_id, 'action': 'kick', 'player': name,
+         'reason': reason, 'serverName': server_name},
         target_id=server_id, execute_fn=do_kick,
         description=f'{user.get("username","Unknown")} kicked "{name}" on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10369,7 +10377,7 @@ def zip_server_folder(server_id):
     server_name = cfg.get('name', server_id)
     job_id = job_manager.submit(
         'zip_download', f'Zip {folder_name}: {server_name}',
-        params={'server_id': server_id, 'requested_path': requested_path},
+        params={'serverId': server_id, 'requestedPath': requested_path},
         created_by=get_current_user()[0],
         server_id=server_id
     )
@@ -10407,7 +10415,7 @@ def upload_server_file(server_id):
 
     result, status = check_action_policy(
         'fileUpload', user,
-        {'server_id': server_id, 'filename': filename, 'path': target_path, 'server_name': server_name},
+        {'serverId': server_id, 'filename': filename, 'path': target_path, 'serverName': server_name},
         target_id=server_id, execute_fn=do_upload,
         description=f'{user.get("username","Unknown")} uploaded "{filename}" to "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10494,7 +10502,7 @@ def upload_mod(server_id):
 
     result, status = check_action_policy(
         'modManagement', user,
-        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'upload', 'server_name': server_name},
+        {'serverId': server_id, 'filename': filename, 'modType': mod_type, 'action': 'upload', 'serverName': server_name},
         target_id=server_id, execute_fn=do_upload,
         description=f'{user.get("username","Unknown")} uploaded {mod_type[:-1]} "{filename}" to "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10532,7 +10540,7 @@ def enable_mod(server_id, mod_type, filename):
 
     result, status = check_action_policy(
         'modManagement', user,
-        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'enable', 'server_name': server_name},
+        {'serverId': server_id, 'filename': filename, 'modType': mod_type, 'action': 'enable', 'serverName': server_name},
         target_id=server_id, execute_fn=do_enable,
         description=f'{user.get("username","Unknown")} enabled {mod_type[:-1]} "{enabled_name}" on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10569,7 +10577,7 @@ def disable_mod(server_id, mod_type, filename):
 
     result, status = check_action_policy(
         'modManagement', user,
-        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'disable', 'server_name': server_name},
+        {'serverId': server_id, 'filename': filename, 'modType': mod_type, 'action': 'disable', 'serverName': server_name},
         target_id=server_id, execute_fn=do_disable,
         description=f'{user.get("username","Unknown")} disabled {mod_type[:-1]} "{filename}" on "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10605,7 +10613,7 @@ def delete_mod(server_id, mod_type, filename):
 
     result, status = check_action_policy(
         'modManagement', user,
-        {'server_id': server_id, 'filename': filename, 'mod_type': mod_type, 'action': 'delete', 'server_name': server_name},
+        {'serverId': server_id, 'filename': filename, 'modType': mod_type, 'action': 'delete', 'serverName': server_name},
         target_id=server_id, execute_fn=do_delete,
         description=f'{user.get("username","Unknown")} deleted {mod_type[:-1]} "{filename}" from "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -10629,9 +10637,9 @@ def _modrinth_get(path, params=None, timeout=15):
 def modrinth_search(server_id):
     """Proxy a Modrinth project search to keep credentials/UA server-side."""
     query        = request.args.get('query', '').strip()
-    project_type = request.args.get('project_type', 'mod')   # mod | plugin | modpack
+    project_type = request.args.get('projectType', 'mod')   # mod | plugin | modpack
     loader       = request.args.get('loader', '')             # fabric, forge, spigot, paper …
-    mc_version   = request.args.get('mc_version', '')
+    mc_version   = request.args.get('mcVersion', '')
     limit        = min(int(request.args.get('limit', 20)), 50)
     offset       = max(int(request.args.get('offset', 0)), 0)
 
@@ -10669,24 +10677,24 @@ def modrinth_search(server_id):
         hits = []
         for h in data.get('hits', []):
             hits.append({
-                'project_id':    h.get('project_id'),
-                'slug':          h.get('slug'),
-                'title':         h.get('title'),
-                'description':   h.get('description'),
-                'icon_url':      h.get('icon_url'),
-                'downloads':     h.get('downloads', 0),
-                'categories':    h.get('categories', []),
-                'versions':      h.get('versions', []),
-                'game_versions': h.get('display_categories', h.get('versions', [])),
-                'latest_version': h.get('latest_version'),
-                'project_type':  h.get('project_type'),
-                'author':        h.get('author'),
+                'projectId':    h.get('project_id'),
+                'slug':         h.get('slug'),
+                'title':        h.get('title'),
+                'description':  h.get('description'),
+                'iconUrl':      h.get('icon_url'),
+                'downloads':    h.get('downloads', 0),
+                'categories':   h.get('categories', []),
+                'versions':     h.get('versions', []),
+                'gameVersions': h.get('display_categories', h.get('versions', [])),
+                'latestVersion': h.get('latest_version'),
+                'projectType':  h.get('project_type'),
+                'author':       h.get('author'),
             })
         return api_success({
-            'hits':       hits,
-            'total_hits': data.get('total_hits', 0),
-            'offset':     data.get('offset', 0),
-            'limit':      data.get('limit', limit),
+            'hits':     hits,
+            'totalHits': data.get('total_hits', 0),
+            'offset':   data.get('offset', 0),
+            'limit':    data.get('limit', limit),
         })
     except requests.exceptions.Timeout:
         return api_error('Modrinth API timed out', 504)
@@ -10703,7 +10711,7 @@ def modrinth_project_versions(server_id, project_id):
         return api_error('Invalid project ID', 400)
 
     loader     = request.args.get('loader', '')
-    mc_version = request.args.get('mc_version', '')
+    mc_version = request.args.get('mcVersion', '')
 
     params = {'include_changelog': 'false'}
     if loader:
@@ -10722,17 +10730,17 @@ def modrinth_project_versions(server_id, project_id):
             if jar_file is None:
                 continue
             slim.append({
-                'version_id':    v.get('id'),
-                'version_number': v.get('version_number'),
-                'name':          v.get('name'),
-                'loaders':       v.get('loaders', []),
-                'game_versions': v.get('game_versions', []),
-                'date_published': v.get('date_published'),
-                'filename':      jar_file['filename'],
-                'url':           jar_file['url'],
-                'size':          jar_file.get('size', 0),
-                'sha512':        jar_file.get('hashes', {}).get('sha512'),
-                'sha1':          jar_file.get('hashes', {}).get('sha1'),
+                'versionId':    v.get('id'),
+                'versionNumber': v.get('version_number'),
+                'name':         v.get('name'),
+                'loaders':      v.get('loaders', []),
+                'gameVersions': v.get('game_versions', []),
+                'datePublished': v.get('date_published'),
+                'filename':     jar_file['filename'],
+                'url':          jar_file['url'],
+                'size':         jar_file.get('size', 0),
+                'sha512':       jar_file.get('hashes', {}).get('sha512'),
+                'sha1':         jar_file.get('hashes', {}).get('sha1'),
             })
         return api_success({'versions': slim})
     except requests.exceptions.Timeout:
@@ -10749,14 +10757,14 @@ def modrinth_install(server_id):
     data       = request.get_json()
     url        = data.get('url', '').strip()
     filename   = data.get('filename', '').strip()
-    mod_type   = data.get('mod_type', 'mods')   # 'mods' or 'plugins'
+    mod_type   = data.get('modType', 'mods')   # 'mods' or 'plugins'
     sha512_expected = data.get('sha512', '')
 
     # Validate inputs
     if not url or not filename:
         return api_error('url and filename are required', 400)
     if mod_type not in ('mods', 'plugins'):
-        return api_error('mod_type must be mods or plugins', 400)
+        return api_error('modType must be mods or plugins', 400)
     if not filename.endswith('.jar'):
         return api_error('filename must be a .jar file', 400)
 
@@ -10806,7 +10814,7 @@ def check_mod_updates(server_id):
     """Check installed mods/plugins for available updates via Modrinth's hash lookup."""
     server_path  = server_manager.get_server_path(server_id)
     loader       = request.args.get('loader', '')
-    mc_version   = request.args.get('mc_version', '')
+    mc_version   = request.args.get('mcVersion', '')
 
     jar_files = []
     for folder in ('mods', 'plugins'):
@@ -10817,7 +10825,7 @@ def check_mod_updates(server_id):
                     jar_files.append({'path': item, 'folder': folder})
 
     if not jar_files:
-        return api_success({'updates': [], 'not_on_modrinth': []})
+        return api_success({'updates': [], 'notOnModrinth': []})
 
     # Compute SHA-512 hashes for all jars
     hashes = {}
@@ -10832,7 +10840,7 @@ def check_mod_updates(server_id):
             pass
 
     if not hashes:
-        return api_success({'updates': [], 'not_on_modrinth': []})
+        return api_success({'updates': [], 'notOnModrinth': []})
 
     # Ask Modrinth for the latest version matching these hashes
     try:
@@ -10873,22 +10881,22 @@ def check_mod_updates(server_id):
 
             if latest_hash and latest_hash != current_hash:
                 updates.append({
-                    'current_filename': entry['path'].name,
-                    'folder':           entry['folder'],
-                    'project_id':       latest.get('project_id'),
-                    'version_id':       latest.get('id'),
-                    'version_number':   latest.get('version_number'),
-                    'filename':         jar_file['filename'] if jar_file else '',
-                    'url':              jar_file['url'] if jar_file else '',
-                    'sha512':           latest_hash,
-                    'size':             jar_file.get('size', 0) if jar_file else 0,
+                    'currentFilename': entry['path'].name,
+                    'folder':          entry['folder'],
+                    'projectId':       latest.get('project_id'),
+                    'versionId':       latest.get('id'),
+                    'versionNumber':   latest.get('version_number'),
+                    'filename':        jar_file['filename'] if jar_file else '',
+                    'url':             jar_file['url'] if jar_file else '',
+                    'sha512':          latest_hash,
+                    'size':            jar_file.get('size', 0) if jar_file else 0,
                 })
         else:
             not_on_modrinth.append(entry['path'].name)
 
     return api_success({
-        'updates':         updates,
-        'not_on_modrinth': not_on_modrinth,
+        'updates':        updates,
+        'notOnModrinth':  not_on_modrinth,
     })
 
 
@@ -11192,8 +11200,8 @@ def list_backups(server_id):
                 'name': item.name,
                 'size': stat.st_size,
                 'created': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                'is_scheduled': item.name.startswith('scheduled-backup-'),
-                'has_checksum': item.with_suffix('.sha256').exists()
+                'isScheduled': item.name.startswith('scheduled-backup-'),
+                'hasChecksum': item.with_suffix('.sha256').exists()
             }
             backups.append(entry)
 
@@ -11233,10 +11241,10 @@ def create_backup(server_id):
 
     cfg = server_manager.get_server_config(server_id) or {}
     server_name = cfg.get('name', server_id)
-    job_params = {'server_id': server_id, 'compression_level': compression_level,
-                  'backup_type': backup_type}
+    job_params = {'serverId': server_id, 'compressionLevel': compression_level,
+                  'backupType': backup_type}
     if custom_name:
-        job_params['custom_name'] = custom_name
+        job_params['customName'] = custom_name
 
     def do_backup():
         job_id = job_manager.submit(
@@ -11246,7 +11254,7 @@ def create_backup(server_id):
 
     result, status = check_action_policy(
         'backupCreate', user,
-        {**job_params, 'server_name': server_name},
+        {**job_params, 'serverName': server_name},
         target_id=server_id, execute_fn=do_backup,
         description=f'{user.get("username","Unknown")} created backup for "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -11313,7 +11321,7 @@ def delete_backup(server_id):
 
     result, status = check_action_policy(
         'backupDelete', user,
-        {'server_id': server_id, 'backup_name': backup_name, 'server_name': server_name},
+        {'serverId': server_id, 'backupName': backup_name, 'serverName': server_name},
         target_id=server_id, execute_fn=do_delete,
         description=f'{user.get("username","Unknown")} deleted backup "{backup_name}" from "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
@@ -11382,7 +11390,7 @@ def restore_backup(server_id):
     server_name = cfg.get('name', server_id)
     job_id = job_manager.submit(
         'restore', f'Restore: {server_name}',
-        params={'server_id': server_id, 'backup_name': backup_name},
+        params={'serverId': server_id, 'backupName': backup_name},
         created_by=get_current_user()[0],
         server_id=server_id
     )
@@ -12200,9 +12208,9 @@ def api_get_current_version():
 
         return api_success({
             'version': version,
-            'version_source': source,
-            'commit_date': commit_date,
-            'installed_at': str(BASE_DIR)
+            'versionSource': source,
+            'commitDate': commit_date,
+            'installedAt': str(BASE_DIR)
         })
     except Exception as e:
         print(f"[API] Error getting version: {e}")
@@ -12273,7 +12281,7 @@ def api_system_os_status():
     return api_success({
         'version': data.get('version', 'unknown'),
         'pending': pending,
-        'reboot_required': data.get('reboot_required') == '1',
+        'rebootRequired': data.get('reboot_required') == '1',
         'kernel': data.get('kernel', ''),
         'java': data.get('java', ''),
     })
@@ -12363,56 +12371,56 @@ class JarBucketManager:
             'name': 'Vanilla',
             'description': 'Official Minecraft Java Edition server',
             'category': 'java',
-            'api_url': 'https://launchermeta.mojang.com/mc/game/version_manifest.json',
+            'apiUrl': 'https://launchermeta.mojang.com/mc/game/version_manifest.json',
             'icon': '🎮'
         },
         'bedrock': {
             'name': 'Bedrock',
             'description': 'Official Minecraft Bedrock Edition server',
             'category': 'bedrock',
-            'api_url': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links',
+            'apiUrl': 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links',
             'icon': '🪨'
         },
         'paper': {
             'name': 'Paper',
             'description': 'High-performance Spigot fork with optimizations',
             'category': 'modded',
-            'api_url': 'https://fill.papermc.io/v3/',
+            'apiUrl': 'https://fill.papermc.io/v3/',
             'icon': '📄'
         },
         'purpur': {
             'name': 'Purpur',
             'description': 'Paper fork with extra features and configuration',
             'category': 'modded',
-            'api_url': 'https://api.purpurmc.org/v2/purpur/',
+            'apiUrl': 'https://api.purpurmc.org/v2/purpur/',
             'icon': '💜'
         },
         'folia': {
             'name': 'Folia',
             'description': 'Paper fork for multi-threaded regions',
             'category': 'modded',
-            'api_url': 'https://fill.papermc.io/v3/',
+            'apiUrl': 'https://fill.papermc.io/v3/',
             'icon': '🌿'
         },
         'spigot': {
             'name': 'Spigot',
             'description': 'Modified Minecraft server with Bukkit plugin support',
             'category': 'modded',
-            'api_url': 'https://hub.spigotmc.org/versions/',
+            'apiUrl': 'https://hub.spigotmc.org/versions/',
             'icon': '🔧'
         },
         'fabric': {
             'name': 'Fabric',
             'description': 'Lightweight mod loader for Minecraft',
             'category': 'modded',
-            'api_url': 'https://meta.fabricmc.net/v2/versions/',
+            'apiUrl': 'https://meta.fabricmc.net/v2/versions/',
             'icon': '🧵'
         },
         'forge': {
             'name': 'Forge',
             'description': 'Popular mod loader for Minecraft mods',
             'category': 'modded',
-            'api_url': 'https://maven.minecraftforge.net/net/minecraftforge/forge/',
+            'apiUrl': 'https://maven.minecraftforge.net/net/minecraftforge/forge/',
 
             'icon': '⚒️'
         },
@@ -12420,7 +12428,7 @@ class JarBucketManager:
             'name': 'NeoForge',
             'description': 'Modern community-driven Forge fork',
             'category': 'modded',
-            'api_url': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/',
+            'apiUrl': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/',
             'icon': '🔨'
         }
     }
@@ -12431,54 +12439,54 @@ class JarBucketManager:
     # are str.format templates and must keep every listed placeholder.
     LINK_FIELDS = {
         'vanilla': {
-            'api_url': {'label': 'Version manifest URL', 'default': SERVER_TYPES['vanilla']['api_url']},
+            'apiUrl': {'label': 'Version manifest URL', 'default': SERVER_TYPES['vanilla']['apiUrl']},
         },
         'bedrock': {
-            'api_url': {'label': 'Download links API URL', 'default': SERVER_TYPES['bedrock']['api_url']},
+            'apiUrl': {'label': 'Download links API URL', 'default': SERVER_TYPES['bedrock']['apiUrl']},
         },
         'paper': {
-            'api_url': {'label': 'PaperMC API base URL', 'default': SERVER_TYPES['paper']['api_url']},
+            'apiUrl': {'label': 'PaperMC API base URL', 'default': SERVER_TYPES['paper']['apiUrl']},
         },
         'purpur': {
-            'api_url': {'label': 'Purpur API base URL', 'default': SERVER_TYPES['purpur']['api_url']},
+            'apiUrl': {'label': 'Purpur API base URL', 'default': SERVER_TYPES['purpur']['apiUrl']},
         },
         'folia': {
-            'api_url': {'label': 'PaperMC API base URL', 'default': SERVER_TYPES['folia']['api_url']},
+            'apiUrl': {'label': 'PaperMC API base URL', 'default': SERVER_TYPES['folia']['apiUrl']},
         },
         'spigot': {
-            'api_url': {'label': 'Version listing URL', 'default': SERVER_TYPES['spigot']['api_url']},
-            'buildtools_url': {
+            'apiUrl': {'label': 'Version listing URL', 'default': SERVER_TYPES['spigot']['apiUrl']},
+            'buildtoolsUrl': {
                 'label': 'BuildTools JAR URL',
                 'default': 'https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar'
             },
         },
         'fabric': {
-            'api_url': {'label': 'Fabric meta API base URL', 'default': SERVER_TYPES['fabric']['api_url']},
-            'download_template': {
+            'apiUrl': {'label': 'Fabric meta API base URL', 'default': SERVER_TYPES['fabric']['apiUrl']},
+            'downloadTemplate': {
                 'label': 'Server JAR URL template',
                 'default': 'https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/{installer_version}/server/jar',
                 'placeholders': ['game_version', 'loader_version', 'installer_version'],
             },
         },
         'forge': {
-            'api_url': {'label': 'Maven base URL', 'default': SERVER_TYPES['forge']['api_url']},
-            'metadata_url': {
+            'apiUrl': {'label': 'Maven base URL', 'default': SERVER_TYPES['forge']['apiUrl']},
+            'metadataUrl': {
                 'label': 'Maven metadata XML URL',
                 'default': 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml'
             },
-            'installer_template': {
+            'installerTemplate': {
                 'label': 'Installer URL template',
                 'default': 'https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar',
                 'placeholders': ['mc_version', 'forge_version'],
             },
         },
         'neoforge': {
-            'api_url': {'label': 'Maven base URL', 'default': SERVER_TYPES['neoforge']['api_url']},
-            'metadata_url': {
+            'apiUrl': {'label': 'Maven base URL', 'default': SERVER_TYPES['neoforge']['apiUrl']},
+            'metadataUrl': {
                 'label': 'Maven metadata XML URL',
                 'default': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml'
             },
-            'installer_template': {
+            'installerTemplate': {
                 'label': 'Installer URL template',
                 'default': 'https://maven.neoforged.net/releases/net/neoforged/neoforge/{neoforge_version}/neoforge-{neoforge_version}-installer.jar',
                 'placeholders': ['neoforge_version'],
@@ -12542,7 +12550,7 @@ class JarBucketManager:
 
     def _load_cache(self):
         """Load cached version data from file"""
-        default = {'last_updated': None, 'versions': {}}
+        default = {'lastUpdated': None, 'versions': {}}
         if JAR_CACHE_FILE.exists():
             try:
                 with open(JAR_CACHE_FILE, 'r') as f:
@@ -12589,7 +12597,7 @@ class JarBucketManager:
             print(f"[JarBucket] Error loading link overrides: {e}")
             return {}
 
-    def get_link(self, server_type, field='api_url'):
+    def get_link(self, server_type, field='apiUrl'):
         """Effective link for a type/field: operator override if set, else built-in default"""
         override = self.link_overrides.get(server_type, {}).get(field)
         if override:
@@ -12687,7 +12695,7 @@ class JarBucketManager:
 
         # Drop cached version lists and resolved download URLs — they were fetched
         # from the old links and may be stale or wrong for the new ones.
-        self.cache = {'last_updated': None, 'versions': {}, 'download_urls': {}}
+        self.cache = {'lastUpdated': None, 'versions': {}, 'downloadUrls': {}}
         self._save_cache()
         return {'success': True, 'errors': []}
 
@@ -12718,17 +12726,17 @@ class JarBucketManager:
 
     def _is_cache_valid(self, server_type=None):
         """Check if cache is still valid (not too old)"""
-        if not self.cache.get('last_updated'):
+        if not self.cache.get('lastUpdated'):
             return False
         
         # Check specific server type cache
         if server_type:
             type_cache = self.cache.get('versions', {}).get(server_type)
-            if not type_cache or not type_cache.get('last_updated'):
+            if not type_cache or not type_cache.get('lastUpdated'):
                 return False
-            last_updated = datetime.fromisoformat(type_cache['last_updated'])
+            last_updated = datetime.fromisoformat(type_cache['lastUpdated'])
         else:
-            last_updated = datetime.fromisoformat(self.cache['last_updated'])
+            last_updated = datetime.fromisoformat(self.cache['lastUpdated'])
         
         age_hours = (datetime.now() - last_updated).total_seconds() / 3600
         return age_hours < JAR_CACHE_MAX_AGE_HOURS
@@ -12743,7 +12751,7 @@ class JarBucketManager:
                 continue
             entry = {'id': type_id, **info}
             if type_id in self.LINK_FIELDS:
-                entry['api_url'] = self.get_link(type_id)  # reflect operator overrides
+                entry['apiUrl'] = self.get_link(type_id)  # reflect operator overrides
             types_by_category.setdefault(category, []).append(entry)
 
         return types_by_category
@@ -12905,7 +12913,7 @@ class JarBucketManager:
             if not loader_version or not installer_version:
                 print(f"[JarBucket] Could not resolve Fabric loader/installer versions from API")
                 return None, None
-            download_url = self.get_link('fabric', 'download_template').format(
+            download_url = self.get_link('fabric', 'downloadTemplate').format(
                 game_version=game_version,
                 loader_version=loader_version,
                 installer_version=installer_version
@@ -12960,7 +12968,7 @@ class JarBucketManager:
         import re
         import xml.etree.ElementTree as ET
         try:
-            url = self.get_link('forge', 'metadata_url')
+            url = self.get_link('forge', 'metadataUrl')
             response = requests.get(url, timeout=20)
             if response.status_code == 200:
                 root = ET.fromstring(response.text)
@@ -12999,7 +13007,7 @@ class JarBucketManager:
         """Dynamically fetch NeoForge versions from Maven metadata (mc_version -> neoforge_version map)"""
         import xml.etree.ElementTree as ET
         try:
-            url = self.get_link('neoforge', 'metadata_url')
+            url = self.get_link('neoforge', 'metadataUrl')
             response = requests.get(url, timeout=20)
             if response.status_code == 200:
                 root = ET.fromstring(response.text)
@@ -13058,11 +13066,11 @@ class JarBucketManager:
     def _get_cached_url(self, server_type, version):
         """Return a cached download URL entry if it is still within the max-age window"""
         cache_key = f'{server_type}::{version}'
-        entry = self.cache.get('download_urls', {}).get(cache_key)
-        if not entry or not entry.get('cached_at'):
+        entry = self.cache.get('downloadUrls', {}).get(cache_key)
+        if not entry or not entry.get('cachedAt'):
             return None
         try:
-            cached_at = datetime.fromisoformat(entry['cached_at'])
+            cached_at = datetime.fromisoformat(entry['cachedAt'])
             age_hours = (datetime.now() - cached_at).total_seconds() / 3600
             if age_hours < JAR_URL_CACHE_MAX_AGE_HOURS:
                 return entry
@@ -13073,11 +13081,11 @@ class JarBucketManager:
     def _store_cached_url(self, server_type, version, url_info):
         """Persist a resolved download URL into the cache file"""
         cache_key = f'{server_type}::{version}'
-        if 'download_urls' not in self.cache:
-            self.cache['download_urls'] = {}
-        self.cache['download_urls'][cache_key] = {
+        if 'downloadUrls' not in self.cache:
+            self.cache['downloadUrls'] = {}
+        self.cache['downloadUrls'][cache_key] = {
             **url_info,
-            'cached_at': datetime.now().isoformat()
+            'cachedAt': datetime.now().isoformat()
         }
         self._save_cache()
 
@@ -13100,7 +13108,7 @@ class JarBucketManager:
             versions = self._fetch_purpur_versions()
         elif server_type == 'vanilla':
             vanilla_data = self._fetch_vanilla_versions()
-            versions = [{'version': v['id'], 'manifest_url': v['url']} for v in vanilla_data]
+            versions = [{'version': v['id'], 'manifestUrl': v['url']} for v in vanilla_data]
         elif server_type == 'fabric':
             versions = self._fetch_fabric_versions()
         elif server_type == 'forge':
@@ -13138,10 +13146,10 @@ class JarBucketManager:
             if 'versions' not in self.cache:
                 self.cache['versions'] = {}
             self.cache['versions'][server_type] = {
-                'last_updated': datetime.now().isoformat(),
+                'lastUpdated': datetime.now().isoformat(),
                 'data': versions
             }
-            self.cache['last_updated'] = datetime.now().isoformat()
+            self.cache['lastUpdated'] = datetime.now().isoformat()
             self._save_cache()
         
         return versions
@@ -13151,9 +13159,9 @@ class JarBucketManager:
         # Spigot has no downloadable JAR — short-circuit before cache check
         if server_type == 'spigot':
             return {
-                'requires_build': True,
+                'requiresBuild': True,
                 'message': 'Spigot requires BuildTools to compile. Download BuildTools and run: java -jar BuildTools.jar --rev ' + version,
-                'buildtools_url': self.get_link('spigot', 'buildtools_url')
+                'buildtoolsUrl': self.get_link('spigot', 'buildtoolsUrl')
             }
 
         # Return cached URL if still fresh
@@ -13163,7 +13171,7 @@ class JarBucketManager:
                 'url': cached['url'],
                 'hash': cached.get('hash'),
                 'filename': cached['filename'],
-                'hash_type': cached.get('hash_type', 'sha256')
+                'hashType': cached.get('hashType', 'sha256')
             }
 
         download_url = None
@@ -13181,7 +13189,7 @@ class JarBucketManager:
             vanilla_versions = self.get_versions('vanilla')
             for v in vanilla_versions:
                 if isinstance(v, dict) and v.get('version') == version:
-                    download_url, file_hash = self._fetch_vanilla_download_url(v['manifest_url'])
+                    download_url, file_hash = self._fetch_vanilla_download_url(v['manifestUrl'])
                     break
             filename = f"vanilla-{version}.jar"
         elif server_type == 'fabric':
@@ -13192,14 +13200,14 @@ class JarBucketManager:
             forge_map = self.cache.get('versions', {}).get('forge', {}).get('forge_map') or self._fetch_forge_versions()
             forge_ver = forge_map.get(version) if forge_map else None
             if forge_ver:
-                download_url = self.get_link('forge', 'installer_template').format(
+                download_url = self.get_link('forge', 'installerTemplate').format(
                     mc_version=version, forge_version=forge_ver)
                 filename = f"forge-{version}-{forge_ver}-installer.jar"
         elif server_type == 'neoforge':
             neo_map = self.cache.get('versions', {}).get('neoforge', {}).get('neoforge_map') or self._fetch_neoforge_versions()
             neo_ver = neo_map.get(version) if neo_map else None
             if neo_ver:
-                download_url = self.get_link('neoforge', 'installer_template').format(
+                download_url = self.get_link('neoforge', 'installerTemplate').format(
                     neoforge_version=neo_ver)
                 filename = f"neoforge-{neo_ver}-installer.jar"
         elif server_type == 'bedrock':
@@ -13211,7 +13219,7 @@ class JarBucketManager:
                 'url': download_url,
                 'hash': file_hash,
                 'filename': filename,
-                'hash_type': 'sha256' if file_hash and len(file_hash) == 64 else 'sha1'
+                'hashType': 'sha256' if file_hash and len(file_hash) == 64 else 'sha1'
             }
             # Cache the resolved URL so the next request doesn't need to poll the API
             self._store_cached_url(server_type, version, result)
@@ -13234,8 +13242,8 @@ class JarBucketManager:
         if not download_info:
             return {'success': False, 'error': 'Could not find download URL for this version'}
 
-        if download_info.get('requires_build'):
-            return {'success': False, 'error': download_info.get('message'), 'requires_build': True}
+        if download_info.get('requiresBuild'):
+            return {'success': False, 'error': download_info.get('message'), 'requiresBuild': True}
 
         url = download_info['url']
         filename = download_info['filename']
@@ -13293,7 +13301,7 @@ class JarBucketManager:
 
             # Verify hash if available
             if download_info.get('hash'):
-                file_hash = self._calculate_hash(filepath, download_info.get('hash_type', 'sha256'))
+                file_hash = self._calculate_hash(filepath, download_info.get('hashType', 'sha256'))
                 if file_hash != download_info['hash']:
                     filepath.unlink()  # Delete mismatched file
                     return {'success': False, 'error': 'Hash verification failed'}
@@ -13438,7 +13446,7 @@ class JarBucketManager:
 
                 results[server_type] = {
                     'versions': len(versions),
-                    'urls_cached': urls_cached,
+                    'urlsCached': urls_cached,
                     'errors': errors
                 }
             except Exception as exc:
@@ -13550,7 +13558,7 @@ def api_jar_bucket_versions(server_type):
             normalized.append(version_str)
 
     return api_success({
-        'server_type': server_type,
+        'serverType': server_type,
         'versions': normalized,
         'count': len(normalized)
     })
@@ -13595,7 +13603,7 @@ def api_jar_bucket_download():
     thread = threading.Thread(target=do_download, daemon=True)
     thread.start()
 
-    return api_success(progress_id=progress_id,
+    return api_success(progressId=progress_id,
                         message=f'Starting download of {server_type} {version}')
 
 @app.route('/api/jar-bucket/queue-download', methods=['POST'])
@@ -13632,7 +13640,7 @@ def api_jar_bucket_queue_download():
         and (j.get('params') or {}).get('version') == version
     ]
     if existing:
-        return api_success(job_id=existing[0]['id'], duplicate=True,
+        return api_success(jobId=existing[0]['id'], duplicate=True,
                             message=f'{server_type} {version} is already downloading')
 
     job_id = job_manager.submit(
@@ -13641,7 +13649,7 @@ def api_jar_bucket_queue_download():
         params={'type': server_type, 'version': version},
         created_by=user_id,
     )
-    return api_success(job_id=job_id,
+    return api_success(jobId=job_id,
                         message=f'Queued download of {server_type} {version}')
 
 @app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
@@ -13832,7 +13840,7 @@ def api_jar_bucket_refresh_all():
     threading.Thread(target=do_refresh, daemon=True).start()
 
     return api_success(
-        refresh_id=refresh_id,
+        refreshId=refresh_id,
         message='Full version refresh started — poll /api/jar-bucket/progress/' + refresh_id
     )
 
@@ -13895,7 +13903,7 @@ def api_jar_bucket_all_versions(server_type):
             })
 
     return api_success({
-        'server_type': server_type,
+        'serverType': server_type,
         'versions': result,
         'count': len(result)
     })

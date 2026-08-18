@@ -2331,12 +2331,12 @@ async function createFreshServer(e) {
           return;
         }
 
-        if (!setupResult.progress_id) {
+        if (!setupResult.progressId) {
           failAtCurrentStep('Failed to start Bedrock download — no progress ID returned');
           return;
         }
 
-        const progressId = setupResult.progress_id;
+        const progressId = setupResult.progressId;
         let setupComplete = false;
         let pollCount = 0;
         const maxPolls = 720;
@@ -2472,12 +2472,12 @@ async function createFreshServer(e) {
         return;
       }
       
-      if (!downloadResult.progress_id) {
+      if (!downloadResult.progressId) {
         resetOnError('Failed to start download - no progress ID returned');
         return;
       }
-      
-      const progressId = downloadResult.progress_id;
+
+      const progressId = downloadResult.progressId;
       let downloadComplete = false;
       let downloadError = null;
       let pollCount = 0;
@@ -2791,12 +2791,12 @@ async function importWorld(e) {
         return;
       }
 
-      if (!downloadResult.progress_id) {
+      if (!downloadResult.progressId) {
         resetOnError('Failed to start download — no progress ID returned');
         return;
       }
 
-      const progressId = downloadResult.progress_id;
+      const progressId = downloadResult.progressId;
       let done = false;
       let dlError = null;
       let polls = 0;
@@ -4213,11 +4213,11 @@ async function loadBackups() {
     data.backups.forEach(backup => {
       const row = document.createElement('tr');
       let prefix = '';
-      if (backup.is_scheduled) prefix = '📅 ';
+      if (backup.isScheduled) prefix = '📅 ';
       const expiredBadge = backup.expired
         ? '<span class="badge badge-warning" title="This backup exceeds the retention limit">⚠️ Expired</span> '
         : '';
-      const checksumBadge = backup.has_checksum
+      const checksumBadge = backup.hasChecksum
         ? '<span class="badge badge-success" title="Checksum present">✓</span>'
         : '';
       row.innerHTML = `
@@ -4466,8 +4466,8 @@ async function loadBackupHistory() {
       const row = document.createElement('tr');
       const time = new Date(evt.timestamp).toLocaleString();
       const typeLabel = typeLabels[evt.type] || escapeHtml(evt.type || '');
-      const fileName = evt.backup_name
-        ? `<span title="${escapeHtml(evt.backup_name)}">${escapeHtml(evt.backup_name.substring(0, 36))}${evt.backup_name.length > 36 ? '…' : ''}</span>`
+      const fileName = evt.backupName
+        ? `<span title="${escapeHtml(evt.backupName)}">${escapeHtml(evt.backupName.substring(0, 36))}${evt.backupName.length > 36 ? '…' : ''}</span>`
         : '—';
       const size = evt.size ? formatBytes(evt.size) : '—';
       const status = evt.success
@@ -5246,11 +5246,11 @@ async function doModrinthSearch(pageOffset = 0) {
   try {
     const params = new URLSearchParams({
       query,
-      project_type: type,
+      projectType: type,
       loader,
-      mc_version:   mcVersion,
-      limit:        MODRINTH_PAGE_SIZE,
-      offset:       pageOffset,
+      mcVersion:  mcVersion,
+      limit:      MODRINTH_PAGE_SIZE,
+      offset:     pageOffset,
     });
 
     const data = await apiRequest(`/api/servers/${currentServerId}/mods/search?${params}`);
@@ -5265,8 +5265,8 @@ async function doModrinthSearch(pageOffset = 0) {
       const card = document.createElement('div');
       card.className = 'modrinth-card';
 
-      const iconHtml = hit.icon_url
-        ? `<img class="modrinth-icon" src="${escapeHtml(hit.icon_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      const iconHtml = hit.iconUrl
+        ? `<img class="modrinth-icon" src="${escapeHtml(hit.iconUrl)}" alt="" loading="lazy" onerror="this.style.display='none'">`
         : `<div class="modrinth-icon-placeholder">📦</div>`;
 
       const dlFormatted = hit.downloads >= 1_000_000
@@ -5285,7 +5285,7 @@ async function doModrinthSearch(pageOffset = 0) {
             ${hit.categories.slice(0, 3).map(c => `<span class="badge badge-secondary">${escapeHtml(c)}</span>`).join('')}
           </div>
           <button class="btn btn-success btn-small modrinth-install-btn"
-                  onclick="openModrinthVersionModal('${escapeHtml(hit.project_id)}', '${escapeHtml(hit.title)}')">
+                  onclick="openModrinthVersionModal('${escapeHtml(hit.projectId)}', '${escapeHtml(hit.title)}')">
             Install
           </button>
         </div>
@@ -5294,7 +5294,7 @@ async function doModrinthSearch(pageOffset = 0) {
     });
 
     // Pagination
-    const total = data.total_hits;
+    const total = data.totalHits;
     if (total > MODRINTH_PAGE_SIZE) {
       const paginEl = document.getElementById('modrinth-pagination');
       const currentPage = Math.floor(pageOffset / MODRINTH_PAGE_SIZE) + 1;
@@ -5331,7 +5331,7 @@ async function openModrinthVersionModal(projectId, projectTitle) {
   const mcVersion = document.getElementById('modrinth-mcversion').value.trim();
 
   try {
-    const params = new URLSearchParams({ loader, mc_version: mcVersion });
+    const params = new URLSearchParams({ loader, mcVersion: mcVersion });
     const data = await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/versions/${encodeURIComponent(projectId)}?${params}`);
 
     const versions = data.versions || [];
@@ -5347,9 +5347,9 @@ async function openModrinthVersionModal(projectId, projectTitle) {
       const row = document.createElement('div');
       row.className = 'modrinth-version-row';
       row.innerHTML = `
-        <span class="modrinth-ver-name">${escapeHtml(v.name || v.version_number)}</span>
+        <span class="modrinth-ver-name">${escapeHtml(v.name || v.versionNumber)}</span>
         <span class="modrinth-ver-loaders">${v.loaders.join(', ')}</span>
-        <span class="modrinth-ver-mc">${v.game_versions.slice(-3).join(', ')}</span>
+        <span class="modrinth-ver-mc">${v.gameVersions.slice(-3).join(', ')}</span>
         <span class="modrinth-ver-size">${formatBytes(v.size)}</span>
         <button class="btn btn-success btn-small"
                 onclick="installModrinthVersion(
@@ -5386,7 +5386,7 @@ async function installModrinthVersion(url, filename, sha512) {
   try {
     await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
       method: 'POST',
-      body: JSON.stringify({ url, filename, mod_type: modType, sha512 }),
+      body: JSON.stringify({ url, filename, modType: modType, sha512 }),
     });
 
     showNotification(`${filename} installed to ${modType}/`, 'success');
@@ -5417,7 +5417,7 @@ async function checkModUpdates() {
   resultsEl.style.display = 'none';
 
   try {
-    const params = new URLSearchParams({ loader, mc_version: mcVersion });
+    const params = new URLSearchParams({ loader, mcVersion: mcVersion });
     const data = await apiRequest(`/api/servers/${currentServerId}/mods/updates?${params}`);
 
     const updates = data.updates || [];
@@ -5430,9 +5430,9 @@ async function checkModUpdates() {
       updates.forEach(u => {
         html += `
           <div class="update-item">
-            <span class="update-filename">📦 ${escapeHtml(u.current_filename)}</span>
+            <span class="update-filename">📦 ${escapeHtml(u.currentFilename)}</span>
             <span class="update-arrow">→</span>
-            <span class="update-new-ver">${escapeHtml(u.version_number)}</span>
+            <span class="update-new-ver">${escapeHtml(u.versionNumber)}</span>
             <span class="update-arrow">(${escapeHtml(u.filename)})</span>
             <button class="btn btn-success btn-small"
                     onclick="applyModUpdate(
@@ -5440,7 +5440,7 @@ async function checkModUpdates() {
                       '${escapeHtml(u.filename)}',
                       '${escapeHtml(u.sha512 || '')}',
                       '${escapeHtml(u.folder)}',
-                      '${escapeHtml(u.current_filename)}',
+                      '${escapeHtml(u.currentFilename)}',
                       this)">
               Update
             </button>
@@ -5475,7 +5475,7 @@ async function applyModUpdate(url, filename, sha512, folder, currentFilename, bt
     // Install new version
     await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
       method: 'POST',
-      body: JSON.stringify({ url, filename, mod_type: folder, sha512 }),
+      body: JSON.stringify({ url, filename, modType: folder, sha512 }),
     });
 
     // Delete old file if the filename is different
@@ -6233,9 +6233,9 @@ async function viewPlayerStats(uuid) {
     const h = data.highlights || {};
     const allStats = data.stats || {};
 
-    const playtimeTicks = h.playtime_ticks || 0;
+    const playtimeTicks = h.playtimeTicks || 0;
     const playtimeHours = (playtimeTicks / 72000).toFixed(1);
-    const distanceKm = ((h.distance_walked_cm || 0) / 100000).toFixed(2);
+    const distanceKm = ((h.distanceWalkedCm || 0) / 100000).toFixed(2);
 
     content.innerHTML = `
       <div style="margin-bottom: 16px;">
@@ -6243,8 +6243,8 @@ async function viewPlayerStats(uuid) {
         <table class="players-table">
           <tr><td>⏱ Playtime</td><td><strong>${playtimeHours} hours</strong></td></tr>
           <tr><td>💀 Deaths</td><td><strong>${h.deaths || 0}</strong></td></tr>
-          <tr><td>⚔️ Player Kills</td><td><strong>${h.player_kills || 0}</strong></td></tr>
-          <tr><td>🐾 Mob Kills</td><td><strong>${h.mob_kills || 0}</strong></td></tr>
+          <tr><td>⚔️ Player Kills</td><td><strong>${h.playerKills || 0}</strong></td></tr>
+          <tr><td>🐾 Mob Kills</td><td><strong>${h.mobKills || 0}</strong></td></tr>
           <tr><td>🏃 Distance Walked</td><td><strong>${distanceKm} km</strong></td></tr>
           <tr><td>⬆️ Jumps</td><td><strong>${h.jumps || 0}</strong></td></tr>
         </table>
@@ -6326,7 +6326,7 @@ async function loadBannedIPs() {
 
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/players/banned-ips`);
-    const banned = data.banned_ips || [];
+    const banned = data.bannedIps || [];
     if (banned.length === 0) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty-message">No banned IPs</td></tr>';
       return;
@@ -7833,7 +7833,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ==================== Quick Commands ====================
 
-let _cannedCommands = [];   // {cmd_name, cmd}
+let _cannedCommands = [];   // {cmdName, cmd}
 let _autoExec = false;
 
 async function loadCannedCommands() {
@@ -7841,7 +7841,7 @@ async function loadCannedCommands() {
   try {
     const data = await apiRequest(`/api/servers/${currentServerId}/canned-commands`);
     _cannedCommands = data.commands || [];
-    _autoExec = !!data.auto_execute;
+    _autoExec = !!data.autoExecute;
     const toggle = document.getElementById('quickcmds-autoexec');
     if (toggle) toggle.checked = _autoExec;
     updateAutoExecHint();
@@ -7857,7 +7857,7 @@ async function saveCannedCommandsToServer() {
   try {
     await apiRequest(`/api/servers/${currentServerId}/canned-commands`, {
       method: 'PUT',
-      body: JSON.stringify({ auto_execute: _autoExec, commands: _cannedCommands })
+      body: JSON.stringify({ autoExecute: _autoExec, commands: _cannedCommands })
     });
   } catch (err) {
     showNotification('Failed to save commands: ' + err.message, 'error');
@@ -7877,7 +7877,7 @@ function renderCannedCommandsGrid() {
     const btn = document.createElement('button');
     btn.className = 'quickcmd-btn';
     btn.title = item.cmd;
-    btn.textContent = item.cmd_name || item.cmd.substring(0, 25);
+    btn.textContent = item.cmdName || item.cmd.substring(0, 25);
     btn.disabled = !serverRunning;
     btn.addEventListener('click', () => triggerCannedCommand(idx));
     grid.appendChild(btn);
@@ -7895,7 +7895,7 @@ function renderCannedCommandsTable() {
   _cannedCommands.forEach((item, idx) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${escapeHtml(item.cmd_name)}</td>
+      <td>${escapeHtml(item.cmdName)}</td>
       <td class="cmd-text">${escapeHtml(item.cmd)}</td>
       <td class="actions-cell">
         <button class="btn btn-small" onclick="openAddCmdModal(${idx})">Edit</button>
@@ -7944,7 +7944,7 @@ function openAddCmdModal(editIdx = -1) {
   if (editIdx >= 0 && editIdx < _cannedCommands.length) {
     const item = _cannedCommands[editIdx];
     document.getElementById('addcmd-modal-title').textContent = '✏️ Edit Command';
-    document.getElementById('addcmd-name').value = item.cmd_name;
+    document.getElementById('addcmd-name').value = item.cmdName;
     document.getElementById('addcmd-cmd').value = item.cmd;
   } else {
     document.getElementById('addcmd-modal-title').textContent = '➕ Add Command';
@@ -7967,12 +7967,12 @@ async function saveAddCmdModal() {
   if (!rawName) { showNotification('Button name is required', 'error'); return; }
   if (!cmd) { showNotification('Command is required', 'error'); return; }
 
-  const cmd_name = rawName.substring(0, 25);
+  const cmdName = rawName.substring(0, 25);
 
   if (editIdx >= 0 && editIdx < _cannedCommands.length) {
-    _cannedCommands[editIdx] = { cmd_name, cmd };
+    _cannedCommands[editIdx] = { cmdName, cmd };
   } else {
-    _cannedCommands.push({ cmd_name, cmd });
+    _cannedCommands.push({ cmdName, cmd });
   }
 
   closeAddCmdModal();

@@ -69,7 +69,7 @@ async function fetchCSRFToken() {
     const response = await fetchFunc('/api/csrf-token');
     if (response.ok) {
       const data = await response.json();
-      window.csrfToken = data.csrf_token;
+      window.csrfToken = data.csrfToken;
       return true;
     }
   } catch (err) {
