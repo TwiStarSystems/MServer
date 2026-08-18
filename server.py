@@ -168,7 +168,7 @@ csrf = CSRFProtect(app)
 @app.errorhandler(CSRFError)
 def handle_csrf_error(e):
     """Return JSON instead of HTML for CSRF failures so the frontend can parse the error"""
-    return jsonify({'error': 'CSRF token missing or invalid. Please refresh the page and try again.'}), 403
+    return api_error('CSRF token missing or invalid. Please refresh the page and try again.', 403)
 
 # Initialize SocketIO with threading async mode and tuned ping settings.
 # Threading mode works natively with the existing subprocess/thread-based
@@ -3642,7 +3642,7 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         user_id, user = get_current_user()
         if not user:
-            return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
+            return api_error('Authentication required', 401, code='AUTH_REQUIRED')
         return f(*args, **kwargs)
     return decorated_function
 
@@ -3653,10 +3653,10 @@ def permission_required(*permissions):
         def decorated_function(*args, **kwargs):
             user_id, user = get_current_user()
             if not user:
-                return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
+                return api_error('Authentication required', 401, code='AUTH_REQUIRED')
             for perm in permissions:
                 if not user_manager.user_has_permission(user, perm):
-                    return jsonify({'error': 'Insufficient permissions', 'code': 'FORBIDDEN'}), 403
+                    return api_error('Insufficient permissions', 403, code='FORBIDDEN')
             return f(*args, **kwargs)
         return decorated_function
     return decorator
@@ -3667,9 +3667,9 @@ def admin_required(f):
     def decorated_function(*args, **kwargs):
         user_id, user = get_current_user()
         if not user:
-            return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
+            return api_error('Authentication required', 401, code='AUTH_REQUIRED')
         if not group_manager.is_admin_group(user.get('groupId')):
-            return jsonify({'error': 'Insufficient permissions', 'code': 'FORBIDDEN'}), 403
+            return api_error('Insufficient permissions', 403, code='FORBIDDEN')
         return f(*args, **kwargs)
     return decorated_function
 
@@ -3696,9 +3696,9 @@ def server_access_required(f):
     def decorated_function(server_id, *args, **kwargs):
         user_id, user = get_current_user()
         if not user:
-            return jsonify({'error': 'Authentication required', 'code': 'AUTH_REQUIRED'}), 401
+            return api_error('Authentication required', 401, code='AUTH_REQUIRED')
         if not can_access_server(server_id):
-            return jsonify({'error': 'Access denied to this server', 'code': 'FORBIDDEN'}), 403
+            return api_error('Access denied to this server', 403, code='FORBIDDEN')
         return f(server_id, *args, **kwargs)
     return decorated_function
 
@@ -7423,7 +7423,7 @@ def create_server():
     # Reject server paths outside SERVERS_DIR — a user-controlled base directory
     # would let the per-server file routes read/write anywhere on disk (RCE).
     if server_path and not is_server_path_allowed(server_path):
-        return jsonify({'error': 'Invalid server path: must be within the servers directory'}), 400
+        return api_error('Invalid server path: must be within the servers directory', 400)
     java_args = data.get('javaArgs', DEFAULT_JAVA_ARGS)
     category = data.get('category', 'unmodded')
     executable = 'server.sh' if category == 'bedrock' else 'server.jar'
@@ -7450,9 +7450,7 @@ def create_server():
                 if port == new_port:
                     other_server_config = server_manager.get_server_config(other_server_id)
                     other_server_name = other_server_config.get('name', 'Unknown Server') if other_server_config else 'Unknown Server'
-                    return jsonify({
-                        'error': f'Port {new_port} is already in use by server: {other_server_name}'
-                    }), 400
+                    return api_error(f'Port {new_port} is already in use by server: {other_server_name}', 400)
 
         # Create server locally. This is fast (DB row + a local JAR copy + a couple of
         # config files) and is invoked from several frontend wizards that expect a
@@ -7530,11 +7528,11 @@ def setup_bedrock_server(server_id):
     """Download and set up a Bedrock server: download zip, extract, write server.properties, set permissions"""
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
-    
+        return api_error('Server not found', 404)
+
     if server_config.get('category') != 'bedrock':
-        return jsonify({'error': 'Server is not a Bedrock server'}), 400
-    
+        return api_error('Server is not a Bedrock server', 400)
+
     server_dir = Path(server_config['serverPath'])
     progress_id = str(uuid.uuid4())
     
@@ -7714,11 +7712,8 @@ def setup_bedrock_server(server_id):
     
     thread = threading.Thread(target=do_bedrock_setup, daemon=True)
     thread.start()
-    
-    return jsonify({
-        'progress_id': progress_id,
-        'message': 'Starting Bedrock server setup...'
-    })
+
+    return api_success(progress_id=progress_id, message='Starting Bedrock server setup...')
 
 
 @app.route('/api/servers/import', methods=['POST'])
@@ -7729,12 +7724,12 @@ def import_server():
     user_id, user = get_current_user()
     
     if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-    
+        return api_error('No file uploaded', 400)
+
     file = request.files['file']
     if not file.filename.endswith('.zip'):
-        return jsonify({'error': 'File must be a ZIP archive'}), 400
-    
+        return api_error('File must be a ZIP archive', 400)
+
     name = request.form.get('name', 'Imported Server')
     executable_name = request.form.get('executableName', '').strip()
     java_args = request.form.get('javaArgs', DEFAULT_JAVA_ARGS)
@@ -7776,9 +7771,9 @@ def import_server():
                     ref_type='server', ref_id=result)
             return jsonify(response)
         else:
-            return jsonify({'error': result}), 400
+            return api_error(result, 400)
     except Exception as e:
-        return jsonify({'error': f'Import failed: {str(e)}'}), 500
+        return api_error(f'Import failed: {str(e)}', 500)
     finally:
         # Clean up temp file
         if temp_path.exists():
@@ -7790,15 +7785,15 @@ def import_server():
 def import_world(server_id):
     """Import a world ZIP into an existing server, placing it as the world/ folder"""
     if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
+        return api_error('No file uploaded', 400)
 
     file = request.files['file']
     if not file.filename.endswith('.zip'):
-        return jsonify({'error': 'File must be a ZIP archive'}), 400
+        return api_error('File must be a ZIP archive', 400)
 
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     server_path = Path(server_config['serverPath']).resolve()
     filename = secure_filename(file.filename)
@@ -7831,7 +7826,7 @@ def import_world(server_id):
                     validate_zip_members(zipf, world_dir)
                 except ValueError as e:
                     shutil.rmtree(world_dir, ignore_errors=True)
-                    return jsonify({'error': f'Invalid ZIP: {e}'}), 400
+                    return api_error(f'Invalid ZIP: {e}', 400)
                 for member in names:
                     if member.endswith('/'):
                         continue
@@ -7849,7 +7844,7 @@ def import_world(server_id):
                     validate_zip_members(zipf, tmp_dir)
                 except ValueError as e:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-                    return jsonify({'error': f'Invalid ZIP: {e}'}), 400
+                    return api_error(f'Invalid ZIP: {e}', 400)
                 for _info in _infos:
                     if not _info.filename.endswith('/'):
                         zipf.extract(_info, tmp_dir)
@@ -7875,15 +7870,15 @@ def import_world(server_id):
                     shutil.move(str(single), str(target_world))
                 else:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
-                    return jsonify({'error': 'Could not locate a valid world in the ZIP (level.dat not found)'}), 400
+                    return api_error('Could not locate a valid world in the ZIP (level.dat not found)', 400)
 
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        return jsonify({'success': True})
+        return api_success()
     except zipfile.BadZipFile:
-        return jsonify({'error': 'Invalid or corrupted ZIP file'}), 400
+        return api_error('Invalid or corrupted ZIP file', 400)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -7894,20 +7889,20 @@ def import_world(server_id):
 def upload_custom_jar(server_id):
     """Upload a custom JAR file for a server"""
     if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-    
+        return api_error('No file uploaded', 400)
+
     file = request.files['file']
     if not file.filename.endswith('.jar'):
-        return jsonify({'error': 'File must be a JAR file'}), 400
-    
+        return api_error('File must be a JAR file', 400)
+
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
-    
+        return api_error('Server not found', 404)
+
     server_path = Path(server_config['serverPath'])
     filename = secure_filename(file.filename)
     jar_path = server_path / filename
-    
+
     try:
         file.save(str(jar_path))
 
@@ -7918,9 +7913,9 @@ def upload_custom_jar(server_id):
         # Update server config to use this JAR
         server_manager.update_server(server_id, executable=filename, serverType='custom')
 
-        return jsonify({'success': True, 'executable': filename})
+        return api_success(executable=filename)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>/download-jar', methods=['POST'])
 @server_access_required
@@ -7933,11 +7928,11 @@ def download_server_jar(server_id):
     executable = 'server.jar'  # Always use server.jar for Java server JARs
 
     if not server_type or not version:
-        return jsonify({'error': 'Server type and version required'}), 400
+        return api_error('Server type and version required', 400)
 
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     server_path = Path(server_config['serverPath'])
     jar_path = server_path / executable
@@ -7951,23 +7946,17 @@ def download_server_jar(server_id):
 
         # Modern -> Legacy: blocked (the modern world format is one-way).
         if cur_modern and not new_mod:
-            return jsonify({
-                'error': (
-                    f'Cannot assign a legacy JAR ({version}) to a modern (26.1+) server '
-                    f'({current_version}). The new world storage format is not backwards-compatible. '
-                    f'Create a new server if you need a legacy version.'
-                )
-            }), 400
+            return api_error(
+                f'Cannot assign a legacy JAR ({version}) to a modern (26.1+) server '
+                f'({current_version}). The new world storage format is not backwards-compatible. '
+                f'Create a new server if you need a legacy version.', 400)
 
         # Legacy -> Legacy: cap within the legacy tier. Crossing to a modern version is
         # allowed (Minecraft auto-converts the world on next start, one-way).
         if not cur_modern and not new_mod and compare_mc_versions(version, MC_LEGACY_MAX) > 0:
-            return jsonify({
-                'error': (
-                    f'Legacy servers cannot exceed {MC_LEGACY_MAX} within the legacy tier. '
-                    f'Select a modern (26.1+) version to migrate to the new world format.'
-                )
-            }), 400
+            return api_error(
+                f'Legacy servers cannot exceed {MC_LEGACY_MAX} within the legacy tier. '
+                f'Select a modern (26.1+) version to migrate to the new world format.', 400)
 
     # The mandatory pre-change backup (when there is a world to protect) and the
     # JAR copy run on the job queue so the request doesn't block on zipping a
@@ -8182,16 +8171,16 @@ def change_server_version(server_id):
     data = request.get_json()
 
     if not data:
-        return jsonify({'error': 'No data provided'}), 400
+        return api_error('No data provided', 400)
 
     new_version = data.get('version')
 
     if not new_version:
-        return jsonify({'error': 'Version is required'}), 400
+        return api_error('Version is required', 400)
 
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     server_dir = Path(server_config.get('serverPath', ''))
     managed_conf = server_manager._read_managed_conf(server_dir)
@@ -8202,23 +8191,17 @@ def change_server_version(server_id):
 
     # --- Modern -> Legacy: blocked (the new world storage format is one-way) ---
     if current_modern and not new_modern:
-        return jsonify({
-            'error': (
-                f'Cannot downgrade a modern (26.1+) server to legacy version {new_version}. '
-                f'The new world storage format is not backwards-compatible. '
-                f'Create a new server if you need a legacy version.'
-            )
-        }), 400
+        return api_error(
+            f'Cannot downgrade a modern (26.1+) server to legacy version {new_version}. '
+            f'The new world storage format is not backwards-compatible. '
+            f'Create a new server if you need a legacy version.', 400)
 
     # --- Legacy -> Legacy: cap upgrades at the legacy tier max ---
     # (Crossing to a modern version is allowed below and is NOT subject to this cap.)
     if not current_modern and not new_modern and compare_mc_versions(new_version, MC_LEGACY_MAX) > 0:
-        return jsonify({
-            'error': (
-                f'Legacy servers cannot be upgraded beyond {MC_LEGACY_MAX} within the legacy tier. '
-                f'Select a modern (26.1+) version to migrate to the new world format.'
-            )
-        }), 400
+        return api_error(
+            f'Legacy servers cannot be upgraded beyond {MC_LEGACY_MAX} within the legacy tier. '
+            f'Select a modern (26.1+) version to migrate to the new world format.', 400)
 
     # --- Determine warnings (informational only; these do NOT block the change) ---
     # world_conversion_warning: ONLY a Legacy -> Modern crossing triggers the one-way
@@ -8244,7 +8227,7 @@ def change_server_version(server_id):
     # Check if server is running
     instance = server_manager.servers.get(server_id)
     if instance and instance.is_running():
-        return jsonify({'error': 'Server must be stopped before changing version'}), 400
+        return api_error('Server must be stopped before changing version', 400)
     
     # Always create a safety backup before changing versions. World conversions
     # (Legacy -> Modern) are one-way and downgrades can corrupt data, so a backup
@@ -8285,8 +8268,8 @@ def change_server_version(server_id):
             'success': True
         })
     except Exception as e:
-        return jsonify({'error': f'Failed to create mandatory pre-change backup: {str(e)}'}), 500
-    
+        return api_error(f'Failed to create mandatory pre-change backup: {str(e)}', 500)
+
     # Copy the new version JAR into the server directory (download first if needed)
     engine = managed_conf.get('Engine', server_config.get('serverType', 'vanilla'))
     server_type = engine.lower() if engine else 'vanilla'
@@ -8300,15 +8283,12 @@ def change_server_version(server_id):
         if not jar_ok:
             dl_result = jar_bucket.download_jar(server_type, new_version)
             if not dl_result.get('success'):
-                return jsonify({
-                    'error': f'Failed to download {server_type} {new_version} JAR: {dl_result.get("error", "Unknown error")}'
-                }), 500
+                return api_error(
+                    f'Failed to download {server_type} {new_version} JAR: {dl_result.get("error", "Unknown error")}', 500)
             # Now copy the freshly-downloaded JAR
             jar_ok, jar_msg = jar_manager.copy_jar_to_server(server_type, new_version, jar_dest)
             if not jar_ok:
-                return jsonify({
-                    'error': f'Downloaded JAR but failed to copy to server: {jar_msg}'
-                }), 500
+                return api_error(f'Downloaded JAR but failed to copy to server: {jar_msg}', 500)
 
     # Update version in DB and managed.conf
     server_manager.update_server(server_id, version=new_version)
@@ -8440,8 +8420,8 @@ def send_command(server_id):
     
     success, message = server_manager.send_command(server_id, command)
     if success:
-        return jsonify({'success': True})
-    return jsonify({'error': message}), 400
+        return api_success()
+    return api_error(message, 400)
 
 @app.route('/api/servers/<server_id>/output', methods=['GET'])
 @server_access_required
@@ -8449,10 +8429,10 @@ def get_server_output(server_id):
     """Get recent output from a server"""
     instance = server_manager.servers.get(server_id)
     if not instance:
-        return jsonify({'output': []})
-    
+        return api_success(output=[])
+
     lines = request.args.get('lines', 100, type=int)
-    return jsonify({'output': instance.get_recent_output(lines)})
+    return api_success(output=instance.get_recent_output(lines))
 
 
 # ==================== File Explorer API ====================
