@@ -52,6 +52,26 @@ class APIPermission:
     CONSOLE = 'console'     # Console access (send commands)
 
 
+# ==================== JSON response envelope ====================
+# Local equivalent of server.py's api_success()/api_error() (issue #28) — this
+# module can't import server.py's copy (see the module-docstring note on why
+# api_manager.py never imports from server.py). Same shape/behavior: every
+# response gets a top-level `success` boolean, and `data`/`extra` merge flat.
+
+def api_success(data=None, status=200, **extra):
+    body = {'success': True}
+    if data:
+        body.update(data)
+    body.update(extra)
+    return jsonify(body), status
+
+
+def api_error(message, status=400, **extra):
+    body = {'success': False, 'error': message}
+    body.update(extra)
+    return jsonify(body), status
+
+
 # ==================== Data Storage ====================
 
 def load_api_stats():
@@ -265,9 +285,9 @@ def _require_admin_session():
     on success, or (None, (response, status)) to short-circuit the caller."""
     user_id, user = _get_current_user()
     if not user:
-        return None, (jsonify({'error': 'Authentication required'}), 401)
+        return None, api_error('Authentication required', 401)
     if not _group_manager.is_admin_group(user.get('groupId')):
-        return None, (jsonify({'error': 'Admin access required'}), 403)
+        return None, api_error('Admin access required', 403)
     return user, None
 
 
@@ -313,22 +333,30 @@ def require_api_key(permissions=None):
             # Get API key from header or query param
             api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
             
+            # These 4 error bodies carry both 'error' (short label) and 'message'
+            # (longer description) — distinct pre-existing fields, not a case
+            # api_error() can express, since its own first parameter is also
+            # named 'message' (passing message=... as an extra kwarg collides
+            # with it). Built by hand instead; still gets 'success': False.
+
             if not api_key:
                 increment_api_stats(endpoint=request.path, success=False)
                 return jsonify({
+                    'success': False,
                     'error': 'API key required',
                     'message': 'Provide API key via X-API-Key header or api_key query parameter'
                 }), 401
-            
+
             # Validate key
             key_data = validate_api_key(api_key)
             if not key_data:
                 increment_api_stats(endpoint=request.path, success=False)
                 return jsonify({
+                    'success': False,
                     'error': 'Invalid API key',
                     'message': 'The provided API key is invalid, expired, or disabled'
                 }), 401
-            
+
             # Check permissions
             if permissions:
                 key_permissions = key_data.get('permissions', [])
@@ -336,6 +364,7 @@ def require_api_key(permissions=None):
                     if not any(p in key_permissions for p in permissions):
                         increment_api_stats(key_id=key_data['id'], endpoint=request.path, success=False)
                         return jsonify({
+                            'success': False,
                             'error': 'Insufficient permissions',
                             'message': f'This endpoint requires one of: {permissions}'
                         }), 403
@@ -354,6 +383,7 @@ def require_api_key(permissions=None):
             if not allowed:
                 increment_api_stats(key_id=key_data['id'], endpoint=request.path, success=False)
                 return jsonify({
+                    'success': False,
                     'error': 'Rate limit exceeded',
                     'message': f'API key is limited to {limit} requests per minute'
                 }), 429
@@ -379,7 +409,7 @@ def api_list_keys():
         return err
 
     keys = list_api_keys()
-    return jsonify({'keys': keys})
+    return api_success(keys=keys)
 
 
 @api_v1_admin.route('/keys', methods=['POST'])
@@ -403,13 +433,13 @@ def api_create_key():
     )
     
     # Return the full key only on creation
-    return jsonify({
+    return api_success({
         'message': 'API key created successfully',
         'id': key_id,
         'key': full_key,  # Only shown once!
         'name': name,
         'permissions': permissions
-    }), 201
+    }, status=201)
 
 
 @api_v1_admin.route('/keys/<key_id>', methods=['PATCH'])
@@ -423,9 +453,9 @@ def api_update_key(key_id):
     updated = update_api_key(key_id, data)
 
     if not updated:
-        return jsonify({'error': 'API key not found'}), 404
+        return api_error('API key not found', 404)
 
-    return jsonify({'message': 'API key updated', 'key': updated})
+    return api_success(message='API key updated', key=updated)
 
 
 @api_v1_admin.route('/keys/<key_id>', methods=['DELETE'])
@@ -436,9 +466,9 @@ def api_delete_key(key_id):
         return err
 
     if delete_api_key(key_id):
-        return jsonify({'message': 'API key deleted'})
+        return api_success(message='API key deleted')
 
-    return jsonify({'error': 'API key not found'}), 404
+    return api_error('API key not found', 404)
 
 
 @api_v1_admin.route('/stats', methods=['GET'])
@@ -449,7 +479,7 @@ def api_get_stats():
         return err
 
     stats = load_api_stats()
-    return jsonify(stats)
+    return api_success(stats)
 
 
 # ==================== Public API Endpoints ====================
@@ -476,43 +506,50 @@ def api_docs():
             'GET /api/v1/status': {
                 'description': 'Get MServer status',
                 'permissions': ['read'],
-                'response': {'status': 'string', 'version': 'string', 'uptime': 'number'}
+                'response': {'success': 'boolean', 'status': 'string', 'version': 'string', 'timestamp': 'string'}
             },
             'GET /api/v1/servers': {
                 'description': 'List all servers',
                 'permissions': ['read'],
-                'response': {'servers': 'array'}
+                'response': {'success': 'boolean', 'servers': 'array', 'count': 'number'}
             },
             'GET /api/v1/servers/{id}': {
                 'description': 'Get server details',
                 'permissions': ['read'],
                 'params': {'id': 'Server ID'},
-                'response': {'server': 'object'}
+                'response': {'success': 'boolean', 'server': 'object'}
             },
             'GET /api/v1/servers/{id}/status': {
                 'description': 'Get server status',
                 'permissions': ['read'],
                 'params': {'id': 'Server ID'},
-                'response': {'status': 'string', 'players': 'object'}
+                'response': {'success': 'boolean', 'id': 'string', 'status': 'string',
+                             'running': 'boolean', 'port': 'number', 'players': 'object'}
             },
             'POST /api/v1/servers/{id}/command': {
                 'description': 'Send command to server',
                 'permissions': ['console'],
                 'params': {'id': 'Server ID'},
                 'body': {'command': 'string'},
-                'response': {'success': 'boolean'}
+                'response': {'success': 'boolean', 'message': 'string', 'error': 'string (on failure)'}
             },
             'POST /api/v1/servers/{id}/start': {
                 'description': 'Start a server',
                 'permissions': ['write'],
                 'params': {'id': 'Server ID'},
-                'response': {'success': 'boolean'}
+                'response': {'success': 'boolean', 'message': 'string', 'error': 'string (on failure)'}
             },
             'POST /api/v1/servers/{id}/stop': {
                 'description': 'Stop a server',
                 'permissions': ['write'],
                 'params': {'id': 'Server ID'},
-                'response': {'success': 'boolean'}
+                'response': {'success': 'boolean', 'message': 'string', 'error': 'string (on failure)'}
+            },
+            'POST /api/v1/servers/{id}/restart': {
+                'description': 'Restart a server',
+                'permissions': ['write'],
+                'params': {'id': 'Server ID'},
+                'response': {'success': 'boolean', 'message': 'string', 'error': 'string (on failure)'}
             }
         },
         'rate_limiting': {
@@ -524,7 +561,7 @@ def api_docs():
             }
         }
     }
-    return jsonify(docs)
+    return api_success(docs)
 
 
 @api_v1.route('/status', methods=['GET'])
@@ -532,8 +569,8 @@ def api_docs():
 def api_status():
     """Get MServer status."""
     version = _read_version_file() or 'unknown'
-    
-    return jsonify({
+
+    return api_success({
         'status': 'online',
         'version': version,
         'timestamp': datetime.now().isoformat()
@@ -566,7 +603,7 @@ def api_list_servers():
             'category': server.get('category'),
         })
 
-    return jsonify({'servers': result, 'count': len(result)})
+    return api_success(servers=result, count=len(result))
 
 
 @api_v1.route('/servers/<server_id>', methods=['GET'])
@@ -575,9 +612,9 @@ def api_get_server(server_id):
     """Get server details."""
     server = _api_server_view(server_id)
     if not server:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
-    return jsonify({'server': server})
+    return api_success(server=server)
 
 
 @api_v1.route('/servers/<server_id>/status', methods=['GET'])
@@ -586,12 +623,12 @@ def api_server_status(server_id):
     """Get server status."""
     server = _api_server_view(server_id)
     if not server:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     instance = _server_manager.servers.get(server_id)
     online = list(instance.online_players.keys()) if (instance and instance.is_running()) else []
 
-    return jsonify({
+    return api_success({
         'id': server_id,
         'status': server.get('status', 'stopped'),
         'running': server.get('running', False),
@@ -600,21 +637,29 @@ def api_server_status(server_id):
     })
 
 
+# send_command/start/stop/restart return (success, message) from server_manager.
+# The 'message' key predates this envelope and real API-key consumers may
+# already read it on failure, so it's kept as-is on both paths; 'error' is
+# added alongside it on failure so new consumers can rely on the standard key.
+# Built by hand rather than via api_error() — same 'message' collision as above.
+
 @api_v1.route('/servers/<server_id>/command', methods=['POST'])
 @require_api_key(permissions=[APIPermission.CONSOLE])
 def api_send_command(server_id):
     """Send a command to the server console."""
     if _api_server_view(server_id) is None:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     data = request.get_json() or {}
     command = data.get('command')
 
     if not command:
-        return jsonify({'error': 'Command is required'}), 400
+        return api_error('Command is required', 400)
 
     success, message = _server_manager.send_command(server_id, command)
-    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+    if success:
+        return api_success(message=message)
+    return jsonify({'success': False, 'error': message, 'message': message}), 400
 
 
 @api_v1.route('/servers/<server_id>/start', methods=['POST'])
@@ -622,10 +667,12 @@ def api_send_command(server_id):
 def api_start_server(server_id):
     """Start a server."""
     if _api_server_view(server_id) is None:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     success, message = _server_manager.start_server(server_id)
-    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+    if success:
+        return api_success(message=message)
+    return jsonify({'success': False, 'error': message, 'message': message}), 400
 
 
 @api_v1.route('/servers/<server_id>/stop', methods=['POST'])
@@ -633,10 +680,12 @@ def api_start_server(server_id):
 def api_stop_server(server_id):
     """Stop a server."""
     if _api_server_view(server_id) is None:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     success, message = _server_manager.stop_server(server_id)
-    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+    if success:
+        return api_success(message=message)
+    return jsonify({'success': False, 'error': message, 'message': message}), 400
 
 
 @api_v1.route('/servers/<server_id>/restart', methods=['POST'])
@@ -644,10 +693,12 @@ def api_stop_server(server_id):
 def api_restart_server(server_id):
     """Restart a server."""
     if _api_server_view(server_id) is None:
-        return jsonify({'error': 'Server not found'}), 404
+        return api_error('Server not found', 404)
 
     success, message = _server_manager.restart_server(server_id)
-    return jsonify({'success': success, 'message': message}), (200 if success else 400)
+    if success:
+        return api_success(message=message)
+    return jsonify({'success': False, 'error': message, 'message': message}), 400
 
 
 # ==================== Utility Functions ====================
