@@ -7372,9 +7372,14 @@ def _generate_server_properties(custom_properties, server_name='A Minecraft Serv
         'sync-chunk-writes': 'true',
     }
     
-    # Merge custom properties (convert all values to strings)
+    # Merge custom properties (convert all values to strings). Booleans are
+    # rendered lowercase so the file reads like a hand-written server.properties
+    # rather than Python's 'True'/'False'.
     for key, value in custom_properties.items():
-        default_properties[key] = str(value)
+        if isinstance(value, bool):
+            default_properties[key] = 'true' if value else 'false'
+        else:
+            default_properties[key] = str(value)
     
     # Truncate motd if needed (59 char limit)
     if 'motd' in default_properties and len(default_properties['motd']) > 59:
@@ -7663,6 +7668,7 @@ def setup_bedrock_server(server_id):
                 'server-portv6': server_properties.get('server-portv6', 19133),
                 'max-players': server_properties.get('max-players', 10),
                 'gamemode': server_properties.get('gamemode', 'survival'),
+                'force-gamemode': 'true' if server_properties.get('force-gamemode') else 'false',
                 'difficulty': server_properties.get('difficulty', 'easy'),
                 'level-seed': server_properties.get('level-seed', ''),
                 'allow-cheats': 'false',

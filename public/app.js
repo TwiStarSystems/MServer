@@ -1627,69 +1627,78 @@ async function killServer() {
 // ==================== Server CRUD ====================
 
 let currentCreationType = null;
-let defaultServerPath = '';
 
 // Track JAR availability for versions (unified)
 let uVersionAvailability = {};
+
+// Metadata for the three creation methods — drives the cards, the banner and
+// which parts of the form are relevant.
+const CREATION_METHODS = {
+  'fresh': {
+    icon: '🆕',
+    title: 'Create Fresh Server',
+    desc: 'Build a brand-new server from a downloaded engine.',
+    submit: 'Create Server',
+    showProps: true,
+    allowBedrock: true
+  },
+  'import': {
+    icon: '📦',
+    title: 'Import Existing Server',
+    desc: 'Upload a ZIP of a server you already run — settings come from the archive.',
+    submit: 'Import Server',
+    showProps: false,
+    allowBedrock: true
+  },
+  'import-world': {
+    icon: '🌍',
+    title: 'Import Existing World',
+    desc: 'Create a fresh Java server and load your existing world into it.',
+    submit: 'Create Server & Import World',
+    showProps: true,
+    allowBedrock: false
+  }
+};
 
 async function openAddServerModal() {
   try {
     editingServerId = null;
     currentCreationType = null;
-    
+
     const modalTitle = document.getElementById('modal-title');
     if (modalTitle) modalTitle.textContent = 'Add Server';
-    
+    setModalSubtitle('Choose a creation method to get started');
+
     // Show creation type selection, hide all forms
     const creationTypeSection = document.getElementById('creation-type-section');
     const unifiedForm = document.getElementById('unified-server-form');
     const manualForm = document.getElementById('manual-server-form');
-    
+
     if (creationTypeSection) creationTypeSection.style.display = 'block';
     if (unifiedForm) unifiedForm.style.display = 'none';
     if (manualForm) manualForm.style.display = 'none';
-    
+
+    const wizardSteps = document.getElementById('wizard-steps');
+    if (wizardSteps) wizardSteps.style.display = 'flex';
+    setWizardStep(1);
+    clearCreationTypeSelection();
+
     // Hide version management section (only for editing)
     const versionSection = document.getElementById('version-management-section');
     if (versionSection) versionSection.style.display = 'none';
-    
-    // Fetch the default server path (non-blocking)
-    try {
-      const result = await apiRequest('/api/default-server-path');
-      defaultServerPath = result.path || '';
-    } catch (err) {
-      console.error('Failed to get default server path:', err);
-      defaultServerPath = '';
-    }
-  
+
     // Reset unified form
     resetUnifiedForm();
-    
-    // Reset manual form with default path placeholder
-    document.getElementById('input-name').value = '';
-    document.getElementById('input-category').value = 'unmodded';
-    document.getElementById('input-path').value = '';
-    document.getElementById('input-path').placeholder = defaultServerPath ? `${defaultServerPath}/<server-id>` : '/path/to/minecraft/server';
-    document.getElementById('input-min-ram').value = '1G';
-    document.getElementById('input-max-ram').value = '2G';
-    document.getElementById('input-jvm-args').value = '';
-    document.getElementById('input-auto-start').checked = false;
-    
-    // Update path hint with actual default path
-    const pathHint = document.getElementById('path-hint');
-    if (pathHint && defaultServerPath) {
-      pathHint.innerHTML = `Leave empty to auto-create in <code>${escapeHtml(defaultServerPath)}/</code>`;
-    }
-    
+
     // Load server engines (non-blocking)
     loadUnifiedEngines().catch(err => console.error('Failed to load engines:', err));
-    
+
     // Show modal
     const serverModal = document.getElementById('server-modal');
     if (serverModal) {
       serverModal.classList.add('active');
     }
-    
+
   } catch (error) {
     console.error('Error in openAddServerModal:', error);
     const serverModal = document.getElementById('server-modal');
@@ -1697,64 +1706,119 @@ async function openAddServerModal() {
   }
 }
 
-function resetUnifiedForm() {
-  document.getElementById('u-name').value = '';
-  document.getElementById('u-name').removeAttribute('required');
-  document.getElementById('u-category').value = '';
-  document.getElementById('u-version').value = '';
-  document.getElementById('u-version').disabled = true;
-  document.getElementById('u-min-ram').value = '1G';
-  document.getElementById('u-max-ram').value = '2G';
-  document.getElementById('u-jvm-args').value = '';
-  
-  const uploadJarCheckbox = document.getElementById('u-upload-jar');
-  if (uploadJarCheckbox) uploadJarCheckbox.checked = false;
-  document.getElementById('u-custom-jar-upload').style.display = 'none';
-  
-  // Reset server properties
-  document.getElementById('u-server-port').value = '25565';
-  document.getElementById('u-max-players').value = '20';
-  document.getElementById('u-gamemode').value = 'survival';
-  document.getElementById('u-difficulty').value = 'easy';
-  document.getElementById('u-level-seed').value = '';
-  document.getElementById('u-pvp').checked = true;
-  document.getElementById('u-white-list').checked = false;
-  document.getElementById('u-hardcore').checked = false;
+// ==================== Wizard chrome ====================
 
-  // Reset Bedrock-only properties
-  const bedrockDefaults = {
-    'u-level-name': 'Bedrock level',
-    'u-idle-timeout': '30',
-    'u-view-distance': '32',
-    'u-tick-distance': '4'
-  };
-  Object.entries(bedrockDefaults).forEach(([id, value]) => {
+function setModalSubtitle(text) {
+  const subtitle = document.getElementById('modal-subtitle');
+  if (!subtitle) return;
+  subtitle.textContent = text || '';
+  subtitle.style.display = text ? '' : 'none';
+}
+
+function setWizardStep(step) {
+  const container = document.getElementById('wizard-steps');
+  if (!container) return;
+  container.querySelectorAll('.wizard-step').forEach(el => {
+    const num = parseInt(el.dataset.step, 10);
+    const dot = el.querySelector('.wizard-step-dot');
+    el.classList.toggle('is-active', num === step);
+    el.classList.toggle('is-done', num < step);
+    if (dot) dot.textContent = num < step ? '✓' : String(num);
+  });
+}
+
+function clearCreationTypeSelection() {
+  document.querySelectorAll('.creation-type-btn').forEach(btn => {
+    btn.classList.remove('selected');
+    btn.setAttribute('aria-checked', 'false');
+  });
+}
+
+// ==================== Form reset ====================
+
+const U_PROP_DEFAULTS = {
+  'u-server-port': '25565',
+  'u-max-players': '20',
+  'u-gamemode': 'survival',
+  'u-difficulty': 'easy',
+  'u-level-type': 'minecraft:normal',
+  'u-level-seed': '',
+  'u-generator-settings': '',
+  'u-level-name': 'Bedrock level',
+  'u-idle-timeout': '30',
+  'u-view-distance': '32',
+  'u-tick-distance': '4'
+};
+
+const U_TOGGLE_DEFAULTS = {
+  'u-pvp': true,
+  'u-force-gamemode': false,
+  'u-hardcore': false,
+  'u-generate-structures': true,
+  'u-spawn-npcs': true,
+  'u-spawn-animals': true,
+  'u-spawn-monsters': true,
+  'u-enable-command-block': false,
+  'u-allow-list': false
+};
+
+function resetUnifiedForm() {
+  const setValue = (id, value) => {
     const el = document.getElementById(id);
     if (el) el.value = value;
-  });
-  const bedrockProps = document.getElementById('u-bedrock-props');
-  if (bedrockProps) bedrockProps.style.display = 'none';
+  };
 
-  // Hide conditional fields
-  document.getElementById('u-engine-group').style.display = 'none';
-  document.getElementById('u-version-group').style.display = 'none';
-  document.getElementById('u-ram-group').style.display = 'none';
-  document.getElementById('u-upload-jar-group').style.display = 'none';
-  document.getElementById('u-server-props').style.display = 'none';
-  document.getElementById('u-import-fields').style.display = 'none';
-  document.getElementById('u-world-file-group').style.display = 'none';
-  document.getElementById('u-import-props-hint').style.display = 'none';
-  
+  setValue('u-name', '');
+  setValue('u-category', '');
+  setValue('u-engine', '');
+  setValue('u-jvm-args', '');
+  setValue('u-min-ram', '1G');
+  setValue('u-max-ram', '2G');
+
+  const versionSelect = document.getElementById('u-version');
+  if (versionSelect) {
+    versionSelect.value = '';
+    versionSelect.disabled = true;
+    versionSelect.innerHTML = '<option value="">Select category first...</option>';
+  }
+
+  const uploadJarCheckbox = document.getElementById('u-upload-jar');
+  if (uploadJarCheckbox) uploadJarCheckbox.checked = false;
+  hideEl('u-custom-jar-upload');
+
+  // Server properties + toggles back to their defaults
+  Object.entries(U_PROP_DEFAULTS).forEach(([id, value]) => setValue(id, value));
+  Object.entries(U_TOGGLE_DEFAULTS).forEach(([id, checked]) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = checked;
+  });
+
+  // Descriptions back to their neutral copy
+  const categoryDesc = document.getElementById('u-category-desc');
+  if (categoryDesc) categoryDesc.textContent = 'Choose whether you want a Java or Bedrock server';
+  const engineDesc = document.getElementById('u-engine-desc');
+  if (engineDesc) engineDesc.textContent = 'Select a server type';
+  const versionDesc = document.getElementById('u-version-desc');
+  if (versionDesc) versionDesc.textContent = 'Select the Minecraft version';
+
+  // Hide conditional sections
+  ['u-engine-group', 'u-version-group', 'u-ram-group', 'u-upload-jar-group',
+   'u-import-fields', 'u-world-file-group', 'u-download-status-group'].forEach(hideEl);
+
+  applyPropsEdition('unmodded');
+  onUnifiedLevelTypeChange();
+
   // Reset download status UI
-  const downloadStatusGroup = document.getElementById('u-download-status-group');
   const versionStatus = document.getElementById('u-version-status');
   const progressFill = document.querySelector('#u-jar-download-status .progress-fill');
   const progressText = document.querySelector('#u-jar-download-status .progress-text');
   const downloadProgress = document.querySelector('#u-jar-download-status .download-progress');
   const downloadInfo = document.querySelector('#u-jar-download-status .download-info');
-  
-  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-  if (versionStatus) versionStatus.textContent = '';
+
+  if (versionStatus) {
+    versionStatus.textContent = '';
+    versionStatus.className = 'version-status';
+  }
   if (progressFill) progressFill.style.width = '0%';
   if (progressText) progressText.textContent = '0%';
   if (downloadProgress) downloadProgress.style.display = 'none';
@@ -1762,232 +1826,311 @@ function resetUnifiedForm() {
     downloadInfo.innerHTML = '';
     downloadInfo.classList.remove('error');
   }
+  hideEl('u-bedrock-setup-status');
   uVersionAvailability = {};
-  
-  // Reset import file inputs
-  const importFile = document.getElementById('u-import-file');
-  if (importFile) importFile.value = '';
-  const importExec = document.getElementById('u-import-executable');
-  if (importExec) importExec.value = '';
-  const worldFile = document.getElementById('u-world-file');
-  if (worldFile) worldFile.value = '';
 
-  // Reset submit button text
+  // Reset file inputs
+  ['u-import-file', 'u-import-executable', 'u-world-file', 'u-jar-file'].forEach(id => setValue(id, ''));
+
+  // Clear validation state
+  uTouchedFields.clear();
+  clearAllUnifiedErrors();
+
   const submitBtn = document.getElementById('u-submit-btn');
-  if (submitBtn) submitBtn.textContent = 'Create Server';
+  if (submitBtn) {
+    submitBtn.textContent = 'Create Server';
+    submitBtn.disabled = true;
+  }
 }
 
-function selectCreationType(type) {
-  currentCreationType = type;
-  
-  // Hide creation type section
-  document.getElementById('creation-type-section').style.display = 'none';
-  
-  if (type === 'manual') {
-    document.getElementById('manual-server-form').style.display = 'block';
-    document.querySelector('#manual-server-form .back-btn').style.display = 'inline-block';
-    return;
+function hideEl(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+
+function showEl(id, display = 'flex') {
+  const el = document.getElementById(id);
+  if (el) el.style.display = display;
+}
+
+// The progress/status block sits at the bottom of the configuration column,
+// which scrolls — bring it into view the first time it appears.
+function showUnifiedStatusGroup() {
+  const el = document.getElementById('u-download-status-group');
+  if (!el) return;
+  const wasHidden = !el.style.display || el.style.display === 'none';
+  el.style.display = 'block';
+  if (wasHidden) {
+    // It is the last thing in the column, so pinning the panel to the bottom
+    // shows the whole progress/error block rather than just its first line.
+    const body = el.closest('.form-panel-body');
+    if (body) body.scrollTop = body.scrollHeight;
   }
-  
-  // Show unified form for fresh / import / import-world
-  document.getElementById('unified-server-form').style.display = 'block';
-  
-  // Configure form based on type
-  const nameInput = document.getElementById('u-name');
+}
+
+// ==================== Creation type selection ====================
+
+function selectCreationType(type) {
+  const method = CREATION_METHODS[type];
+  if (!method) return;
+
+  currentCreationType = type;
+
+  // Visual confirmation on the picked card before the form slides in
+  clearCreationTypeSelection();
+  const card = document.querySelector(`.creation-type-btn[data-type="${type}"]`);
+  if (card) {
+    card.classList.add('selected');
+    card.setAttribute('aria-checked', 'true');
+  }
+
+  const reveal = () => {
+    hideEl('creation-type-section');
+    showEl('unified-server-form', 'flex');
+    setWizardStep(2);
+    setModalSubtitle(method.desc);
+    configureUnifiedFormForMethod(type);
+    scheduleScrollHintRefresh();
+    const nameInput = document.getElementById('u-name');
+    if (nameInput && nameInput.offsetParent !== null) nameInput.focus();
+  };
+
+  const reducedMotion = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reducedMotion) reveal();
+  else setTimeout(reveal, 190);
+}
+
+function configureUnifiedFormForMethod(type) {
+  const method = CREATION_METHODS[type];
   const categorySelect = document.getElementById('u-category');
   const submitBtn = document.getElementById('u-submit-btn');
-  const importFields = document.getElementById('u-import-fields');
-  const worldFileGroup = document.getElementById('u-world-file-group');
-  const importPropsHint = document.getElementById('u-import-props-hint');
-  
-  // Reset bedrock option visibility
-  const bedrockOption = categorySelect.querySelector('option[value="bedrock"]');
-  
-  if (type === 'fresh') {
-    nameInput.setAttribute('required', '');
-    submitBtn.textContent = 'Create Server';
-    importFields.style.display = 'none';
-    worldFileGroup.style.display = 'none';
-    importPropsHint.style.display = 'none';
-    if (bedrockOption) bedrockOption.style.display = '';
-    // Show full form immediately
-    document.getElementById('u-server-props').style.display = 'flex';
-    document.getElementById('u-ram-group').style.display = 'block';
-    document.getElementById('u-upload-jar-group').style.display = 'block';
-  } else if (type === 'import') {
-    // Import existing server: managed.conf supplies most settings, so the form
-    // is trimmed to the essentials (ZIP, executable, category, memory).
-    nameInput.removeAttribute('required');
-    nameInput.placeholder = 'Leave blank to use from managed.conf';
-    submitBtn.textContent = 'Import Server';
-    importFields.style.display = 'block';
-    worldFileGroup.style.display = 'none';
-    importPropsHint.style.display = 'none';
-    if (bedrockOption) bedrockOption.style.display = '';
-    // Category/engine/version are optional — managed.conf provides them
-    document.getElementById('u-category').removeAttribute('required');
-    document.getElementById('u-engine').removeAttribute('required');
-    document.getElementById('u-version').removeAttribute('required');
-    // Server properties, the version picker and "upload your own JAR" are not
-    // used on import (settings come from managed.conf / the ZIP, and are
-    // editable post-import) — hide them to keep the import form minimal.
-    document.getElementById('u-server-props').style.display = 'none';
-    document.getElementById('u-version-group').style.display = 'none';
-    document.getElementById('u-upload-jar-group').style.display = 'none';
-    document.getElementById('u-ram-group').style.display = 'block';
-  } else if (type === 'import-world') {
-    nameInput.setAttribute('required', '');
-    submitBtn.textContent = 'Create Server & Import World';
-    importFields.style.display = 'none';
-    worldFileGroup.style.display = 'block';
-    importPropsHint.style.display = 'none';
-    // No bedrock for world import
-    if (bedrockOption) bedrockOption.style.display = 'none';
-    // Show full form immediately
-    document.getElementById('u-server-props').style.display = 'flex';
-    document.getElementById('u-ram-group').style.display = 'block';
-    document.getElementById('u-upload-jar-group').style.display = 'block';
+
+  // Method banner
+  const setText = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  setText('u-method-icon', method.icon);
+  setText('u-method-title', method.title);
+  setText('u-method-desc', method.desc);
+  if (submitBtn) submitBtn.textContent = method.submit;
+
+  // Bedrock is only offered where it makes sense
+  const bedrockOption = categorySelect
+    ? categorySelect.querySelector('option[value="bedrock"]')
+    : null;
+  if (bedrockOption) bedrockOption.style.display = method.allowBedrock ? '' : 'none';
+  if (!method.allowBedrock && categorySelect && categorySelect.value === 'bedrock') {
+    categorySelect.value = '';
   }
+
+  // Method-specific fields
+  const isImport = type === 'import';
+  const nameHint = document.getElementById('u-name-hint');
+  const nameInput = document.getElementById('u-name');
+  const nameReq = document.getElementById('u-name-req');
+  const categoryReq = document.getElementById('u-category-req');
+
+  if (isImport) {
+    if (nameInput) nameInput.placeholder = 'Leave blank to use the name from managed.conf';
+    if (nameHint) nameHint.textContent = 'Optional — the archive’s managed.conf name is used when blank';
+    if (nameReq) nameReq.style.display = 'none';
+    if (categoryReq) categoryReq.style.display = 'none';
+    showEl('u-import-fields');
+    hideEl('u-world-file-group');
+  } else {
+    if (nameInput) nameInput.placeholder = 'My Minecraft Server';
+    if (nameHint) nameHint.textContent = 'The display name shown in the panel';
+    if (nameReq) nameReq.style.display = '';
+    if (categoryReq) categoryReq.style.display = '';
+    hideEl('u-import-fields');
+    if (type === 'import-world') showEl('u-world-file-group');
+    else hideEl('u-world-file-group');
+  }
+
+  // Category drives engine/version/RAM/properties visibility
+  onUnifiedCategoryChange();
 }
 
 function backToCreationType() {
+  if (editingServerId) {
+    // Edit mode has no method step to go back to
+    closeServerModal();
+    return;
+  }
+
   currentCreationType = null;
-  
-  // Hide all forms
-  document.getElementById('unified-server-form').style.display = 'none';
-  document.getElementById('manual-server-form').style.display = 'none';
-  
-  // Reset unified form
+
+  hideEl('unified-server-form');
+  hideEl('manual-server-form');
+
   resetUnifiedForm();
-  
-  // Show creation type selection
-  document.getElementById('creation-type-section').style.display = 'block';
+  clearCreationTypeSelection();
+
+  setWizardStep(1);
+  setModalSubtitle('Choose a creation method to get started');
+  showEl('creation-type-section', 'block');
 }
 
 // ==================== Unified Form Dynamic Logic ====================
 
-function checkUnifiedFormReady() {
-  // Form sections are shown immediately on type selection — no dynamic gating
+// Show the property fields that belong to the selected edition and hide the rest.
+function applyPropsEdition(category) {
+  const isBedrock = category === 'bedrock';
+  document.querySelectorAll('#u-server-props .prop-java').forEach(el => {
+    el.style.display = isBedrock ? 'none' : '';
+  });
+  document.querySelectorAll('#u-server-props .prop-bedrock').forEach(el => {
+    el.style.display = isBedrock ? '' : 'none';
+  });
+}
+
+// Panels whose body can still be scrolled get a fade at the bottom edge — the
+// only reliable "there is more" cue when the browser uses overlay scrollbars.
+function refreshPanelScrollHints() {
+  document.querySelectorAll('#server-modal .form-panel').forEach(panel => {
+    const body = panel.querySelector('.form-panel-body');
+    if (!body) return;
+    const more = body.scrollHeight - body.clientHeight - body.scrollTop > 4;
+    panel.classList.toggle('has-more', more);
+  });
+}
+
+function scheduleScrollHintRefresh() {
+  requestAnimationFrame(refreshPanelScrollHints);
+}
+
+function setPropsPanelVisible(visible) {
+  const panel = document.getElementById('u-server-props');
+  const columns = document.querySelector('#unified-server-form .unified-form-columns');
+  if (panel) panel.style.display = visible ? 'flex' : 'none';
+  if (columns) columns.classList.toggle('single', !visible);
+}
+
+function onUnifiedLevelTypeChange() {
+  const levelType = (document.getElementById('u-level-type') || {}).value || '';
+  const usesGenerator = levelType === 'minecraft:flat' || levelType === 'minecraft:single_biome_surface';
+  const hint = document.getElementById('u-generator-settings-hint');
+  if (hint) {
+    hint.textContent = usesGenerator
+      ? 'Used by this level type — leave blank for the preset default'
+      : 'Only used by the Superflat and Single Biome level types';
+  }
 }
 
 function onUnifiedCategoryChange() {
-  const category = document.getElementById('u-category').value;
-  const engineGroup = document.getElementById('u-engine-group');
-  const versionGroup = document.getElementById('u-version-group');
-  const ramGroup = document.getElementById('u-ram-group');
-  const uploadJarGroup = document.getElementById('u-upload-jar-group');
-  const downloadStatusGroup = document.getElementById('u-download-status-group');
-  const versionSelect = document.getElementById('u-version');
-  const categoryDesc = document.getElementById('u-category-desc');
-  const propsPanel = document.getElementById('u-server-props');
+  const category = (document.getElementById('u-category') || {}).value || '';
+  const method = CREATION_METHODS[currentCreationType] || CREATION_METHODS['fresh'];
   const isImport = currentCreationType === 'import';
+  const isBedrock = category === 'bedrock';
+
+  const versionSelect = document.getElementById('u-version');
+  const engineSelect = document.getElementById('u-engine');
+  const categoryDesc = document.getElementById('u-category-desc');
 
   uVersionAvailability = {};
-  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-  
+  hideEl('u-download-status-group');
+
   if (!category) {
-    engineGroup.style.display = 'none';
-    versionGroup.style.display = 'none';
-    if (currentCreationType !== 'bedrock') ramGroup.style.display = 'none';
-    uploadJarGroup.style.display = 'none';
-    categoryDesc.textContent = 'Choose whether you want a Java or Bedrock server';
+    hideEl('u-engine-group');
+    hideEl('u-version-group');
+    hideEl('u-upload-jar-group');
+    // Memory always applies to an import (its category comes from the archive)
+    if (isImport) showEl('u-ram-group');
+    else hideEl('u-ram-group');
+    setPropsPanelVisible(false);
+    if (categoryDesc) categoryDesc.textContent = 'Choose whether you want a Java or Bedrock server';
+    validateUnifiedForm();
     return;
   }
-  
-  const engineSelect = document.getElementById('u-engine');
-  const pvpOption = document.getElementById('u-pvp-option');
-  const hardcoreOption = document.getElementById('u-hardcore-option');
-  const bedrockProps = document.getElementById('u-bedrock-props');
-  const bedrockStatus = document.getElementById('u-bedrock-setup-status');
-  const jarStatus = document.getElementById('u-jar-download-status');
 
-  if (bedrockProps) bedrockProps.style.display = category === 'bedrock' && !isImport ? '' : 'none';
+  applyPropsEdition(category);
+  setPropsPanelVisible(method.showProps);
+
+  // Java needs RAM/JVM settings; Bedrock is a native binary
+  if (isBedrock) hideEl('u-ram-group');
+  else showEl('u-ram-group');
+
+  // The version picker and custom-JAR upload only apply to a fresh Java build —
+  // an import brings its own executable inside the ZIP.
+  const needsVersionPicker = !isBedrock && !isImport;
+  if (needsVersionPicker) showEl('u-upload-jar-group');
+  else hideEl('u-upload-jar-group');
 
   if (category === 'unmodded') {
-    engineGroup.style.display = 'none';
-    ramGroup.style.display = 'block';
-    categoryDesc.textContent = 'Official Minecraft Java Edition server - no mods or plugins';
-    if (bedrockStatus) bedrockStatus.style.display = 'none';
-    if (isImport) {
-      // Import has its JAR in the ZIP — no version download / JAR upload needed.
-      versionGroup.style.display = 'none';
-      versionSelect.removeAttribute('required');
-      uploadJarGroup.style.display = 'none';
-    } else {
-      versionGroup.style.display = 'block';
-      versionSelect.setAttribute('required', '');
-      uploadJarGroup.style.display = 'block';
-      if (pvpOption) pvpOption.style.display = '';
-      if (hardcoreOption) hardcoreOption.style.display = '';
-      if (jarStatus) jarStatus.style.display = '';
-      document.getElementById('u-server-port').value = document.getElementById('u-server-port').value || '25565';
+    hideEl('u-engine-group');
+    if (categoryDesc) categoryDesc.textContent = 'Official Minecraft Java Edition server — no mods or plugins';
+    if (needsVersionPicker) {
+      showEl('u-version-group');
       loadUnifiedVersionsForEngine('vanilla');
+    } else {
+      hideEl('u-version-group');
     }
   } else if (category === 'modded') {
-    engineGroup.style.display = 'block';
-    versionGroup.style.display = 'none';
-    versionSelect.removeAttribute('required');
-    ramGroup.style.display = 'block';
-    categoryDesc.textContent = 'Java Edition server with plugin/mod support';
-    if (bedrockStatus) bedrockStatus.style.display = 'none';
-    if (isImport) {
-      // Engine is still used to label the import; version/JAR come from the ZIP.
-      engineSelect.removeAttribute('required');
-      uploadJarGroup.style.display = 'none';
-    } else {
-      engineSelect.setAttribute('required', '');
-      uploadJarGroup.style.display = 'block';
-      if (pvpOption) pvpOption.style.display = '';
-      if (hardcoreOption) hardcoreOption.style.display = '';
-      if (jarStatus) jarStatus.style.display = '';
-      engineSelect.value = '';
+    showEl('u-engine-group');
+    if (categoryDesc) categoryDesc.textContent = 'Java Edition server with plugin/mod support';
+    hideEl('u-version-group');
+    if (versionSelect) {
       versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
+      versionSelect.value = '';
       versionSelect.disabled = true;
     }
-  } else if (category === 'bedrock') {
-    engineGroup.style.display = 'none';
-    versionGroup.style.display = 'none';
-    versionSelect.removeAttribute('required');
-    categoryDesc.textContent = 'Official Minecraft Bedrock Edition server - latest version will be downloaded automatically';
-    if (pvpOption) pvpOption.style.display = 'none';
-    if (hardcoreOption) hardcoreOption.style.display = 'none';
-    if (bedrockStatus) bedrockStatus.style.display = 'none';
-    if (jarStatus) jarStatus.style.display = 'none';
-    ramGroup.style.display = 'none';
-    uploadJarGroup.style.display = 'none';
-    document.getElementById('u-server-port').value = '19132';
-    document.getElementById('u-max-players').value = document.getElementById('u-max-players').value || '10';
-    // Show props for bedrock since no version step (import reads them from managed.conf)
-    if (!isImport) propsPanel.style.display = 'flex';
+    if (engineSelect && engineSelect.value && needsVersionPicker) {
+      // Keep an already-picked engine working when the user flips back
+      showEl('u-version-group');
+      loadUnifiedVersionsForEngine(engineSelect.value);
+    }
+  } else if (isBedrock) {
+    hideEl('u-engine-group');
+    hideEl('u-version-group');
+    if (categoryDesc) categoryDesc.textContent = 'Official Minecraft Bedrock Edition server — the latest version is downloaded automatically';
+    if (versionSelect) versionSelect.value = '';
   }
-  
-  checkUnifiedFormReady();
+
+  // Sensible port/player defaults per edition, without clobbering user edits
+  const portInput = document.getElementById('u-server-port');
+  const playersInput = document.getElementById('u-max-players');
+  if (portInput && (!portInput.value || portInput.value === '25565' || portInput.value === '19132')) {
+    portInput.value = isBedrock ? '19132' : '25565';
+  }
+  if (playersInput && (!playersInput.value || playersInput.value === '20' || playersInput.value === '10')) {
+    playersInput.value = isBedrock ? '10' : '20';
+  }
+
+  validateUnifiedForm();
 }
 
 function onUnifiedEngineChange() {
   const engineSelect = document.getElementById('u-engine');
   const versionSelect = document.getElementById('u-version');
   const engineDesc = document.getElementById('u-engine-desc');
-  const versionGroup = document.getElementById('u-version-group');
-  const downloadStatusGroup = document.getElementById('u-download-status-group');
-  
-  const serverEngine = engineSelect.value;
+
+  const serverEngine = engineSelect ? engineSelect.value : '';
   uVersionAvailability = {};
-  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-  
+  hideEl('u-download-status-group');
+
   if (!serverEngine) {
-    versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
-    versionSelect.disabled = true;
-    versionGroup.style.display = 'none';
-    engineDesc.textContent = '';
+    if (versionSelect) {
+      versionSelect.innerHTML = '<option value="">Select server engine first...</option>';
+      versionSelect.value = '';
+      versionSelect.disabled = true;
+    }
+    hideEl('u-version-group');
+    if (engineDesc) engineDesc.textContent = 'Select a server type';
+    validateUnifiedForm();
     return;
   }
-  
+
   const selectedOption = engineSelect.options[engineSelect.selectedIndex];
-  engineDesc.textContent = selectedOption.dataset.description || '';
-  
-  versionGroup.style.display = 'block';
-  loadUnifiedVersionsForEngine(serverEngine);
+  if (engineDesc) engineDesc.textContent = selectedOption.dataset.description || '';
+
+  // Import takes its JAR from the ZIP — no version download step
+  if (currentCreationType !== 'import') {
+    showEl('u-version-group');
+    loadUnifiedVersionsForEngine(serverEngine);
+  }
+  validateUnifiedForm();
 }
 
 async function loadUnifiedEngines() {
@@ -2035,6 +2178,7 @@ async function loadUnifiedVersionsForEngine(serverEngine) {
     
     if (versions.length === 0) {
       versionSelect.innerHTML = '<option value="">No versions available</option>';
+      validateUnifiedForm();
       return;
     }
     
@@ -2058,24 +2202,28 @@ async function loadUnifiedVersionsForEngine(serverEngine) {
     console.error('Failed to load versions:', error);
     versionSelect.innerHTML = '<option value="">Error loading versions</option>';
   }
+  validateUnifiedForm();
 }
 
 function onUnifiedVersionChange() {
-  const version = document.getElementById('u-version').value;
-  const downloadStatusGroup = document.getElementById('u-download-status-group');
+  const version = (document.getElementById('u-version') || {}).value || '';
   const versionStatus = document.getElementById('u-version-status');
   const versionDesc = document.getElementById('u-version-desc');
-  
-  if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
-  
+
+  hideEl('u-download-status-group');
+
   if (!version) {
-    if (versionStatus) versionStatus.textContent = '';
+    if (versionStatus) {
+      versionStatus.textContent = '';
+      versionStatus.className = 'version-status';
+    }
     if (versionDesc) versionDesc.textContent = 'Select the Minecraft version';
+    validateUnifiedForm();
     return;
   }
-  
+
   const info = uVersionAvailability[version] || {};
-  
+
   if (info.downloaded) {
     if (versionStatus) {
       versionStatus.textContent = '✓ Downloaded';
@@ -2087,43 +2235,394 @@ function onUnifiedVersionChange() {
       versionStatus.textContent = '⬇ Will Download';
       versionStatus.className = 'version-status not-downloaded';
     }
-    if (versionDesc) versionDesc.textContent = 'JAR will be automatically downloaded when server is created';
+    if (versionDesc) versionDesc.textContent = 'JAR will be downloaded automatically when the server is created';
   }
-  
-  checkUnifiedFormReady();
-}
 
-// Listen for name input to trigger dynamic reveal
-document.addEventListener('DOMContentLoaded', () => {
-  const nameInput = document.getElementById('u-name');
-  if (nameInput) {
-    nameInput.addEventListener('input', checkUnifiedFormReady);
-  }
-});
+  validateUnifiedForm();
+}
 
 function toggleUnifiedCustomJar() {
   const checkbox = document.getElementById('u-upload-jar');
-  const customSection = document.getElementById('u-custom-jar-upload');
-  
-  if (checkbox.checked) {
-    customSection.style.display = 'block';
-  } else {
-    customSection.style.display = 'none';
+  const versionGroup = document.getElementById('u-version-group');
+  const useCustom = !!(checkbox && checkbox.checked);
+
+  if (useCustom) showEl('u-custom-jar-upload');
+  else hideEl('u-custom-jar-upload');
+
+  // A custom JAR replaces the version download entirely
+  if (versionGroup && currentCreationType === 'fresh') {
+    const category = (document.getElementById('u-category') || {}).value || '';
+    const showVersion = !useCustom && (category === 'unmodded' ||
+      (category === 'modded' && (document.getElementById('u-engine') || {}).value));
+    versionGroup.style.display = showVersion ? 'flex' : 'none';
   }
+
+  validateUnifiedForm();
+}
+
+// ==================== Validation ====================
+
+const uTouchedFields = new Set();
+
+function isFieldVisible(id) {
+  const el = document.getElementById(id);
+  return !!(el && el.offsetParent !== null);
+}
+
+function setFieldError(id, message) {
+  const input = document.getElementById(id);
+  const errorEl = document.getElementById(`${id}-error`);
+  const field = input ? input.closest('.form-field') : null;
+  const show = !!message && uTouchedFields.has(id);
+
+  if (errorEl) {
+    errorEl.textContent = show ? message : '';
+    errorEl.classList.toggle('show', show);
+  }
+  if (field) field.classList.toggle('has-error', show);
+  if (input) {
+    if (show) input.setAttribute('aria-invalid', 'true');
+    else input.removeAttribute('aria-invalid');
+  }
+}
+
+function clearAllUnifiedErrors() {
+  document.querySelectorAll('#unified-server-form .field-error').forEach(el => {
+    el.textContent = '';
+    el.classList.remove('show');
+  });
+  document.querySelectorAll('#unified-server-form .form-field.has-error').forEach(el => {
+    el.classList.remove('has-error');
+  });
+  document.querySelectorAll('#unified-server-form [aria-invalid]').forEach(el => {
+    el.removeAttribute('aria-invalid');
+  });
+}
+
+function intFieldError(id, label, min, max, { required = true } = {}) {
+  if (!isFieldVisible(id)) return null;
+  const el = document.getElementById(id);
+  const raw = (el.value || '').trim();
+  if (!raw) return required ? `${label} is required` : null;
+  const value = Number(raw);
+  if (!Number.isInteger(value)) return `${label} must be a whole number`;
+  if (value < min || value > max) return `${label} must be between ${min} and ${max}`;
+  return null;
+}
+
+/**
+ * Validate everything currently on screen. Returns the list of error messages;
+ * per-field messages are rendered for fields the user has already touched.
+ */
+function validateUnifiedForm() {
+  if (!currentCreationType) return [];
+
+  const value = id => ((document.getElementById(id) || {}).value || '').trim();
+  const hasFile = id => {
+    const el = document.getElementById(id);
+    return !!(el && el.files && el.files.length);
+  };
+
+  const type = currentCreationType;
+  const category = value('u-category');
+  const isBedrock = category === 'bedrock';
+  const useCustomJar = !!(document.getElementById('u-upload-jar') || {}).checked
+    && isFieldVisible('u-upload-jar');
+
+  const errors = {};
+
+  // --- Left column: MServer configuration ---
+  if (type !== 'import' && !value('u-name')) {
+    errors['u-name'] = 'Give your server a name';
+  }
+  if (type !== 'import' && !category) {
+    errors['u-category'] = 'Select a category';
+  }
+  if (category === 'modded' && isFieldVisible('u-engine') && !value('u-engine') && type !== 'import') {
+    errors['u-engine'] = 'Select a server engine';
+  }
+  if (isFieldVisible('u-version') && !useCustomJar && !value('u-version')) {
+    errors['u-version'] = 'Select a Minecraft version';
+  }
+  if (useCustomJar && !hasFile('u-jar-file')) {
+    errors['u-jar-file'] = 'Choose a JAR file to upload';
+  }
+  if (type === 'import' && !hasFile('u-import-file')) {
+    errors['u-import-file'] = 'Choose the server ZIP file to import';
+  }
+  if (type === 'import-world' && !hasFile('u-world-file')) {
+    errors['u-world-file'] = 'Choose the world ZIP file to import';
+  }
+  if (isFieldVisible('u-min-ram')) {
+    const toMb = raw => {
+      const m = /^(\d+)([GM])$/i.exec(raw || '');
+      if (!m) return null;
+      return m[2].toUpperCase() === 'G' ? parseInt(m[1], 10) * 1024 : parseInt(m[1], 10);
+    };
+    const min = toMb(value('u-min-ram'));
+    const max = toMb(value('u-max-ram'));
+    if (min !== null && max !== null && min > max) {
+      errors['u-min-ram'] = 'Min RAM cannot be larger than Max RAM';
+    }
+  }
+
+  // --- Right column: server properties ---
+  const numeric = [
+    ['u-server-port', 'Server port', 1, 65535],
+    ['u-max-players', 'Max players', 1, 100],
+    ['u-view-distance', 'View distance', 4, 255],
+    ['u-tick-distance', 'Tick distance', 4, 12],
+    ['u-idle-timeout', 'Idle timeout', 0, 10080]
+  ];
+  numeric.forEach(([id, label, min, max]) => {
+    const err = intFieldError(id, label, min, max);
+    if (err) errors[id] = err;
+  });
+
+  if (isFieldVisible('u-generator-settings')) {
+    const raw = value('u-generator-settings');
+    if (raw && (raw.startsWith('{') || raw.startsWith('['))) {
+      try {
+        JSON.parse(raw);
+      } catch (_) {
+        errors['u-generator-settings'] = 'Generator settings is not valid JSON';
+      }
+    }
+  }
+
+  // Render per-field messages, then gate the submit button
+  const trackedIds = ['u-name', 'u-category', 'u-engine', 'u-version', 'u-jar-file',
+    'u-import-file', 'u-world-file', 'u-min-ram', 'u-server-port', 'u-max-players',
+    'u-view-distance', 'u-tick-distance', 'u-idle-timeout', 'u-generator-settings'];
+  trackedIds.forEach(id => setFieldError(id, errors[id] || ''));
+
+  const messages = Object.values(errors);
+  updateUnifiedSubmitState(messages);
+  scheduleScrollHintRefresh();
+  return messages;
+}
+
+function updateUnifiedSubmitState(messages) {
+  const submitBtn = document.getElementById('u-submit-btn');
+  const hint = document.getElementById('u-submit-hint');
+  if (!submitBtn) return;
+  if (submitBtn.dataset.busy === '1') return;   // never re-enable mid-submit
+
+  const ok = !messages || messages.length === 0;
+  submitBtn.disabled = !ok;
+  if (hint) {
+    if (ok) {
+      hint.textContent = '';
+    } else if (messages.length === 1) {
+      hint.textContent = messages[0];
+    } else {
+      hint.textContent = `${messages.length} fields still need attention`;
+    }
+  }
+}
+
+// Live validation: mark a field touched once the user interacts with it, and
+// re-check the whole form on every change so the submit button stays honest.
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('unified-server-form');
+  if (!form) return;
+
+  form.addEventListener('input', e => {
+    if (e.target.id) uTouchedFields.add(e.target.id);
+    validateUnifiedForm();
+  });
+  form.addEventListener('change', e => {
+    if (e.target.id) uTouchedFields.add(e.target.id);
+    validateUnifiedForm();
+  });
+  form.addEventListener('blur', e => {
+    if (e.target && e.target.id) {
+      uTouchedFields.add(e.target.id);
+      validateUnifiedForm();
+    }
+  }, true);
+
+  // 'scroll' does not bubble — listen in the capture phase instead
+  const modal = document.getElementById('server-modal');
+  if (modal) modal.addEventListener('scroll', scheduleScrollHintRefresh, true);
+  window.addEventListener('resize', scheduleScrollHintRefresh);
+
+  initFieldTooltips();
+});
+
+// ==================== Help tooltips ====================
+
+let uTooltipEl = null;
+let uTooltipAnchor = null;
+
+function initFieldTooltips() {
+  if (uTooltipEl) return;
+
+  uTooltipEl = document.createElement('div');
+  uTooltipEl.className = 'mserver-tooltip';
+  uTooltipEl.setAttribute('role', 'tooltip');
+  document.body.appendChild(uTooltipEl);
+
+  const show = target => {
+    const tip = target.getAttribute('data-tip');
+    if (!tip) return;
+    uTooltipAnchor = target;
+    uTooltipEl.textContent = tip;
+    uTooltipEl.classList.add('show');
+    positionTooltip(target);
+  };
+  const hide = () => {
+    uTooltipAnchor = null;
+    uTooltipEl.classList.remove('show');
+  };
+
+  document.addEventListener('mouseover', e => {
+    const target = e.target.closest ? e.target.closest('.help-icon') : null;
+    if (target) show(target);
+  });
+  document.addEventListener('mouseout', e => {
+    const target = e.target.closest ? e.target.closest('.help-icon') : null;
+    if (target && target === uTooltipAnchor) hide();
+  });
+  document.addEventListener('focusin', e => {
+    const target = e.target.closest ? e.target.closest('.help-icon') : null;
+    if (target) show(target);
+  });
+  document.addEventListener('focusout', hide);
+  // Tap-to-toggle on touch devices (the icon is inside a <label>, so stop the
+  // click from toggling the checkbox it belongs to)
+  document.addEventListener('click', e => {
+    const target = e.target.closest ? e.target.closest('.help-icon') : null;
+    if (!target) {
+      hide();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    if (uTooltipAnchor === target) hide();
+    else show(target);
+  });
+  window.addEventListener('scroll', () => {
+    if (uTooltipAnchor) positionTooltip(uTooltipAnchor);
+  }, true);
+  window.addEventListener('resize', hide);
+}
+
+function positionTooltip(anchor) {
+  if (!uTooltipEl) return;
+  const rect = anchor.getBoundingClientRect();
+  const tip = uTooltipEl.getBoundingClientRect();
+  const margin = 8;
+
+  let left = rect.left + rect.width / 2 - tip.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tip.width - margin));
+
+  let top = rect.bottom + 6;
+  if (top + tip.height > window.innerHeight - margin) {
+    top = rect.top - tip.height - 6;
+  }
+  top = Math.max(margin, top);
+
+  uTooltipEl.style.left = `${Math.round(left)}px`;
+  uTooltipEl.style.top = `${Math.round(top)}px`;
 }
 
 // ==================== Unified Form Submit ====================
 
 async function submitUnifiedForm(e) {
   e.preventDefault();
-  
-  if (currentCreationType === 'fresh') {
-    await createFreshServer(e);
-  } else if (currentCreationType === 'import') {
-    await importServer(e);
-  } else if (currentCreationType === 'import-world') {
-    await importWorld(e);
+
+  // Belt-and-braces: the submit button is disabled while the form is invalid,
+  // but a keyboard submit or a stale state should never slip past validation.
+  const problems = validateUnifiedForm();
+  if (problems.length) {
+    document.querySelectorAll('#unified-server-form input, #unified-server-form select')
+      .forEach(el => { if (el.id) uTouchedFields.add(el.id); });
+    validateUnifiedForm();
+    const firstBad = document.querySelector('#unified-server-form .form-field.has-error');
+    if (firstBad) firstBad.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    showNotification(problems[0], 'error');
+    return;
   }
+
+  setUnifiedSubmitBusy(true);
+  setWizardStep(3);
+
+  try {
+    if (currentCreationType === 'fresh') {
+      await createFreshServer(e);
+    } else if (currentCreationType === 'import') {
+      await importServer(e);
+    } else if (currentCreationType === 'import-world') {
+      await importWorld(e);
+    }
+  } finally {
+    setUnifiedSubmitBusy(false);
+  }
+}
+
+// While a create/import is in flight the submit button is owned by the flow —
+// the live validator must not flip it back on underneath.
+function setUnifiedSubmitBusy(busy) {
+  const submitBtn = document.getElementById('u-submit-btn');
+  if (!submitBtn) return;
+  if (busy) {
+    submitBtn.dataset.busy = '1';
+    submitBtn.disabled = true;
+  } else {
+    delete submitBtn.dataset.busy;
+    if (currentCreationType) setWizardStep(2);
+    validateUnifiedForm();
+  }
+}
+
+/**
+ * Build the server.properties payload from the properties column.
+ * Booleans stay real booleans — the backend renders them as true/false.
+ */
+function collectUnifiedServerProperties(isBedrock) {
+  const value = id => ((document.getElementById(id) || {}).value || '').trim();
+  const checked = id => !!(document.getElementById(id) || {}).checked;
+  const clampInt = (id, fallback, min, max) => {
+    const parsed = parseInt(value(id), 10);
+    return Number.isNaN(parsed) ? fallback : Math.min(max, Math.max(min, parsed));
+  };
+
+  const props = {
+    'server-port': clampInt('u-server-port', isBedrock ? 19132 : 25565, 1, 65535),
+    'max-players': clampInt('u-max-players', isBedrock ? 10 : 20, 1, 100),
+    'gamemode': value('u-gamemode') || 'survival',
+    'force-gamemode': checked('u-force-gamemode'),
+    'difficulty': value('u-difficulty') || 'easy',
+    'level-seed': value('u-level-seed')
+  };
+
+  if (isBedrock) {
+    props['level-name'] = value('u-level-name') || 'Bedrock level';
+    props['view-distance'] = clampInt('u-view-distance', 32, 4, 255);
+    props['tick-distance'] = clampInt('u-tick-distance', 4, 4, 12);
+    props['player-idle-timeout'] = clampInt('u-idle-timeout', 30, 0, 10080);
+    props['allow-list'] = checked('u-allow-list');
+    return props;
+  }
+
+  props['pvp'] = checked('u-pvp');
+  props['hardcore'] = checked('u-hardcore');
+  props['generate-structures'] = checked('u-generate-structures');
+  props['spawn-npcs'] = checked('u-spawn-npcs');
+  props['spawn-animals'] = checked('u-spawn-animals');
+  props['spawn-monsters'] = checked('u-spawn-monsters');
+  props['enable-command-block'] = checked('u-enable-command-block');
+
+  // Only send the world generator settings when they differ from the vanilla
+  // default — 'level-type' ids are namespaced from 1.16 onward, so leaving the
+  // key out keeps older versions on their own default.
+  const levelType = value('u-level-type');
+  if (levelType && levelType !== 'minecraft:normal') props['level-type'] = levelType;
+  const generatorSettings = value('u-generator-settings');
+  if (generatorSettings) props['generator-settings'] = generatorSettings;
+
+  return props;
 }
 
 // Create fresh server with JAR download
@@ -2142,26 +2641,8 @@ async function createFreshServer(e) {
   const javaArgs = isBedrock ? '' : `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
   const uploadCustom = !isBedrock && document.getElementById('u-upload-jar').checked;
   
-  // Server properties
-  const serverPort = parseInt(document.getElementById('u-server-port').value) || (isBedrock ? 19132 : 25565);
-  const maxPlayers = Math.min(100, Math.max(1, parseInt(document.getElementById('u-max-players').value) || (isBedrock ? 10 : 20)));
-  const gamemode = document.getElementById('u-gamemode').value || 'survival';
-  const difficulty = document.getElementById('u-difficulty').value || 'easy';
-  const levelSeed = document.getElementById('u-level-seed').value.trim();
-  const pvp = document.getElementById('u-pvp').checked;
-  const whiteList = document.getElementById('u-white-list').checked;
-  const hardcore = document.getElementById('u-hardcore').checked;
-
-  // Bedrock-only properties (clamped to the ranges the server accepts)
-  const clampInt = (id, fallback, min, max) => {
-    const el = document.getElementById(id);
-    const parsed = parseInt(el ? el.value : '', 10);
-    return Number.isNaN(parsed) ? fallback : Math.min(max, Math.max(min, parsed));
-  };
-  const levelName = (document.getElementById('u-level-name')?.value || '').trim() || 'Bedrock level';
-  const viewDistance = clampInt('u-view-distance', 32, 4, 255);
-  const tickDistance = clampInt('u-tick-distance', 4, 4, 12);
-  const idleTimeout = clampInt('u-idle-timeout', 30, 0, 10080);
+  // Server properties (the whole right-hand column, per edition)
+  const serverProperties = collectUnifiedServerProperties(isBedrock);
 
   const versionInfo = uVersionAvailability[version] || {};
   const needsDownload = !isBedrock && !versionInfo.downloaded;
@@ -2197,7 +2678,7 @@ async function createFreshServer(e) {
   if (downloadStatusGroup) downloadStatusGroup.style.display = 'none';
   
   const updateProgress = (message, percent = null, isError = false) => {
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    showUnifiedStatusGroup();
     if (downloadInfo) {
       const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
       downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
@@ -2228,7 +2709,7 @@ async function createFreshServer(e) {
       // Bedrock step-by-step creation flow
       const bedrockStatusEl = document.getElementById('u-bedrock-setup-status');
       const jarStatusEl = document.getElementById('u-jar-download-status');
-      if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+      showUnifiedStatusGroup();
       if (bedrockStatusEl) bedrockStatusEl.style.display = 'block';
       if (jarStatusEl) jarStatusEl.style.display = 'none';
 
@@ -2312,18 +2793,7 @@ async function createFreshServer(e) {
             method: 'POST',
             body: JSON.stringify({
               serverName: name,
-              serverProperties: {
-                'server-port': serverPort,
-                'max-players': maxPlayers,
-                'gamemode': gamemode,
-                'difficulty': difficulty,
-                'level-seed': levelSeed,
-                'allow-list': whiteList,
-                'level-name': levelName,
-                'view-distance': viewDistance,
-                'tick-distance': tickDistance,
-                'player-idle-timeout': idleTimeout,
-              }
+              serverProperties
             })
           });
         } catch (setupErr) {
@@ -2414,16 +2884,7 @@ async function createFreshServer(e) {
           javaArgs,
           category,
           serverEngine: 'custom',
-          serverProperties: {
-            'server-port': serverPort,
-            'max-players': maxPlayers,
-            'gamemode': gamemode,
-            'difficulty': difficulty,
-            'level-seed': levelSeed,
-            'pvp': pvp,
-            'white-list': whiteList,
-            'hardcore': hardcore
-          }
+          serverProperties
         })
       });
       
@@ -2536,16 +2997,7 @@ async function createFreshServer(e) {
             serverEngine,
             version,
             downloadJar: true,
-            serverProperties: {
-              'server-port': serverPort,
-              'max-players': maxPlayers,
-              'gamemode': gamemode,
-              'difficulty': difficulty,
-              'level-seed': levelSeed,
-              'pvp': pvp,
-              'white-list': whiteList,
-              'hardcore': hardcore
-            }
+            serverProperties
           })
         });
       } catch (createErr) {
@@ -2591,16 +3043,7 @@ async function createFreshServer(e) {
             serverEngine,
             version,
             downloadJar: true,
-            serverProperties: {
-              'server-port': serverPort,
-              'max-players': maxPlayers,
-              'gamemode': gamemode,
-              'difficulty': difficulty,
-              'level-seed': levelSeed,
-              'pvp': pvp,
-              'white-list': whiteList,
-              'hardcore': hardcore
-            }
+            serverProperties
           })
         });
       } catch (createErr) {
@@ -2649,7 +3092,6 @@ async function importServer(e) {
   const category = document.getElementById('u-category').value;
   const engine = category === 'modded' ? document.getElementById('u-engine').value : 
                  (category === 'bedrock' ? 'Bedrock' : 'Vanilla');
-  const port = document.getElementById('u-server-port').value.trim();
   const minRam = document.getElementById('u-min-ram').value;
   const maxRam = document.getElementById('u-max-ram').value;
   const extraJvmArgs = document.getElementById('u-jvm-args').value.trim();
@@ -2674,10 +3116,9 @@ async function importServer(e) {
     formData.append('javaArgs', javaArgs);
     if (category) formData.append('category', category);
     if (engine) formData.append('engine', engine);
-    if (port) formData.append('port', port);
-    // Note: maxPlayers/gamemode/difficulty/seed/pvp/etc. are intentionally not
-    // sent on import — the import route ignores them; settings come from the
-    // server's managed.conf / server.properties and are edited post-import.
+    // No server.properties values are sent on import: the archive's own
+    // managed.conf / server.properties are authoritative and are edited
+    // post-import, which is why the properties column is hidden for this flow.
 
     const response = await fetch('/api/servers/import', {
       method: 'POST',
@@ -2731,6 +3172,8 @@ async function importWorld(e) {
   const maxRam = document.getElementById('u-max-ram').value;
   const extraJvmArgs = document.getElementById('u-jvm-args').value.trim();
   const javaArgs = `-Xms${minRam} -Xmx${maxRam}${extraJvmArgs ? ' ' + extraJvmArgs : ''}`;
+  // World import is Java-only, so the Java property set always applies here.
+  const serverProperties = collectUnifiedServerProperties(false);
 
   if (!category) { showNotification('Please select a category', 'error'); return; }
   if (category === 'modded' && !serverEngine) { showNotification('Please select a server engine', 'error'); return; }
@@ -2751,7 +3194,7 @@ async function importWorld(e) {
   const downloadInfo = document.querySelector('#u-jar-download-status .download-info');
 
   const updateProgress = (message, percent = null, isError = false) => {
-    if (downloadStatusGroup) downloadStatusGroup.style.display = 'block';
+    showUnifiedStatusGroup();
     if (downloadInfo) {
       const icon = isError ? '❌' : (percent === 100 ? '✓' : '⏳');
       downloadInfo.innerHTML = `<span class="info-icon">${icon}</span> ${message}`;
@@ -2842,7 +3285,7 @@ async function importWorld(e) {
           serverEngine,
           version,
           downloadJar: true,
-          serverProperties: {}
+          serverProperties
         })
       });
     } catch (err) {
@@ -2902,15 +3345,18 @@ async function openEditServerModal() {
     const server = await apiRequest(`/api/servers/${currentServerId}`);
     
     editingServerId = currentServerId;
-    currentCreationType = 'manual';
-    
+    currentCreationType = null;
+
     document.getElementById('modal-title').textContent = 'Edit Server';
-    
-    // Hide creation type section and unified form
+    setModalSubtitle(`Editing “${server.name || 'server'}”`);
+
+    // Edit mode skips the wizard entirely — only the config form is shown
+    const wizardSteps = document.getElementById('wizard-steps');
+    if (wizardSteps) wizardSteps.style.display = 'none';
     document.getElementById('creation-type-section').style.display = 'none';
     document.getElementById('unified-server-form').style.display = 'none';
-    document.getElementById('manual-server-form').style.display = 'block';
-    
+    document.getElementById('manual-server-form').style.display = 'flex';
+
     // Hide the back button in edit mode
     document.querySelector('#manual-server-form .back-btn').style.display = 'none';
     
@@ -2976,6 +3422,7 @@ async function openEditServerModal() {
     }
     
     document.getElementById('server-modal').classList.add('active');
+    scheduleScrollHintRefresh();
   } catch (error) {
     console.error('Failed to load server for editing:', error);
   }
@@ -2985,12 +3432,18 @@ function closeServerModal() {
   document.getElementById('server-modal').classList.remove('active');
   editingServerId = null;
   currentCreationType = null;
-  
+
   // Hide version management section when closing
   const versionSection = document.getElementById('version-management-section');
   if (versionSection) {
     versionSection.style.display = 'none';
   }
+
+  // Leave the wizard in a clean state for the next open
+  const backBtn = document.querySelector('#manual-server-form .back-btn');
+  if (backBtn) backBtn.style.display = '';
+  clearCreationTypeSelection();
+  setUnifiedSubmitBusy(false);
 }
 
 // ==================== Version Change Modal ====================

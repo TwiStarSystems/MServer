@@ -777,398 +777,551 @@
 
     <!-- Add/Edit Server Modal -->
     <div id="server-modal" class="modal">
-      <div class="modal-content modal-unified">
+      <div class="modal-content modal-unified" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div class="modal-header">
-          <h2 id="modal-title">Add Server</h2>
-          <button class="close-btn" onclick="closeServerModal()">&times;</button>
+          <div class="modal-header-text">
+            <h2 id="modal-title">Add Server</h2>
+            <p class="modal-subtitle" id="modal-subtitle">Choose a creation method to get started</p>
+          </div>
+          <button class="close-btn" onclick="closeServerModal()" aria-label="Close">&times;</button>
         </div>
-        
-        <!-- Creation Type Selection (only shown when adding) -->
+
+        <!-- Wizard progress (hidden in edit mode) -->
+        <ol id="wizard-steps" class="wizard-steps" aria-label="Server creation progress">
+          <li class="wizard-step is-active" data-step="1">
+            <span class="wizard-step-dot">1</span>
+            <span class="wizard-step-label">Method</span>
+          </li>
+          <li class="wizard-step" data-step="2">
+            <span class="wizard-step-dot">2</span>
+            <span class="wizard-step-label">Configure</span>
+          </li>
+          <li class="wizard-step" data-step="3">
+            <span class="wizard-step-dot">3</span>
+            <span class="wizard-step-label">Create</span>
+          </li>
+        </ol>
+
+        <!-- STEP 1 — Creation Type Selection (only shown when adding) -->
         <div id="creation-type-section" class="creation-type-section">
-          <h3>Choose how to create your server:</h3>
-          <div class="creation-type-buttons">
-            <button type="button" class="creation-type-btn" onclick="selectCreationType('fresh')">
-              <span class="creation-icon">🆕</span>
-              <span class="creation-text"><span class="creation-label">Create Fresh Server</span><span class="creation-desc">Use a downloaded server JAR</span></span>
+          <h3 id="creation-type-heading">Choose how to create your server</h3>
+          <div class="creation-type-buttons" role="radiogroup" aria-labelledby="creation-type-heading">
+            <button type="button" class="creation-type-btn" data-type="fresh" role="radio" aria-checked="false" onclick="selectCreationType('fresh')">
+              <span class="creation-check" aria-hidden="true">✓</span>
+              <span class="creation-icon" aria-hidden="true">🆕</span>
+              <span class="creation-text">
+                <span class="creation-label">Create Fresh Server</span>
+                <span class="creation-desc">Build a brand-new server. Pick an engine and version — MServer downloads and configures it for you.</span>
+              </span>
             </button>
-            <button type="button" class="creation-type-btn" onclick="selectCreationType('import')">
-              <span class="creation-icon">📦</span>
-              <span class="creation-text"><span class="creation-label">Import Existing Server</span><span class="creation-desc">Import from a ZIP file</span></span>
+            <button type="button" class="creation-type-btn" data-type="import" role="radio" aria-checked="false" onclick="selectCreationType('import')">
+              <span class="creation-check" aria-hidden="true">✓</span>
+              <span class="creation-icon" aria-hidden="true">📦</span>
+              <span class="creation-text">
+                <span class="creation-label">Import Existing Server</span>
+                <span class="creation-desc">Upload a ZIP of a server you already run — standalone or a previous MServer install.</span>
+              </span>
             </button>
-            <button type="button" class="creation-type-btn" onclick="selectCreationType('import-world')">
-              <span class="creation-icon">🌍</span>
-              <span class="creation-text"><span class="creation-label">Import Existing World</span><span class="creation-desc">Fresh server with your world data</span></span>
-            </button>
-            <button type="button" class="creation-type-btn" onclick="selectCreationType('manual')">
-              <span class="creation-icon">⚙️</span>
-              <span class="creation-text"><span class="creation-label">Manual Configuration</span><span class="creation-desc">Point to existing server directory</span></span>
+            <button type="button" class="creation-type-btn" data-type="import-world" role="radio" aria-checked="false" onclick="selectCreationType('import-world')">
+              <span class="creation-check" aria-hidden="true">✓</span>
+              <span class="creation-icon" aria-hidden="true">🌍</span>
+              <span class="creation-text">
+                <span class="creation-label">Import Existing World</span>
+                <span class="creation-desc">Create a fresh server and drop your existing world save straight into it.</span>
+              </span>
             </button>
           </div>
         </div>
 
-        <!-- Unified Server Form (Fresh / Import Server / Import World) -->
-        <form id="unified-server-form" class="server-form unified-server-form" style="display: none;" onsubmit="submitUnifiedForm(event)">
-          <div class="unified-form-columns">
-            <!-- LEFT COLUMN: MServer Configuration -->
-            <div class="unified-form-left">
-              <div class="form-group">
-                <label for="u-name">Server Name:</label>
-                <input type="text" id="u-name" class="form-control" placeholder="My Minecraft Server" autocomplete="off">
-              </div>
-
-              <div class="form-group">
-                <label for="u-category">Category: <span class="u-required-star" style="color: #ff6b6b;">*</span></label>
-                <select id="u-category" class="form-control" onchange="onUnifiedCategoryChange()">
-                  <option value="">Select category...</option>
-                  <option value="unmodded">Java (Vanilla)</option>
-                  <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
-                  <option value="bedrock">Bedrock</option>
-                </select>
-                <small id="u-category-desc" class="type-desc">Choose whether you want a Java or Bedrock server</small>
-              </div>
-
-              <div class="form-group" id="u-engine-group" style="display: none;">
-                <label for="u-engine">Server Engine: <span style="color: #ff6b6b;">*</span></label>
-                <select id="u-engine" class="form-control" onchange="onUnifiedEngineChange()">
-                  <option value="">Select server engine...</option>
-                </select>
-                <small id="u-engine-desc" class="type-desc">Select a server type</small>
-              </div>
-
-              <div class="form-group" id="u-version-group" style="display: none;">
-                <label for="u-version">Version: <span style="color: #ff6b6b;">*</span></label>
-                <div class="version-selector">
-                  <select id="u-version" class="form-control" disabled onchange="onUnifiedVersionChange()">
-                    <option value="">Select category first...</option>
-                  </select>
-                  <span id="u-version-status" class="version-status"></span>
-                </div>
-                <small id="u-version-desc" class="type-desc">Select the Minecraft version</small>
-              </div>
-
-              <div id="u-download-status-group" class="form-group" style="display: none;">
-                <div id="u-jar-download-status" class="jar-download-status">
-                  <div class="download-info"></div>
-                  <div class="download-progress" style="display: none;">
-                    <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
-                    <span class="progress-text">0%</span>
-                  </div>
-                </div>
-                <div id="u-bedrock-setup-status" class="bedrock-setup-status" style="display: none;">
-                  <div class="bedrock-steps">
-                    <div class="bedrock-step" id="bstep-1" data-state="pending">
-                      <div class="bedrock-step-row">
-                        <span class="bstep-icon">○</span>
-                        <span class="bstep-label">Creating server configuration</span>
-                      </div>
-                    </div>
-                    <div class="bedrock-step" id="bstep-2" data-state="pending">
-                      <div class="bedrock-step-row">
-                        <span class="bstep-icon">○</span>
-                        <span class="bstep-label">Downloading latest Bedrock server</span>
-                      </div>
-                      <div class="bstep-progress">
-                        <div class="bstep-bar"><div class="bstep-fill" style="width: 0%;"></div></div>
-                        <span class="bstep-pct">0%</span>
-                      </div>
-                    </div>
-                    <div class="bedrock-step" id="bstep-3" data-state="pending">
-                      <div class="bedrock-step-row">
-                        <span class="bstep-icon">○</span>
-                        <span class="bstep-label">Extracting server files</span>
-                      </div>
-                    </div>
-                    <div class="bedrock-step" id="bstep-4" data-state="pending">
-                      <div class="bedrock-step-row">
-                        <span class="bstep-icon">○</span>
-                        <span class="bstep-label">Writing server.properties</span>
-                      </div>
-                    </div>
-                    <div class="bedrock-step" id="bstep-5" data-state="pending">
-                      <div class="bedrock-step-row">
-                        <span class="bstep-icon">○</span>
-                        <span class="bstep-label">Server ready to start!</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Import-specific fields -->
-              <div id="u-import-fields" class="form-group" style="display: none;">
-                <div class="form-group">
-                  <label for="u-import-file">Server ZIP File: <span style="color: #ff6b6b;">*</span></label>
-                  <input type="file" id="u-import-file" class="form-control" accept=".zip">
-                  <small>Upload a ZIP file containing your existing server files</small>
-                </div>
-                <div class="form-group">
-                  <label for="u-import-executable">Server Executable (optional):</label>
-                  <input type="text" id="u-import-executable" class="form-control" placeholder="e.g. paper-1.21.4.jar — leave blank to auto-detect" autocomplete="off">
-                  <small>The JAR file name inside the ZIP to use as the server. It will be renamed to <code>server.jar</code>.</small>
-                </div>
-                <div class="import-props-hint">
-                  <small>💡 Server settings (port, game rules, etc.) are read from the imported server's <code>managed.conf</code> when present, or default and can be changed after import. Set the <strong>Category</strong> if the import has no <code>managed.conf</code> (e.g. a manual or Bedrock server).</small>
-                </div>
-              </div>
-
-              <!-- Import World field -->
-              <div id="u-world-file-group" class="form-group" style="display: none;">
-                <label for="u-world-file">World ZIP File: <span style="color: #ff6b6b;">*</span></label>
-                <input type="file" id="u-world-file" class="form-control" accept=".zip">
-                <small>ZIP containing your Minecraft world folder (must include <code>level.dat</code>)</small>
-              </div>
-
-              <!-- RAM & JVM (shown dynamically) -->
-              <div id="u-ram-group" style="display: none;">
-                <div class="form-group">
-                  <label>Memory Allocation:</label>
-                  <div class="ram-inputs">
-                    <div class="ram-field">
-                      <label for="u-min-ram">Min RAM:</label>
-                      <select id="u-min-ram" class="form-control">
-                        <option value="512M">512 MB</option>
-                        <option value="1G" selected>1 GB</option>
-                        <option value="2G">2 GB</option>
-                        <option value="3G">3 GB</option>
-                        <option value="4G">4 GB</option>
-                        <option value="6G">6 GB</option>
-                        <option value="8G">8 GB</option>
-                        <option value="12G">12 GB</option>
-                        <option value="16G">16 GB</option>
-                      </select>
-                    </div>
-                    <div class="ram-field">
-                      <label for="u-max-ram">Max RAM:</label>
-                      <select id="u-max-ram" class="form-control">
-                        <option value="1G">1 GB</option>
-                        <option value="2G" selected>2 GB</option>
-                        <option value="3G">3 GB</option>
-                        <option value="4G">4 GB</option>
-                        <option value="6G">6 GB</option>
-                        <option value="8G">8 GB</option>
-                        <option value="12G">12 GB</option>
-                        <option value="16G">16 GB</option>
-                        <option value="24G">24 GB</option>
-                        <option value="32G">32 GB</option>
-                      </select>
-                    </div>
-                  </div>
-                  <small>Minimum and maximum memory for the JVM</small>
-                </div>
-                <div class="form-group jvm-args-group">
-                  <label for="u-jvm-args">Additional JVM Arguments (optional):</label>
-                  <input type="text" id="u-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
-                  <small>Extra Java arguments (memory args are set automatically above)</small>
-                </div>
-              </div>
-
-              <div class="form-group" id="u-upload-jar-group" style="display: none;">
-                <label>
-                  <input type="checkbox" id="u-upload-jar" onchange="toggleUnifiedCustomJar()"> Upload my own JAR file instead
-                </label>
-              </div>
-              <div id="u-custom-jar-upload" class="form-group" style="display: none;">
-                <label for="u-jar-file">Custom JAR File:</label>
-                <input type="file" id="u-jar-file" class="form-control" accept=".jar">
-                <small>Upload your own server JAR file</small>
-              </div>
+        <!-- STEP 2 — Unified Server Form (Fresh / Import Server / Import World) -->
+        <form id="unified-server-form" class="server-form unified-server-form" style="display: none;" onsubmit="submitUnifiedForm(event)" novalidate>
+          <div class="unified-form-scroll">
+            <!-- Selected-method banner -->
+            <div class="method-banner" id="u-method-banner">
+              <span class="method-banner-icon" id="u-method-icon" aria-hidden="true">🆕</span>
+              <span class="method-banner-text">
+                <strong id="u-method-title">Create Fresh Server</strong>
+                <small id="u-method-desc">Build a brand-new server from a downloaded engine.</small>
+              </span>
+              <button type="button" class="btn btn-ghost btn-small" onclick="backToCreationType()">Change</button>
             </div>
 
-            <!-- RIGHT COLUMN: Server Properties (appears dynamically) -->
-            <div class="unified-form-right" id="u-server-props" style="display: none;">
-              <div class="form-group-header">
-                <h4>🎮 Server Properties</h4>
-                <small>These settings will be saved to server.properties</small>
-              </div>
-              <div class="form-row">
-                <div class="form-group half">
-                  <label for="u-server-port">Server Port:</label>
-                  <input type="number" id="u-server-port" class="form-control" value="25565" min="1" max="65535" autocomplete="off">
-                  <small>Default: 25565 (1-65535)</small>
-                </div>
-                <div class="form-group half">
-                  <label for="u-max-players">Max Players:</label>
-                  <input type="number" id="u-max-players" class="form-control" value="20" min="1" max="100" autocomplete="off">
-                  <small>Maximum players (1-100)</small>
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group half">
-                  <label for="u-gamemode">Game Mode:</label>
-                  <select id="u-gamemode" class="form-control">
-                    <option value="survival" selected>Survival</option>
-                    <option value="creative">Creative</option>
-                    <option value="adventure">Adventure</option>
-                    <option value="spectator">Spectator</option>
-                  </select>
-                </div>
-                <div class="form-group half">
-                  <label for="u-difficulty">Difficulty:</label>
-                  <select id="u-difficulty" class="form-control">
-                    <option value="peaceful">Peaceful</option>
-                    <option value="easy" selected>Easy</option>
-                    <option value="normal">Normal</option>
-                    <option value="hard">Hard</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group half">
-                  <label for="u-level-seed">Level Seed (optional):</label>
-                  <input type="text" id="u-level-seed" class="form-control" placeholder="Leave blank for random" autocomplete="off">
-                  <small>Leave empty for a random seed</small>
-                </div>
-                <div class="form-group half">
-                  <label>&nbsp;</label>
-                  <div style="display: flex; flex-direction: column; gap: 8px; padding-top: 8px;">
-                    <label id="u-pvp-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
-                      <input type="checkbox" id="u-pvp" checked style="margin-right: 8px;">
-                      <span>Enable PvP</span>
-                    </label>
-                    <label style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
-                      <input type="checkbox" id="u-white-list" style="margin-right: 8px;">
-                      <span>Enable Whitelist</span>
-                    </label>
-                    <label id="u-hardcore-option" style="display: flex; align-items: center; padding: 0; margin: 0; font-weight: normal;">
-                      <input type="checkbox" id="u-hardcore" style="margin-right: 8px;">
-                      <span>Hardcore Mode</span>
-                    </label>
+            <div class="unified-form-columns">
+              <!-- LEFT COLUMN: MServer configuration (required fields) -->
+              <section class="form-panel form-panel-left">
+                <header class="form-panel-header">
+                  <h4><span aria-hidden="true">🛠️</span> Server Configuration</h4>
+                  <small>What MServer needs to build and launch your server</small>
+                </header>
+                <div class="form-panel-body">
+                  <div class="form-field" id="u-name-field">
+                    <label for="u-name">Server Name <span class="req" id="u-name-req">*</span></label>
+                    <input type="text" id="u-name" class="form-control" placeholder="My Minecraft Server" autocomplete="off">
+                    <span class="field-error" id="u-name-error"></span>
+                    <small class="field-hint" id="u-name-hint">The display name shown in the panel</small>
                   </div>
-                </div>
-              </div>
 
-              <!-- Bedrock-only properties -->
-              <div id="u-bedrock-props" style="display: none;">
-                <div class="form-row">
-                  <div class="form-group half">
-                    <label for="u-level-name">Level Name:</label>
-                    <input type="text" id="u-level-name" class="form-control" value="Bedrock level" autocomplete="off">
-                    <small>Folder name of the world under <code>worlds/</code></small>
+                  <div class="form-field" id="u-category-field">
+                    <label for="u-category">
+                      Category <span class="req" id="u-category-req">*</span>
+                      <button type="button" class="help-icon" data-tip="Java servers run from a .jar and support plugins/mods. Bedrock is the console/mobile edition and always installs the latest release." aria-label="More information">?</button>
+                    </label>
+                    <select id="u-category" class="form-control" onchange="onUnifiedCategoryChange()">
+                      <option value="">Select category...</option>
+                      <option value="unmodded">Java (Vanilla)</option>
+                      <option value="modded">Java (Modded — Paper, Folia, Purpur, etc.)</option>
+                      <option value="bedrock">Bedrock</option>
+                    </select>
+                    <span class="field-error" id="u-category-error"></span>
+                    <small class="field-hint type-desc" id="u-category-desc">Choose whether you want a Java or Bedrock server</small>
                   </div>
-                  <div class="form-group half">
-                    <label for="u-idle-timeout">Idle Timeout (minutes):</label>
-                    <input type="number" id="u-idle-timeout" class="form-control" value="30" min="0" max="10080" autocomplete="off">
-                    <small>Kick idle players after this many minutes (0 = never)</small>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group half">
-                    <label for="u-view-distance">View Distance:</label>
-                    <input type="number" id="u-view-distance" class="form-control" value="32" min="4" max="255" autocomplete="off">
-                    <small>Max view distance in chunks (4-255)</small>
-                  </div>
-                  <div class="form-group half">
-                    <label for="u-tick-distance">Tick Distance:</label>
-                    <input type="number" id="u-tick-distance" class="form-control" value="4" min="4" max="12" autocomplete="off">
-                    <small>Chunks ticked around a player (4-12)</small>
-                  </div>
-                </div>
-              </div>
 
-              <!-- Import Server: hint about managed.conf -->
-              <div id="u-import-props-hint" class="import-props-hint" style="display: none;">
-                <small>💡 Leave fields blank to use values from the imported server's managed.conf</small>
-              </div>
+                  <div class="form-field" id="u-engine-group" style="display: none;">
+                    <label for="u-engine">
+                      Server Engine <span class="req">*</span>
+                      <button type="button" class="help-icon" data-tip="The server software to run. Paper is the usual choice for plugins; Fabric/Forge for mods." aria-label="More information">?</button>
+                    </label>
+                    <select id="u-engine" class="form-control" onchange="onUnifiedEngineChange()">
+                      <option value="">Select server engine...</option>
+                    </select>
+                    <span class="field-error" id="u-engine-error"></span>
+                    <small class="field-hint type-desc" id="u-engine-desc">Select a server type</small>
+                  </div>
+
+                  <div class="form-field" id="u-version-group" style="display: none;">
+                    <label for="u-version">
+                      Version <span class="req">*</span>
+                      <button type="button" class="help-icon" data-tip="The Minecraft version to install. Versions marked ✓ are already downloaded and install instantly." aria-label="More information">?</button>
+                    </label>
+                    <div class="version-selector">
+                      <select id="u-version" class="form-control" disabled onchange="onUnifiedVersionChange()">
+                        <option value="">Select category first...</option>
+                      </select>
+                      <span id="u-version-status" class="version-status"></span>
+                    </div>
+                    <span class="field-error" id="u-version-error"></span>
+                    <small class="field-hint type-desc" id="u-version-desc">Select the Minecraft version</small>
+                  </div>
+
+                  <!-- Import Existing Server fields -->
+                  <div id="u-import-fields" style="display: none;">
+                    <div class="form-field">
+                      <label for="u-import-file">Server ZIP File <span class="req">*</span></label>
+                      <input type="file" id="u-import-file" class="form-control file-input" accept=".zip">
+                      <span class="field-error" id="u-import-file-error"></span>
+                      <small class="field-hint">A ZIP containing your existing server files (the folder with <code>server.jar</code>)</small>
+                    </div>
+                    <div class="form-field">
+                      <label for="u-import-executable">
+                        Server Executable <span class="opt-tag">optional</span>
+                        <button type="button" class="help-icon" data-tip="Name of the JAR inside the ZIP to launch. Leave blank and MServer auto-detects it. The file is renamed to server.jar." aria-label="More information">?</button>
+                      </label>
+                      <input type="text" id="u-import-executable" class="form-control" placeholder="e.g. paper-1.21.4.jar — blank to auto-detect" autocomplete="off">
+                    </div>
+                    <div class="import-props-hint" id="u-import-props-hint">
+                      <small>💡 Settings such as port and game rules are read from the imported server's <code>managed.conf</code> / <code>server.properties</code>, and can be changed after the import. Set <strong>Category</strong> only if the ZIP has no <code>managed.conf</code> (e.g. a manual or Bedrock server).</small>
+                    </div>
+                  </div>
+
+                  <!-- Import Existing World field -->
+                  <div class="form-field" id="u-world-file-group" style="display: none;">
+                    <label for="u-world-file">World ZIP File <span class="req">*</span></label>
+                    <input type="file" id="u-world-file" class="form-control file-input" accept=".zip">
+                    <span class="field-error" id="u-world-file-error"></span>
+                    <small class="field-hint">ZIP containing your Minecraft world folder (must include <code>level.dat</code>)</small>
+                  </div>
+
+                  <!-- RAM & JVM -->
+                  <div id="u-ram-group" style="display: none;">
+                    <div class="form-field">
+                      <label>
+                        Memory Allocation
+                        <button type="button" class="help-icon" data-tip="Min/Max heap size for the JVM (-Xms / -Xmx). Max should stay below the host's free RAM." aria-label="More information">?</button>
+                      </label>
+                      <div class="ram-inputs">
+                        <div class="ram-field">
+                          <label for="u-min-ram">Min RAM</label>
+                          <select id="u-min-ram" class="form-control">
+                            <option value="512M">512 MB</option>
+                            <option value="1G" selected>1 GB</option>
+                            <option value="2G">2 GB</option>
+                            <option value="3G">3 GB</option>
+                            <option value="4G">4 GB</option>
+                            <option value="6G">6 GB</option>
+                            <option value="8G">8 GB</option>
+                            <option value="12G">12 GB</option>
+                            <option value="16G">16 GB</option>
+                          </select>
+                        </div>
+                        <div class="ram-field">
+                          <label for="u-max-ram">Max RAM</label>
+                          <select id="u-max-ram" class="form-control">
+                            <option value="1G">1 GB</option>
+                            <option value="2G" selected>2 GB</option>
+                            <option value="3G">3 GB</option>
+                            <option value="4G">4 GB</option>
+                            <option value="6G">6 GB</option>
+                            <option value="8G">8 GB</option>
+                            <option value="12G">12 GB</option>
+                            <option value="16G">16 GB</option>
+                            <option value="24G">24 GB</option>
+                            <option value="32G">32 GB</option>
+                          </select>
+                        </div>
+                      </div>
+                      <span class="field-error" id="u-ram-error"></span>
+                    </div>
+                    <div class="form-field jvm-args-group">
+                      <label for="u-jvm-args">
+                        Additional JVM Arguments <span class="opt-tag">optional</span>
+                        <button type="button" class="help-icon" data-tip="Extra Java flags appended after the memory arguments, which are set automatically above." aria-label="More information">?</button>
+                      </label>
+                      <input type="text" id="u-jvm-args" class="form-control" placeholder="e.g. -XX:+UseG1GC -XX:MaxGCPauseMillis=200" autocomplete="off">
+                    </div>
+                  </div>
+
+                  <!-- Custom JAR -->
+                  <div class="form-field" id="u-upload-jar-group" style="display: none;">
+                    <label class="switch-row">
+                      <input type="checkbox" id="u-upload-jar" onchange="toggleUnifiedCustomJar()">
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Upload my own JAR file instead</span>
+                      <button type="button" class="help-icon" data-tip="Skip the version download and provide your own server JAR. It is stored as server.jar." aria-label="More information">?</button>
+                    </label>
+                  </div>
+                  <div class="form-field" id="u-custom-jar-upload" style="display: none;">
+                    <label for="u-jar-file">Custom JAR File <span class="req">*</span></label>
+                    <input type="file" id="u-jar-file" class="form-control file-input" accept=".jar">
+                    <span class="field-error" id="u-jar-file-error"></span>
+                    <small class="field-hint">Upload your own server JAR file</small>
+                  </div>
+
+                  <!-- Progress / status -->
+                  <div id="u-download-status-group" style="display: none;">
+                    <div id="u-jar-download-status" class="jar-download-status">
+                      <div class="download-info"></div>
+                      <div class="download-progress" style="display: none;">
+                        <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+                        <span class="progress-text">0%</span>
+                      </div>
+                    </div>
+                    <div id="u-bedrock-setup-status" class="bedrock-setup-status" style="display: none;">
+                      <div class="bedrock-steps">
+                        <div class="bedrock-step" id="bstep-1" data-state="pending">
+                          <div class="bedrock-step-row">
+                            <span class="bstep-icon">○</span>
+                            <span class="bstep-label">Creating server configuration</span>
+                          </div>
+                        </div>
+                        <div class="bedrock-step" id="bstep-2" data-state="pending">
+                          <div class="bedrock-step-row">
+                            <span class="bstep-icon">○</span>
+                            <span class="bstep-label">Downloading latest Bedrock server</span>
+                          </div>
+                          <div class="bstep-progress">
+                            <div class="bstep-bar"><div class="bstep-fill" style="width: 0%;"></div></div>
+                            <span class="bstep-pct">0%</span>
+                          </div>
+                        </div>
+                        <div class="bedrock-step" id="bstep-3" data-state="pending">
+                          <div class="bedrock-step-row">
+                            <span class="bstep-icon">○</span>
+                            <span class="bstep-label">Extracting server files</span>
+                          </div>
+                        </div>
+                        <div class="bedrock-step" id="bstep-4" data-state="pending">
+                          <div class="bedrock-step-row">
+                            <span class="bstep-icon">○</span>
+                            <span class="bstep-label">Writing server.properties</span>
+                          </div>
+                        </div>
+                        <div class="bedrock-step" id="bstep-5" data-state="pending">
+                          <div class="bedrock-step-row">
+                            <span class="bstep-icon">○</span>
+                            <span class="bstep-label">Server ready to start!</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- RIGHT COLUMN: Server Properties -->
+              <section class="form-panel form-panel-right" id="u-server-props" style="display: none;">
+                <header class="form-panel-header">
+                  <h4><span aria-hidden="true">🎮</span> Server Properties</h4>
+                  <small>Written to <code>server.properties</code> — every field is optional</small>
+                </header>
+                <div class="form-panel-body form-panel-scroll">
+                  <div class="prop-grid">
+                    <div class="form-field">
+                      <label for="u-server-port">
+                        Server Port
+                        <button type="button" class="help-icon" data-tip="Port players connect to. Must be free on the host: 25565 for Java, 19132 for Bedrock." aria-label="More information">?</button>
+                      </label>
+                      <input type="number" id="u-server-port" class="form-control" value="25565" min="1" max="65535" autocomplete="off">
+                      <span class="field-error" id="u-server-port-error"></span>
+                    </div>
+                    <div class="form-field">
+                      <label for="u-max-players">
+                        Max Players
+                        <button type="button" class="help-icon" data-tip="How many players can be online at once." aria-label="More information">?</button>
+                      </label>
+                      <input type="number" id="u-max-players" class="form-control" value="20" min="1" max="100" autocomplete="off">
+                      <span class="field-error" id="u-max-players-error"></span>
+                    </div>
+                    <div class="form-field">
+                      <label for="u-gamemode">Game Mode</label>
+                      <select id="u-gamemode" class="form-control">
+                        <option value="survival" selected>Survival</option>
+                        <option value="creative">Creative</option>
+                        <option value="adventure">Adventure</option>
+                        <option value="spectator">Spectator</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="u-difficulty">Difficulty</label>
+                      <select id="u-difficulty" class="form-control">
+                        <option value="peaceful">Peaceful</option>
+                        <option value="easy" selected>Easy</option>
+                        <option value="normal">Normal</option>
+                        <option value="hard">Hard</option>
+                      </select>
+                    </div>
+
+                    <!-- Java-only world generation fields -->
+                    <div class="form-field prop-java" id="u-level-type-field">
+                      <label for="u-level-type">
+                        Level Type
+                        <button type="button" class="help-icon" data-tip="World generator preset. Superflat and Single Biome read their configuration from Generator Settings. Applies to Minecraft 1.16+." aria-label="More information">?</button>
+                      </label>
+                      <select id="u-level-type" class="form-control" onchange="onUnifiedLevelTypeChange()">
+                        <option value="minecraft:normal" selected>Normal</option>
+                        <option value="minecraft:flat">Superflat</option>
+                        <option value="minecraft:large_biomes">Large Biomes</option>
+                        <option value="minecraft:amplified">Amplified</option>
+                        <option value="minecraft:single_biome_surface">Single Biome</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="u-level-seed">
+                        Level Seed <span class="opt-tag">optional</span>
+                        <button type="button" class="help-icon" data-tip="Leave blank for a random world. Paste a seed to regenerate a specific world." aria-label="More information">?</button>
+                      </label>
+                      <input type="text" id="u-level-seed" class="form-control" placeholder="Blank = random" autocomplete="off">
+                    </div>
+
+                    <!-- Bedrock-only fields -->
+                    <div class="form-field prop-bedrock" style="display: none;">
+                      <label for="u-level-name">
+                        Level Name
+                        <button type="button" class="help-icon" data-tip="Folder name of the world under worlds/." aria-label="More information">?</button>
+                      </label>
+                      <input type="text" id="u-level-name" class="form-control" value="Bedrock level" autocomplete="off">
+                    </div>
+                    <div class="form-field prop-bedrock" style="display: none;">
+                      <label for="u-idle-timeout">
+                        Idle Timeout (min)
+                        <button type="button" class="help-icon" data-tip="Kick idle players after this many minutes. 0 disables it." aria-label="More information">?</button>
+                      </label>
+                      <input type="number" id="u-idle-timeout" class="form-control" value="30" min="0" max="10080" autocomplete="off">
+                      <span class="field-error" id="u-idle-timeout-error"></span>
+                    </div>
+                    <div class="form-field prop-bedrock" style="display: none;">
+                      <label for="u-view-distance">View Distance</label>
+                      <input type="number" id="u-view-distance" class="form-control" value="32" min="4" max="255" autocomplete="off">
+                      <span class="field-error" id="u-view-distance-error"></span>
+                    </div>
+                    <div class="form-field prop-bedrock" style="display: none;">
+                      <label for="u-tick-distance">Tick Distance</label>
+                      <input type="number" id="u-tick-distance" class="form-control" value="4" min="4" max="12" autocomplete="off">
+                      <span class="field-error" id="u-tick-distance-error"></span>
+                    </div>
+                  </div>
+
+                  <div class="form-field prop-java prop-full" id="u-generator-settings-field">
+                    <label for="u-generator-settings">
+                      Generator Settings <span class="opt-tag">optional</span>
+                      <button type="button" class="help-icon" data-tip="JSON generator configuration used by Superflat and Single Biome worlds. Leave blank for the preset default." aria-label="More information">?</button>
+                    </label>
+                    <input type="text" id="u-generator-settings" class="form-control" placeholder='e.g. {"layers":[{"block":"bedrock","height":1}]}' autocomplete="off">
+                    <small class="field-hint" id="u-generator-settings-hint">Only used by the Superflat and Single Biome level types</small>
+                  </div>
+
+                  <div class="prop-toggles-header">Gameplay</div>
+                  <div class="prop-toggles">
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-pvp" checked>
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Enable PvP</span>
+                      <button type="button" class="help-icon" data-tip="Allow players to damage each other." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row">
+                      <input type="checkbox" id="u-force-gamemode">
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Force Game Mode</span>
+                      <button type="button" class="help-icon" data-tip="Reset players to the default game mode every time they join." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-hardcore">
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Hardcore Mode</span>
+                      <button type="button" class="help-icon" data-tip="Difficulty locks to hard and death is permanent — players are set to spectator." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-generate-structures" checked>
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Generate Structures</span>
+                      <button type="button" class="help-icon" data-tip="Generate villages, temples, strongholds and other structures." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-spawn-npcs" checked>
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Spawn NPCs</span>
+                      <button type="button" class="help-icon" data-tip="Allow villagers to spawn." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-spawn-animals" checked>
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Spawn Animals</span>
+                      <button type="button" class="help-icon" data-tip="Allow passive mobs such as cows and sheep to spawn." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-spawn-monsters" checked>
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Spawn Monsters</span>
+                      <button type="button" class="help-icon" data-tip="Allow hostile mobs to spawn." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-java">
+                      <input type="checkbox" id="u-enable-command-block">
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Enable Command Blocks</span>
+                      <button type="button" class="help-icon" data-tip="Allow command blocks to run in the world." aria-label="More information">?</button>
+                    </label>
+                    <label class="switch-row prop-bedrock" style="display: none;">
+                      <input type="checkbox" id="u-allow-list">
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Enable Allow List</span>
+                      <button type="button" class="help-icon" data-tip="Bedrock's whitelist — only players on the allow list can join." aria-label="More information">?</button>
+                    </label>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
 
-          <div class="modal-footer">
-            <button type="button" class="btn back-btn" onclick="backToCreationType()">← Back</button>
-            <button type="submit" class="btn btn-success" id="u-submit-btn">Create Server</button>
-            <button type="button" class="btn" onclick="closeServerModal()">Cancel</button>
+          <div class="modal-footer unified-footer">
+            <button type="button" class="btn btn-ghost back-btn" onclick="backToCreationType()">← Back</button>
+            <span class="footer-spacer"></span>
+            <span class="submit-hint" id="u-submit-hint"></span>
+            <button type="button" class="btn btn-ghost" onclick="closeServerModal()">Cancel</button>
+            <button type="submit" class="btn btn-success" id="u-submit-btn" disabled>Create Server</button>
           </div>
         </form>
 
-        <!-- Manual Configuration Form (Edit mode uses this too) -->
+        <!-- Edit Server Form (edit mode only) -->
         <form id="manual-server-form" class="server-form unified-server-form" style="display: none;" onsubmit="saveServer(event)">
-          <div class="unified-form-columns">
-            <div class="unified-form-left">
-          <div class="form-group">
-            <label for="input-name">Server Name:</label>
-            <input type="text" id="input-name" class="form-control" placeholder="My Minecraft Server" required autocomplete="off">
-          </div>
-          
-          <div class="form-group">
-            <label for="input-category">Category:</label>
-            <select id="input-category" class="form-control">
-              <option value="unmodded">Java (Vanilla)</option>
-              <option value="modded">Java (Modded - Paper, Folia, Purpur, etc.)</option>
-              <option value="bedrock">Bedrock</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="input-path">Server Directory Path:</label>
-            <input type="text" id="input-path" class="form-control" placeholder="/path/to/minecraft/server" autocomplete="off">
-            <small id="path-hint">Leave empty to auto-create in the default servers directory</small>
-          </div>
-          
-          <!-- Version Management Section (only shown in edit mode) -->
-          <div id="version-management-section" class="form-group" style="display: none;">
-            <label>Server Version:</label>
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span id="current-version-display" style="font-weight: bold; color: #4CAF50;">Loading...</span>
-              <button type="button" class="btn btn-small" onclick="openVersionChangeModal()">🔄 Update/Change Version</button>
+          <div class="unified-form-scroll">
+            <div class="unified-form-columns single">
+              <section class="form-panel form-panel-left">
+                <header class="form-panel-header">
+                  <h4><span aria-hidden="true">🛠️</span> Server Configuration</h4>
+                  <small>Update how MServer launches this server</small>
+                </header>
+                <div class="form-panel-body">
+                  <div class="form-field">
+                    <label for="input-name">Server Name <span class="req">*</span></label>
+                    <input type="text" id="input-name" class="form-control" placeholder="My Minecraft Server" required autocomplete="off">
+                  </div>
+
+                  <div class="form-field">
+                    <label for="input-category">Category</label>
+                    <select id="input-category" class="form-control">
+                      <option value="unmodded">Java (Vanilla)</option>
+                      <option value="modded">Java (Modded — Paper, Folia, Purpur, etc.)</option>
+                      <option value="bedrock">Bedrock</option>
+                    </select>
+                  </div>
+
+                  <div class="form-field">
+                    <label for="input-path">Server Directory Path</label>
+                    <input type="text" id="input-path" class="form-control" placeholder="/path/to/minecraft/server" autocomplete="off">
+                    <small class="field-hint" id="path-hint">Leave empty to auto-create in the default servers directory</small>
+                  </div>
+
+                  <!-- Version Management Section (only shown in edit mode) -->
+                  <div class="form-field" id="version-management-section" style="display: none;">
+                    <label>Server Version</label>
+                    <div class="version-manage-row">
+                      <span id="current-version-display" class="version-current">Loading...</span>
+                      <button type="button" class="btn btn-small" onclick="openVersionChangeModal()">🔄 Update/Change Version</button>
+                    </div>
+                    <small class="field-hint">Change the Minecraft server version (e.g. upgrade or downgrade)</small>
+                  </div>
+
+                  <div class="form-field">
+                    <label>
+                      Memory Allocation
+                      <button type="button" class="help-icon" data-tip="Min/Max heap size for the JVM (-Xms / -Xmx)." aria-label="More information">?</button>
+                    </label>
+                    <div class="ram-inputs">
+                      <div class="ram-field">
+                        <label for="input-min-ram">Min RAM</label>
+                        <select id="input-min-ram" class="form-control">
+                          <option value="512M">512 MB</option>
+                          <option value="1G" selected>1 GB</option>
+                          <option value="2G">2 GB</option>
+                          <option value="3G">3 GB</option>
+                          <option value="4G">4 GB</option>
+                          <option value="6G">6 GB</option>
+                          <option value="8G">8 GB</option>
+                          <option value="12G">12 GB</option>
+                          <option value="16G">16 GB</option>
+                        </select>
+                      </div>
+                      <div class="ram-field">
+                        <label for="input-max-ram">Max RAM</label>
+                        <select id="input-max-ram" class="form-control">
+                          <option value="1G">1 GB</option>
+                          <option value="2G" selected>2 GB</option>
+                          <option value="3G">3 GB</option>
+                          <option value="4G">4 GB</option>
+                          <option value="6G">6 GB</option>
+                          <option value="8G">8 GB</option>
+                          <option value="12G">12 GB</option>
+                          <option value="16G">16 GB</option>
+                          <option value="24G">24 GB</option>
+                          <option value="32G">32 GB</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-field">
+                    <label for="input-jvm-args">Additional JVM Arguments <span class="opt-tag">optional</span></label>
+                    <input type="text" id="input-jvm-args" class="form-control" placeholder="e.g. -XX:+UseG1GC -XX:MaxGCPauseMillis=200">
+                    <small class="field-hint">Extra Java arguments (memory args are set automatically above)</small>
+                  </div>
+
+                  <div class="form-field">
+                    <label class="switch-row">
+                      <input type="checkbox" id="input-auto-start">
+                      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                      <span class="switch-label">Auto-start on controller startup</span>
+                      <button type="button" class="help-icon" data-tip="Start this server 15 seconds after MServer starts, e.g. after a host reboot." aria-label="More information">?</button>
+                    </label>
+                  </div>
+                </div>
+              </section>
             </div>
-            <small>Change the Minecraft server version (e.g., upgrade or downgrade)</small>
-          </div>
-          
-          <div class="form-group">
-            <label>Memory Allocation:</label>
-            <div class="ram-inputs">
-              <div class="ram-field">
-                <label for="input-min-ram">Min RAM:</label>
-                <select id="input-min-ram" class="form-control">
-                  <option value="512M">512 MB</option>
-                  <option value="1G" selected>1 GB</option>
-                  <option value="2G">2 GB</option>
-                  <option value="3G">3 GB</option>
-                  <option value="4G">4 GB</option>
-                  <option value="6G">6 GB</option>
-                  <option value="8G">8 GB</option>
-                  <option value="12G">12 GB</option>
-                  <option value="16G">16 GB</option>
-                </select>
-              </div>
-              <div class="ram-field">
-                <label for="input-max-ram">Max RAM:</label>
-                <select id="input-max-ram" class="form-control">
-                  <option value="1G">1 GB</option>
-                  <option value="2G" selected>2 GB</option>
-                  <option value="3G">3 GB</option>
-                  <option value="4G">4 GB</option>
-                  <option value="6G">6 GB</option>
-                  <option value="8G">8 GB</option>
-                  <option value="12G">12 GB</option>
-                  <option value="16G">16 GB</option>
-                  <option value="24G">24 GB</option>
-                  <option value="32G">32 GB</option>
-                </select>
-              </div>
-            </div>
-            <small>Minimum and maximum memory for the JVM</small>
-          </div>
-          
-          <div class="form-group">
-            <label for="input-jvm-args">Additional JVM Arguments (optional):</label>
-            <input type="text" id="input-jvm-args" class="form-control" placeholder="e.g., -XX:+UseG1GC -XX:MaxGCPauseMillis=200">
-            <small>Extra Java arguments (memory args are set automatically above)</small>
           </div>
 
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="input-auto-start">
-              Auto-Start on controller startup
-            </label>
-            <small>Automatically start this server 15 seconds after MServer starts (e.g. after a host reboot)</small>
-          </div>
-            </div>
-          </div>
-
-          <div class="modal-footer">
-            <button type="button" class="btn back-btn" onclick="backToCreationType()">← Back</button>
+          <div class="modal-footer unified-footer">
+            <button type="button" class="btn btn-ghost back-btn" onclick="backToCreationType()">← Back</button>
+            <span class="footer-spacer"></span>
+            <button type="button" class="btn btn-ghost" onclick="closeServerModal()">Cancel</button>
             <button type="submit" class="btn btn-success">Save</button>
-            <button type="button" class="btn" onclick="closeServerModal()">Cancel</button>
           </div>
         </form>
       </div>
