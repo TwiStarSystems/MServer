@@ -899,64 +899,6 @@ body {
 }
 
 /* Toggle Switch Styles (Check/X style) */
-.toggle-switch {
-  position: relative;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  width: 80px;
-  height: 36px;
-  margin-left: 40px;
-}
-
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: #d1d5db;
-  transition: .3s;
-  border-radius: 50px;
-  border: 3px solid #d1d5db;
-}
-
-.toggle-slider:before {
-  position: absolute;
-  content: "\2715";
-  height: 28px;
-  width: 28px;
-  left: 2px;
-  top: 1px;
-  background-color: white;
-  transition: .3s;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: bold;
-  color: #9ca3af;
-}
-
-.toggle-switch input:checked + .toggle-slider {
-  background-color: #10b981;
-  border-color: #10b981;
-}
-
-.toggle-switch input:checked + .toggle-slider:before {
-  transform: translateX(44px);
-  content: "\2713";
-  color: #10b981;
-}
-
 /* ==================== Backups ==================== */
 
 .backup-controls {
@@ -4482,58 +4424,6 @@ select.form-control:disabled {
   gap: 8px;
 }
 
-/* Toggle Switch */
-.toggle-switch {
-  position: relative;
-  display: inline-block;
-  width: 50px;
-  height: 26px;
-  flex-shrink: 0;
-}
-
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: #333;
-  transition: 0.3s;
-  border-radius: 26px;
-}
-
-.toggle-slider:before {
-  position: absolute;
-  content: "";
-  height: 20px;
-  width: 20px;
-  left: 3px;
-  bottom: 3px;
-  background-color: #888;
-  transition: 0.3s;
-  border-radius: 50%;
-}
-
-.toggle-switch input:checked + .toggle-slider {
-  background-color: #667eea;
-}
-
-.toggle-switch input:checked + .toggle-slider:before {
-  transform: translateX(24px);
-  background-color: #fff;
-}
-
-.toggle-switch input:focus + .toggle-slider {
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
-}
-
 /* ==================== Approvals Section ==================== */
 
 .approvals-container {
@@ -6447,49 +6337,6 @@ select.form-control:disabled {
 .quickcmds-info {
   font-size: 0.85rem;
   color: var(--color-muted);
-}
-
-/* Toggle Switch */
-.toggle-switch {
-  position: relative;
-  display: inline-block;
-  width: 44px;
-  height: 24px;
-  cursor: pointer;
-}
-
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  inset: 0;
-  background: #333;
-  border-radius: 24px;
-  transition: background 0.25s;
-}
-
-.toggle-slider::before {
-  content: '';
-  position: absolute;
-  height: 18px;
-  width: 18px;
-  left: 3px;
-  bottom: 3px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 0.25s;
-}
-
-.toggle-switch input:checked + .toggle-slider {
-  background: var(--color-primary);
-}
-
-.toggle-switch input:checked + .toggle-slider::before {
-  transform: translateX(20px);
 }
 
 /* Buttons grid */
@@ -8460,6 +8307,7 @@ select.form-control:disabled {
 }
 
 /* ---------- Toggle switches ---------- */
+/* The switch itself is defined once, app-wide, at the end of this file. */
 
 .switch-row {
   display: flex;
@@ -8471,49 +8319,6 @@ select.form-control:disabled {
   color: var(--color-text);
   cursor: pointer;
   user-select: none;
-}
-
-.switch-row input[type="checkbox"] {
-  position: absolute;
-  opacity: 0;
-  width: 1px;
-  height: 1px;
-  margin: 0;
-  pointer-events: none;
-}
-
-.switch-track {
-  position: relative;
-  flex-shrink: 0;
-  width: 34px;
-  height: 18px;
-  background: rgba(0, 0, 0, 0.5);
-  border: 1px solid var(--color-border);
-  transition: background 0.18s ease, border-color 0.18s ease;
-}
-
-.switch-knob {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 10px;
-  height: 10px;
-  background: var(--color-muted);
-  transition: transform 0.18s ease, background 0.18s ease;
-}
-
-.switch-row input[type="checkbox"]:checked + .switch-track {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-}
-
-.switch-row input[type="checkbox"]:checked + .switch-track .switch-knob {
-  background: #fff;
-  transform: translateX(16px);
-}
-
-.switch-row input[type="checkbox"]:focus-visible + .switch-track {
-  box-shadow: 0 0 0 3px rgba(150, 0, 225, 0.28);
 }
 
 .switch-label {
@@ -8770,4 +8575,133 @@ select.form-control:disabled {
   .method-banner {
     flex-wrap: wrap;
   }
+}
+
+/* ==================================================================
+   Toggle switch — the app-wide standard for boolean inputs
+   ==================================================================
+   The switch is drawn entirely on the <input> itself: the track is the
+   element's own border and background-color, and the knob is a
+   background-image that slides across on :checked. No wrapper elements are
+   involved, so plain markup —
+
+       <label class="checkbox-label"><input type="checkbox"> Label</label>
+
+   — renders as a switch with no extra spans. To make a new checkbox a switch,
+   either put it inside one of the wrappers listed below or give the input
+   itself the `switch` class.
+   ================================================================== */
+
+input[type="checkbox"].switch,
+.switch-row input[type="checkbox"],
+.checkbox-label input[type="checkbox"],
+.notif-pref-row input[type="checkbox"],
+.perm-checkbox input[type="checkbox"],
+.toggle-switch input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 34px;
+  height: 18px;
+  min-width: 34px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  vertical-align: middle;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  background-image: linear-gradient(var(--color-muted), var(--color-muted));
+  background-size: 10px 10px;
+  background-position: 3px center;
+  background-repeat: no-repeat;
+  transition: background-color 0.18s ease, background-position 0.18s ease,
+              border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+input[type="checkbox"].switch:checked,
+.switch-row input[type="checkbox"]:checked,
+.checkbox-label input[type="checkbox"]:checked,
+.notif-pref-row input[type="checkbox"]:checked,
+.perm-checkbox input[type="checkbox"]:checked,
+.toggle-switch input[type="checkbox"]:checked {
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+  background-image: linear-gradient(#fff, #fff);
+  background-position: calc(100% - 3px) center;
+}
+
+input[type="checkbox"].switch:hover:not(:disabled),
+.switch-row input[type="checkbox"]:hover:not(:disabled),
+.checkbox-label input[type="checkbox"]:hover:not(:disabled),
+.notif-pref-row input[type="checkbox"]:hover:not(:disabled),
+.perm-checkbox input[type="checkbox"]:hover:not(:disabled),
+.toggle-switch input[type="checkbox"]:hover:not(:disabled) {
+  border-color: var(--color-secondary);
+}
+
+input[type="checkbox"].switch:focus-visible,
+.switch-row input[type="checkbox"]:focus-visible,
+.checkbox-label input[type="checkbox"]:focus-visible,
+.notif-pref-row input[type="checkbox"]:focus-visible,
+.perm-checkbox input[type="checkbox"]:focus-visible,
+.toggle-switch input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(150, 0, 225, 0.28);
+}
+
+input[type="checkbox"].switch:disabled,
+.switch-row input[type="checkbox"]:disabled,
+.checkbox-label input[type="checkbox"]:disabled,
+.notif-pref-row input[type="checkbox"]:disabled,
+.perm-checkbox input[type="checkbox"]:disabled,
+.toggle-switch input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input[type="checkbox"].switch,
+  .switch-row input[type="checkbox"],
+  .checkbox-label input[type="checkbox"],
+  .notif-pref-row input[type="checkbox"],
+  .perm-checkbox input[type="checkbox"],
+  .toggle-switch input[type="checkbox"] {
+    transition: none;
+  }
+}
+
+/* --- Retrofit of the older switch markup ---------------------------------
+   `.toggle-switch` wrapped an 80x36 pill drawn by a `.toggle-slider` span.
+   The input above now carries the whole visual, so the wrapper collapses to a
+   plain right-aligned box and the slider span is dropped. The span stays in
+   the markup (settings.html and the Properties tab build it) but renders
+   nothing, so no template had to change. */
+.toggle-switch {
+  position: static;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: auto;
+  height: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+.toggle-slider {
+  display: none;
+}
+
+/* Wrappers that used to size a native checkbox */
+.checkbox-label {
+  gap: 9px;
+}
+
+.notif-pref-row input[type="checkbox"] {
+  margin-top: 2px;
+}
+
+.perm-checkbox {
+  gap: 9px;
 }
