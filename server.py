@@ -1628,21 +1628,6 @@ class BackupScheduler:
             pass
         return result.rowcount > 0
 
-    def get_all_schedules(self):
-        """Get all backup schedules as dicts, enriched with next-run times."""
-        rows = get_db().execute('SELECT * FROM backup_schedules').fetchall()
-        result = {}
-        for row in rows:
-            s = self._row_to_schedule_dict(row)
-            try:
-                job = self.scheduler.get_job(f"backup_{row['server_id']}")
-                if job and job.next_run_time:
-                    s['nextRun'] = job.next_run_time.isoformat()
-            except Exception:
-                pass
-            result[row['server_id']] = s
-        return result
-
 
 # ==================== Task Scheduler ====================
 
@@ -3708,18 +3693,6 @@ def server_access_required(f):
 class JarVersionManager:
     """Manager for Minecraft server JAR files and versions"""
     
-    # Server type metadata - categorized as 'unmodded' (Java Vanilla), 'modded' (Java Modded), or 'bedrock'
-    SERVER_TYPE_INFO = {
-        'vanilla': {'name': 'Vanilla', 'description': 'Official Minecraft Java Edition server', 'category': 'unmodded'},
-        'bedrock': {'name': 'Bedrock', 'description': 'Official Minecraft Bedrock Edition server', 'category': 'bedrock'},
-        'paper': {'name': 'Paper', 'description': 'High-performance Spigot fork', 'category': 'modded'},
-        'folia': {'name': 'Folia', 'description': 'Paper fork for multi-threaded regions', 'category': 'modded'},
-        'purpur': {'name': 'Purpur', 'description': 'Paper fork with extra features', 'category': 'modded'},
-        'spigot': {'name': 'Spigot', 'description': 'Bukkit-compatible server with plugins', 'category': 'modded'},
-        'forge': {'name': 'Forge', 'description': 'Mod loader for Minecraft mods (installer)', 'category': 'modded'},
-        'neoforge': {'name': 'NeoForge', 'description': 'Modern Forge fork (installer)', 'category': 'modded'}
-    }
-    
     # Server executables directory
     EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
     
@@ -3825,98 +3798,6 @@ class JarVersionManager:
             return version_match.group(1)
         
         return None
-    
-    def get_server_types(self):
-        """
-        Get list of server types that have local JAR files available.
-        Only returns types with at least one downloaded JAR.
-        """
-        local_jars = self._scan_local_jars()
-        
-        available_types = []
-        for server_type, jars in local_jars.items():
-            if not jars:
-                continue
-            
-            # Get metadata or create default
-            info = self.SERVER_TYPE_INFO.get(server_type, {
-                'name': server_type.title(),
-                'description': f'{server_type.title()} server',
-                'category': 'modded'
-            })
-            
-            available_types.append({
-                'id': server_type,
-                'name': info['name'],
-                'description': info['description'],
-                'category': info['category'],
-                'jarCount': len(jars)
-            })
-        
-        # Sort by name
-        available_types.sort(key=lambda x: x['name'])
-        return available_types
-    
-    def get_server_engines(self, category=None):
-        """
-        Get list of server engines filtered by category.
-        category: 'modded', 'unmodded', or None for all
-        Only returns engines with at least one downloaded JAR.
-        """
-        local_jars = self._scan_local_jars()
-        
-        available_engines = []
-        for server_type, jars in local_jars.items():
-            if not jars:
-                continue
-            
-            # Get metadata or create default
-            info = self.SERVER_TYPE_INFO.get(server_type, {
-                'name': server_type.title(),
-                'description': f'{server_type.title()} server',
-                'category': 'modded'
-            })
-            
-            # Filter by category if specified
-            if category and info['category'] != category:
-                continue
-            
-            available_engines.append({
-                'id': server_type,
-                'name': info['name'],
-                'description': info['description'],
-                'category': info['category'],
-                'jarCount': len(jars)
-            })
-        
-        # Sort by name
-        available_engines.sort(key=lambda x: x['name'])
-        return available_engines
-    
-    def get_versions(self, server_type):
-        """
-        Get available local versions for a server type.
-        Returns list of version strings, sorted newest first.
-        """
-        local_jars = self._scan_local_jars()
-        
-        if server_type not in local_jars:
-            return []
-        
-        versions = [jar['version'] for jar in local_jars[server_type]]
-        
-        # Sort versions (newest first)
-        def version_key(v):
-            # Handle versions like "1.21.4", "21.4.156", "1.21.3-53.0.26"
-            parts = []
-            for p in v.replace('-', '.').split('.'):
-                try:
-                    parts.append(int(p))
-                except ValueError:
-                    parts.append(p)
-            return parts
-        
-        return sorted(set(versions), key=version_key, reverse=True)
     
     def get_local_jar_info(self, server_type, version):
         """
@@ -5460,8 +5341,8 @@ class JobCancelled(Exception):
 class JobManager:
     """Unified background task queue for long-running operations.
 
-    Heavy operations (backups, restores, server deletion, JAR swaps, zip
-    downloads) submit a job here instead of blocking the HTTP request thread.
+    Heavy operations (backups, restores, server deletion, zip downloads)
+    submit a job here instead of blocking the HTTP request thread.
     Jobs are persisted in the `jobs` table (so the task list and
     history survive a restart), run in a bounded thread pool, and report live
     progress over Socket.IO (push) plus the GET /api/jobs/<id> poll endpoint.
@@ -5870,66 +5751,6 @@ def _job_delete_server(job_id, params, progress, cancel):
     return {'deleted': True}
 
 
-def _job_swap_jar(job_id, params, progress, cancel):
-    server_id = params['serverId']
-    server_type = params['serverType']
-    version = params['version']
-    has_existing_world = bool(params.get('hasExistingWorld', False))
-    executable = 'server.jar'
-
-    server_config = server_manager.get_server_config(server_id)
-    if not server_config:
-        raise Exception('Server not found')
-    server_path = Path(server_config['serverPath'])
-    jar_path = server_path / executable
-
-    # Mandatory safety backup before swapping the JAR when there is a world to protect.
-    if has_existing_world:
-        try:
-            progress(5, 'Creating safety backup…')
-            backup_dir = BACKUPS_DIR / server_id
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
-            bk_name = f'pre-jar-update-{timestamp}.zip'
-            bk_path = backup_dir / bk_name
-            all_files = [Path(root) / f for root, _, files in os.walk(server_path) for f in files]
-            total = len(all_files) or 1
-            with zipfile.ZipFile(bk_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
-                for i, fp in enumerate(all_files):
-                    if cancel and cancel.is_set():
-                        raise JobCancelled()
-                    zipf.write(fp, fp.relative_to(server_path))
-                    if i % 50 == 0:
-                        progress(5 + int((i / total) * 75))  # 5–80%
-                zipf.writestr('backup_manifest.json', json.dumps({
-                    'type': 'full', 'created': timestamp, 'file_count': len(all_files)
-                }))
-            bk_size = bk_path.stat().st_size
-            ok, checksum, _ = verify_backup_file(bk_path)
-            backup_scheduler._log_backup_event(server_id, {
-                'type': 'pre-jar-update', 'backupName': bk_name, 'size': bk_size,
-                'is_incremental': False, 'compressionLevel': 6, 'verified': ok,
-                'checksum': checksum, 'success': True
-            })
-        except JobCancelled:
-            try:
-                if bk_path.exists():
-                    bk_path.unlink()
-            except Exception:
-                pass
-            raise
-        except Exception as e:
-            raise Exception(f'Failed to create mandatory pre-change backup: {str(e)}')
-
-    progress(85, 'Installing JAR…')
-    success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
-    if not success:
-        raise Exception(result)
-    server_manager.update_server(server_id, executable=executable,
-                                 serverType=server_type, version=version)
-    return {'path': result}
-
-
 def _job_zip_download(job_id, params, progress, cancel):
     server_id = params['serverId']
     requested_path = params.get('requestedPath', '')
@@ -5983,7 +5804,6 @@ def _job_jar_download(job_id, params, progress, cancel):
 job_manager.register('backup', _job_backup)
 job_manager.register('restore', _job_restore)
 job_manager.register('delete_server', _job_delete_server)
-job_manager.register('swap_jar', _job_swap_jar)
 job_manager.register('zip_download', _job_zip_download)
 job_manager.register('jar_download', _job_jar_download)
 
@@ -7284,33 +7104,6 @@ def api_public_servers():
 
 # ==================== JAR/Version API ====================
 
-@app.route('/api/server-types', methods=['GET'])
-@login_required
-def get_server_types():
-    """Get list of available server types"""
-    return api_success(types=jar_manager.get_server_types())
-
-@app.route('/api/server-types/<server_type>/versions', methods=['GET'])
-@login_required
-def get_server_versions(server_type):
-    """Get available versions for a server type"""
-    versions = jar_manager.get_versions(server_type)
-    return api_success(versions=versions)
-
-@app.route('/api/server-engines', methods=['GET'])
-@login_required
-def get_server_engines():
-    """Get list of available server engines, optionally filtered by category"""
-    category = request.args.get('category')
-    return api_success(engines=jar_manager.get_server_engines(category))
-
-@app.route('/api/server-engines/<engine>/versions', methods=['GET'])
-@login_required
-def get_engine_versions(engine):
-    """Get available versions for a server engine"""
-    versions = jar_manager.get_versions(engine)
-    return api_success(versions=versions)
-
 @app.route('/api/default-server-path', methods=['GET'])
 @login_required
 def get_default_server_path():
@@ -7922,60 +7715,6 @@ def upload_custom_jar(server_id):
         return api_success(executable=filename)
     except Exception as e:
         return api_error(str(e), 500)
-
-@app.route('/api/servers/<server_id>/download-jar', methods=['POST'])
-@server_access_required
-@limiter.limit("5 per 15 minutes")
-def download_server_jar(server_id):
-    """Copy a server JAR from serverexecutables to an existing server"""
-    data = request.get_json()
-    server_type = data.get('serverType')
-    version = data.get('version')
-    executable = 'server.jar'  # Always use server.jar for Java server JARs
-
-    if not server_type or not version:
-        return api_error('Server type and version required', 400)
-
-    server_config = server_manager.get_server_config(server_id)
-    if not server_config:
-        return api_error('Server not found', 404)
-
-    server_path = Path(server_config['serverPath'])
-    jar_path = server_path / executable
-
-    # --- Era compatibility guard ---
-    current_version = server_config.get('version', '')
-    has_existing_world = bool(current_version) and current_version not in ('Unknown', '')
-    if has_existing_world:
-        cur_modern = mc_version_is_modern(current_version)
-        new_mod = mc_version_is_modern(version)
-
-        # Modern -> Legacy: blocked (the modern world format is one-way).
-        if cur_modern and not new_mod:
-            return api_error(
-                f'Cannot assign a legacy JAR ({version}) to a modern (26.1+) server '
-                f'({current_version}). The new world storage format is not backwards-compatible. '
-                f'Create a new server if you need a legacy version.', 400)
-
-        # Legacy -> Legacy: cap within the legacy tier. Crossing to a modern version is
-        # allowed (Minecraft auto-converts the world on next start, one-way).
-        if not cur_modern and not new_mod and compare_mc_versions(version, MC_LEGACY_MAX) > 0:
-            return api_error(
-                f'Legacy servers cannot exceed {MC_LEGACY_MAX} within the legacy tier. '
-                f'Select a modern (26.1+) version to migrate to the new world format.', 400)
-
-    # The mandatory pre-change backup (when there is a world to protect) and the
-    # JAR copy run on the job queue so the request doesn't block on zipping a
-    # potentially multi-GB world.
-    server_name = server_config.get('name', server_id)
-    job_id = job_manager.submit(
-        'swap_jar', f'Install {server_type} {version}: {server_name}',
-        params={'serverId': server_id, 'serverType': server_type,
-                'version': version, 'hasExistingWorld': has_existing_world},
-        created_by=get_current_user()[0],
-        server_id=server_id
-    )
-    return jsonify({'started': True, 'jobId': job_id}), 202
 
 @app.route('/api/servers/<server_id>', methods=['GET'])
 @server_access_required
@@ -11490,24 +11229,6 @@ def delete_backup_schedule(server_id):
         return jsonify({'success': True})
     return api_error('No schedule found for this server', 404)
 
-@app.route('/api/backups/schedules', methods=['GET'])
-@login_required
-def get_all_backup_schedules():
-    """Get all backup schedules (admin sees all, users see their own)"""
-    user = user_manager.get_user(session['user_id'])
-    all_schedules = backup_scheduler.get_all_schedules()
-
-    if user_manager.user_has_permission(user, 'servers.access.all'):
-        return api_success(schedules=all_schedules)
-
-    user_schedules = {}
-    for server_id, schedule in all_schedules.items():
-        if can_access_server(server_id):
-            user_schedules[server_id] = schedule
-
-    return api_success(schedules=user_schedules)
-
-
 @app.route('/api/servers/<server_id>/backups/delete-expired', methods=['POST'])
 @server_access_required
 def delete_expired_backups_for_server(server_id):
@@ -13412,54 +13133,6 @@ class JarBucketManager:
         
         return 'unknown'
     
-    def refresh_all_versions(self, progress_callback=None):
-        """
-        Fetch fresh version lists from every upstream API and pre-cache download URLs.
-        This keeps the local jar_cache.json up-to-date so the UI never needs to wait
-        on external API calls.  Runs synchronously; call from a background thread.
-        """
-        results = {}
-        all_types = list(self.SERVER_TYPES.keys())
-
-        for idx, server_type in enumerate(all_types):
-            if progress_callback:
-                progress_callback(server_type, idx, len(all_types))
-
-            try:
-                versions = self.get_versions(server_type, force_refresh=True)
-                urls_cached = 0
-                errors = []
-
-                # Pre-cache download URLs.  For types backed purely by a static map
-                # (forge, neoforge) or with trivially cheap URLs (bedrock, spigot)
-                # cache every version; for API-heavy types limit to the 10
-                # most-recent releases to avoid hammering upstream servers.
-                if server_type in ('forge', 'neoforge', 'bedrock'):
-                    versions_to_cache = versions
-                elif server_type == 'spigot':
-                    versions_to_cache = []  # BuildTools only; nothing to cache
-                else:
-                    versions_to_cache = versions[:10] if len(versions) > 10 else versions
-
-                for v in versions_to_cache:
-                    version_str = v.get('version', str(v)) if isinstance(v, dict) else str(v)
-                    try:
-                        info = self.get_download_info(server_type, version_str)
-                        if info and info.get('url'):
-                            urls_cached += 1
-                    except Exception as exc:
-                        errors.append(str(exc))
-
-                results[server_type] = {
-                    'versions': len(versions),
-                    'urlsCached': urls_cached,
-                    'errors': errors
-                }
-            except Exception as exc:
-                results[server_type] = {'error': str(exc)}
-
-        return results
-
     def delete_jar(self, server_type, filename):
         """Delete a downloaded JAR file"""
         filepath = SERVER_EXECUTABLES_DIR / server_type / filename
@@ -13809,46 +13482,6 @@ def api_jar_bucket_refresh():
         for st in jar_bucket.SERVER_TYPES.keys():
             jar_bucket.get_versions(st, force_refresh=True)
         return api_success(message='Refreshed all versions')
-
-@app.route('/api/jar-bucket/refresh-all', methods=['POST'])
-@permission_required('panel.jars.manage')
-def api_jar_bucket_refresh_all():
-    """
-    Refresh every upstream API version list AND pre-cache download URLs.
-    Runs in a background thread; poll /api/jar-bucket/progress/<refresh_id> for status.
-    """
-    refresh_id = 'refresh_' + str(uuid.uuid4())
-
-    jar_bucket.set_progress(refresh_id, {
-        'status': 'running',
-        'kind': 'refresh',
-        'current': None,
-        'completed': 0,
-        'total': len(jar_bucket.SERVER_TYPES)
-    })
-
-    def do_refresh():
-        def on_progress(server_type, index, total):
-            jar_bucket.update_progress(refresh_id, current=server_type, completed=index)
-
-        try:
-            results = jar_bucket.refresh_all_versions(progress_callback=on_progress)
-            jar_bucket.update_progress(
-                refresh_id,
-                status='complete',
-                completed=len(jar_bucket.SERVER_TYPES),
-                total=len(jar_bucket.SERVER_TYPES),
-                results=results,
-            )
-        except Exception as exc:
-            jar_bucket.update_progress(refresh_id, status='error', error=str(exc))
-
-    threading.Thread(target=do_refresh, daemon=True).start()
-
-    return api_success(
-        refreshId=refresh_id,
-        message='Full version refresh started — poll /api/jar-bucket/progress/' + refresh_id
-    )
 
 @app.route('/api/jar-bucket/check/<server_type>/<version>', methods=['GET'])
 @login_required

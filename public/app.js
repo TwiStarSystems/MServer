@@ -800,10 +800,6 @@ function onJobFinished(job) {
   if (job.type === 'delete_server' && job.status === 'completed') {
     loadServers();
   }
-  if (job.type === 'swap_jar' && job.status === 'completed' &&
-      job.serverId === currentServerId) {
-    loadServers();
-  }
 }
 
 function updateJobsBadge() {

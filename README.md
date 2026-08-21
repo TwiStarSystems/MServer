@@ -80,7 +80,7 @@ MServer is a modern, feature-rich web application for creating, running, and man
 - Per-server message management with enable/disable toggle
 
 ### 🔄 Background Job Queue
-- Long-running operations (backups, restores, JAR swaps, deletions) run asynchronously
+- Long-running operations (backups, restores, deletions) run asynchronously
 - Real-time progress reporting via WebSocket push notifications
 - Per-server concurrency control (no overlapping jobs on the same server)
 - Job history with status tracking (queued, running, completed, failed, cancelled)
@@ -430,7 +430,6 @@ This only copies the application files (server.py, public/) without reinstalling
 | POST | `/api/servers/<id>/command` | Send console command |
 | GET | `/api/servers/<id>/output` | Get console output buffer |
 | POST | `/api/servers/<id>/upload-jar` | Upload custom JAR file |
-| POST | `/api/servers/<id>/download-jar` | Download JAR for server |
 | GET | `/api/servers/<id>/eula` | Check EULA status |
 | POST | `/api/servers/<id>/eula/accept` | Accept EULA |
 
