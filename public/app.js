@@ -101,25 +101,35 @@ function showToast(message, type = 'info', duration = 5000) {
   const icons = { info: 'ℹ️', success: '✅', warning: '⚠️', error: '❌' };
   const id = `toast-${++_toastCounter}`;
 
+  // Errors stay until the user dismisses them. An error is the one message
+  // worth reading twice — copying a stack trace, re-reading which field failed
+  // — and a 5s timer used to pull it away mid-read with no way to recall it
+  // (issue #32). Callers can still force a timed error with an explicit
+  // duration; passing 0 makes any toast sticky.
+  const sticky = duration === 0 || (type === 'error' && duration === 5000);
+
   const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
+  toast.className = `toast toast-${type}${sticky ? ' toast-sticky' : ''}`;
   toast.id = id;
   toast.style.position = 'relative';
   toast.innerHTML = `
     <span class="toast-icon">${icons[type] || icons.info}</span>
     <span class="toast-message">${escapeHtml(message)}</span>
-    <button class="toast-close" onclick="removeToast('${id}')">&times;</button>
-    <div class="toast-progress" style="animation-duration: ${duration}ms;"></div>
+    <button class="toast-close" onclick="removeToast('${id}')" title="${sticky ? 'Dismiss' : 'Dismiss now'}">&times;</button>
+    ${sticky ? '' : `<div class="toast-progress" style="animation-duration: ${duration}ms;"></div>`}
   `;
 
   container.appendChild(toast);
 
-  // Limit to 5 visible toasts
+  // Cap the stack, but never let a timed toast evict a sticky error the user
+  // has not read yet — drop the oldest dismissible one instead.
   while (container.children.length > 5) {
-    container.removeChild(container.firstChild);
+    const evictable = Array.from(container.children).find(el => !el.classList.contains('toast-sticky'))
+                   || container.firstChild;
+    container.removeChild(evictable);
   }
 
-  setTimeout(() => removeToast(id), duration);
+  if (!sticky) setTimeout(() => removeToast(id), duration);
   return id;
 }
 
@@ -918,14 +928,55 @@ function downloadJobArtifact(jobId) {
 
 // ==================== Server List Management ====================
 
-async function loadServers() {
+/**
+ * Fetch the server list and repaint the sidebar.
+ *
+ * @param {Object} [opts]
+ * @param {boolean} [opts.showLoading=false] - Show a visible loading state.
+ *   Only the first load and an explicit user-triggered refresh pass this.
+ *   The 10s background poll must NOT: swapping the list for skeletons every
+ *   ten seconds would make the sidebar strobe, which is worse than the missing
+ *   indicator this was meant to fix (issue #32).
+ */
+async function loadServers({ showLoading = false } = {}) {
+  const listEl = document.getElementById('server-list');
+  // Skeletons only when there is nothing to replace — otherwise the existing
+  // rows stay put and a quiet pulse on the header carries the "refreshing".
+  const useSkeleton = showLoading && listEl && servers.length === 0;
+
+  if (useSkeleton) showServerListSkeleton();
+  if (showLoading) setSidebarRefreshing(true);
+
   try {
     const data = await apiRequest('/api/servers');
     servers = data.servers || [];
     renderServerList();
   } catch (error) {
     console.error('Failed to load servers:', error);
+    // A failed first load would otherwise leave the skeletons up forever,
+    // looking like a hang rather than an error.
+    if (useSkeleton) renderServerList();
+  } finally {
+    if (showLoading) setSidebarRefreshing(false);
   }
+}
+
+/** Placeholder rows shown while the very first server list is in flight. */
+function showServerListSkeleton(rows = 3) {
+  const container = document.getElementById('server-list');
+  if (!container) return;
+  container.innerHTML = Array.from({ length: rows }, () =>
+    `<div class="server-item skeleton-server">
+       <div class="skeleton-cell w-60"></div>
+       <div class="skeleton-cell w-40"></div>
+     </div>`
+  ).join('');
+}
+
+/** Toggle the sidebar header's refreshing state (a spinner beside "Servers"). */
+function setSidebarRefreshing(on) {
+  const header = document.querySelector('.sidebar-header');
+  if (header) header.classList.toggle('is-refreshing', !!on);
 }
 
 function renderServerList() {
@@ -3966,8 +4017,16 @@ async function loadLogs() {
   }
 }
 
-function clearLogsView() {
+async function clearLogsView() {
   const logsOutput = document.getElementById('logs-output');
+  if (!logsOutput || !logsOutput.textContent.trim()) return;   // nothing to clear
+
+  const ok = await confirmAction(
+    'Clear the log view? This only empties the panel — the log file on disk is untouched, and Refresh will load it again.',
+    { title: 'Clear log view', icon: '🧹', okText: 'Clear', okClass: 'btn-warning' }
+  );
+  if (!ok) return;
+
   logsOutput.textContent = '';
 }
 
@@ -4071,7 +4130,7 @@ function createFileRow(file, filePath) {
   sizeCell.textContent = file.isDirectory ? '-' : formatBytes(file.size);
   
   const modifiedCell = document.createElement('td');
-  modifiedCell.textContent = file.modified ? new Date(file.modified).toLocaleString() : '-';
+  modifiedCell.textContent = file.modified ? formatDateTime(file.modified) : '-';
   
   const actionsCell = document.createElement('td');
   const actionsDiv = document.createElement('div');
@@ -4732,7 +4791,7 @@ async function loadBackups() {
       row.innerHTML = `
         <td>${prefix}${escapeHtml(backup.name)} ${expiredBadge}${checksumBadge}</td>
         <td>${formatBytes(backup.size)}</td>
-        <td>${new Date(backup.created).toLocaleString()}</td>
+        <td>${formatDateTime(backup.created)}</td>
         <td>
           <div class="file-actions-cell">
             <button class="btn btn-small action-btn" onclick="downloadBackup('${escapeAttr(backup.name)}')">Download</button>
@@ -4973,7 +5032,7 @@ async function loadBackupHistory() {
 
     data.events.forEach(evt => {
       const row = document.createElement('tr');
-      const time = new Date(evt.timestamp).toLocaleString();
+      const time = formatDateTime(evt.timestamp);
       const typeLabel = typeLabels[evt.type] || escapeHtml(evt.type || '');
       const fileName = evt.backupName
         ? `<span title="${escapeAttrValue(evt.backupName)}">${escapeHtml(evt.backupName.substring(0, 36))}${evt.backupName.length > 36 ? '…' : ''}</span>`
@@ -5027,7 +5086,7 @@ async function loadBackupSchedule() {
       
       if (schedule.nextRun) {
         const nextRun = new Date(schedule.nextRun);
-        document.getElementById('next-backup-text').textContent = `Next: ${nextRun.toLocaleString()}`;
+        document.getElementById('next-backup-text').textContent = `Next: ${formatDateTime(nextRun)}`;
       } else {
         document.getElementById('next-backup-text').textContent = '';
       }
@@ -5260,10 +5319,10 @@ async function loadTasks() {
       }
       
       const lastRunCell = document.createElement('td');
-      lastRunCell.textContent = task.lastRun ? new Date(task.lastRun).toLocaleString() : 'Never';
+      lastRunCell.textContent = task.lastRun ? formatDateTime(task.lastRun) : 'Never';
       
       const nextRunCell = document.createElement('td');
-      nextRunCell.textContent = task.nextRun ? new Date(task.nextRun).toLocaleString() : '-';
+      nextRunCell.textContent = task.nextRun ? formatDateTime(task.nextRun) : '-';
       
       const actionsCell = document.createElement('td');
       const editBtn = document.createElement('button');
@@ -5549,7 +5608,7 @@ function createModRow(mod, type) {
   sizeCell.textContent = formatBytes(mod.size);
   
   const modifiedCell = document.createElement('td');
-  modifiedCell.textContent = mod.modified ? new Date(mod.modified).toLocaleString() : '-';
+  modifiedCell.textContent = mod.modified ? formatDateTime(mod.modified) : '-';
   
   const actionsCell = document.createElement('td');
   const actionsDiv = document.createElement('div');
@@ -6206,7 +6265,7 @@ async function loadPlayerData() {
       return `
         <tr>
           <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
-          <td>${new Date(player.modified).toLocaleString()}</td>
+          <td>${formatDateTime(player.modified)}</td>
           <td>${formatBytes(player.size)}</td>
           <td class="actions-cell">
             <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}', '${escapeAttr(player.path || '')}')">Edit NBT</button>
@@ -6687,7 +6746,7 @@ async function loadOnlinePlayers() {
     tbody.innerHTML = online.map(p => `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong></td>
-        <td>${p.since ? new Date(p.since * 1000).toLocaleTimeString() : '—'}</td>
+        <td>${p.since ? formatDateTime(p.since * 1000, { timeOnly: true }) : '—'}</td>
         <td class="actions-cell">
           <button class="btn btn-small" onclick="openMessagePlayersModal('${escapeAttr(p.name)}')">Message</button>
           ${bedrock ? `<button class="btn btn-small" onclick="kickPlayerOnline('${escapeAttr(p.name)}')">Kick</button>` : ''}
@@ -7327,11 +7386,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Connect WebSocket
   connectWebSocket();
   
-  // Load servers
-  loadServers();
+  // Load servers — the first paint shows a loading state...
+  loadServers({ showLoading: true });
   
-  // Refresh servers periodically
-  setInterval(loadServers, 10000);
+  // ...but the background poll stays silent, or the sidebar would strobe.
+  setInterval(() => loadServers(), 10000);
   
   // Add server buttons (with null checks)
   const addServerBtn = document.getElementById('add-server-btn');
@@ -8212,7 +8271,7 @@ async function loadResourcePack() {
       
       document.getElementById('rp-filename').textContent = data.filename;
       document.getElementById('rp-size').textContent = formatBytes(data.size);
-      document.getElementById('rp-uploaded').textContent = new Date(data.uploaded).toLocaleString();
+      document.getElementById('rp-uploaded').textContent = formatDateTime(data.uploaded);
       document.getElementById('rp-sha1').textContent = data.sha1;
       
       const urlLink = document.getElementById('rp-url');

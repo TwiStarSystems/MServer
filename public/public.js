@@ -27,7 +27,7 @@ async function loadServers() {
         
         // Update last updated time
         document.getElementById('last-updated').textContent = 
-            `Last updated: ${new Date().toLocaleTimeString()}`;
+            `Last updated: ${formatDateTime(new Date(), { timeOnly: true })}`;
             
     } catch (err) {
         container.innerHTML = `

@@ -168,22 +168,73 @@ function showNotification(message, type = 'info') {
   // Remove existing notification
   const existing = document.querySelector('.notification');
   if (existing) existing.remove();
-  
+
   const notification = document.createElement('div');
   notification.className = `notification notification-${type}`;
   notification.innerHTML = `
     <span class="notification-message">${escapeHtml(message)}</span>
     <button class="notification-close" onclick="this.parentElement.remove()">&times;</button>
   `;
-  
+
   document.body.appendChild(notification);
-  
-  // Auto-remove after 5 seconds
+
+  // Errors stay until dismissed. Anything else auto-clears after 5s. An error
+  // is usually the one message worth reading twice — copying a stack trace,
+  // re-reading a validation rule — and a 5s timer used to take it away mid-read
+  // with no way to get it back (issue #32).
+  if (type === 'error') return;
+
   setTimeout(() => {
     if (notification.parentElement) {
       notification.remove();
     }
   }, 5000);
+}
+
+/**
+ * Format a timestamp for display, including the viewer's timezone.
+ *
+ * Every panel timestamp is rendered in the browser's local zone. Without the
+ * zone shown, "3:00 PM" is ambiguous the moment an operator and their server
+ * are in different places — which is the normal case for a hosted panel
+ * (issue #32).
+ *
+ * @param {string|number|Date} value - ISO string, epoch ms, or Date.
+ * @param {Object} [opts]
+ * @param {string} [opts.fallback='-'] - Returned for null/undefined/unparseable input.
+ * @param {boolean} [opts.timeOnly=false] - Render just the time, still zone-qualified.
+ * @returns {string} e.g. "26/08/2026, 13:05:00 GMT+2", or the fallback.
+ */
+function formatDateTime(value, { fallback = '-', timeOnly = false } = {}) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return fallback;
+  try {
+    return timeOnly
+      ? d.toLocaleTimeString(undefined, { timeZoneName: 'short' })
+      : d.toLocaleString(undefined, { timeZoneName: 'short' });
+  } catch {
+    // Intl can throw on exotic locale/timezone data; a bare local render still
+    // beats showing nothing.
+    return timeOnly ? d.toLocaleTimeString() : d.toLocaleString();
+  }
+}
+
+/**
+ * Format a date with no time component. No timezone is appended — there is no
+ * clock reading to disambiguate, and a bare "GMT+2" next to a date reads as
+ * noise. Use formatDateTime() whenever a time is shown.
+ *
+ * @param {string|number|Date} value
+ * @param {Object} [opts]
+ * @param {string} [opts.fallback='-']
+ * @returns {string}
+ */
+function formatDate(value, { fallback = '-' } = {}) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return fallback;
+  return d.toLocaleDateString();
 }
 
 /**

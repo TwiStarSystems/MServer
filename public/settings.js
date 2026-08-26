@@ -1197,7 +1197,7 @@ async function loadVersionInfo() {
     const data = await response.json();
     
     document.getElementById('current-version').textContent = data.version || 'Unknown';
-    document.getElementById('current-date').textContent = data.commitDate ? new Date(data.commitDate).toLocaleString() : '--';
+    document.getElementById('current-date').textContent = data.commitDate ? formatDateTime(data.commitDate) : '--';
   } catch (error) {
     console.error('Error loading version:', error);
     document.getElementById('current-version').textContent = 'Error';
@@ -1503,10 +1503,35 @@ function renderVersions(versions) {
   }).join('');
 }
 
-function filterVersions() {
-  const searchTerm = document.getElementById('version-search-input').value.toLowerCase();
+function _applyVersionFilter() {
+  const input = document.getElementById('version-search-input');
+  if (!input) return;
+  const searchTerm = input.value.toLowerCase();
   const filtered = allVersions.filter(v => v.toLowerCase().includes(searchTerm));
   renderVersions(filtered);
+}
+
+let _versionFilterTimer = null;
+
+/**
+ * Version search box handler (wired to oninput in settings.html).
+ *
+ * Debounced: renderVersions() rebuilds the whole list, and a version list can
+ * run to hundreds of entries, so filtering on every keystroke made typing feel
+ * sticky (issue #32). 150ms is below the threshold where the delay reads as
+ * lag, but coalesces a burst of typing into one render.
+ *
+ * Kept as a function declaration rather than a `const` holding a debounced
+ * wrapper: these scripts are classic (non-module), and only function
+ * declarations reliably land on `window`, where the inline oninput= handler
+ * in settings.html looks for them.
+ */
+function filterVersions() {
+  if (_versionFilterTimer) clearTimeout(_versionFilterTimer);
+  _versionFilterTimer = setTimeout(() => {
+    _versionFilterTimer = null;
+    _applyVersionFilter();
+  }, 150);
 }
 
 function closeVersionsPanel() {
@@ -2054,7 +2079,7 @@ async function loadUsers() {
                 <td>${u.email ? escapeHtml(u.email) : '<span class="text-muted">Not set</span>'}</td>
                 <td><span class="group-badge">${escapeHtml(u.groupName || 'None')}</span></td>
                 <td>${u.locked
-                  ? `<span class="badge badge-danger" title="${u.disabledAt ? 'Locked after too many failed logins on ' + escapeAttrValue(new Date(u.disabledAt).toLocaleString()) : 'Account disabled'}">🔒 Locked</span>`
+                  ? `<span class="badge badge-danger" title="${u.disabledAt ? 'Locked after too many failed logins on ' + escapeAttrValue(formatDateTime(u.disabledAt)) : 'Account disabled'}">🔒 Locked</span>`
                   : '<span class="badge badge-success">Active</span>'}</td>
                 <td>${u.mfaEnabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-secondary">Disabled</span>'}</td>
                 <td>${new Date(u.created).toLocaleDateString()}</td>
@@ -2829,9 +2854,9 @@ function displayApiKeys(keys) {
   const keyCards = keys.map(key => {
     const statusClass = key.active ? 'online' : 'offline';
     const statusText = key.active ? 'Active' : 'Inactive';
-    const createdAt = key.createdAt ? new Date(key.createdAt).toLocaleString() : 'Unknown';
-    const lastUsed = key.lastUsed ? new Date(key.lastUsed).toLocaleString() : 'Never';
-    const expiresAt = key.expiresAt ? new Date(key.expiresAt).toLocaleString() : 'Never';
+    const createdAt = key.createdAt ? formatDateTime(key.createdAt) : 'Unknown';
+    const lastUsed = key.lastUsed ? formatDateTime(key.lastUsed) : 'Never';
+    const expiresAt = key.expiresAt ? formatDateTime(key.expiresAt) : 'Never';
     
     // Mask the key for display (show first 8 and last 4 characters)
     const maskedKey = key.key ? `${key.key.substring(0, 8)}...${key.key.substring(key.key.length - 4)}` : '••••••••';
@@ -3459,7 +3484,7 @@ async function loadPendingActions() {
           <div class="pending-action-meta">
             Requested by <strong>${escapeHtml(a.username || 'Unknown')}</strong>
             ${a.payload?.serverName ? ` for server <strong>${escapeHtml(a.payload.serverName)}</strong>` : ''}
-            &mdash; ${new Date(a.created).toLocaleString()}
+            &mdash; ${formatDateTime(a.created)}
           </div>
           ${payloadPreview ? `<div class="pending-action-details">${escapeHtml(payloadPreview)}</div>` : ''}
           <div class="pending-action-actions">
