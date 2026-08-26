@@ -3512,12 +3512,19 @@ class PendingActionManager:
     def approve(self, action_id, admin_id, note=None):
         conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
+        cur = conn.execute(
             '''UPDATE pending_actions
                SET status='approved', reviewed_by=?, review_note=?, reviewed=?
                WHERE id=? AND status='pending' ''',
             (admin_id, note, now, action_id))
         conn.commit()
+
+        # Only the call that actually moved the row out of 'pending' gets the
+        # action back. Without this, a second approve (double-click, retry, two
+        # admins at once) — or an approve on an already-rejected action — would
+        # still return it and the route would execute it again (issue #92).
+        if cur.rowcount == 0:
+            return None
 
         action = self.get_by_id(action_id)
         if not action:
@@ -3535,12 +3542,18 @@ class PendingActionManager:
     def reject(self, action_id, admin_id, note=None):
         conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
+        cur = conn.execute(
             '''UPDATE pending_actions
                SET status='rejected', reviewed_by=?, review_note=?, reviewed=?
                WHERE id=? AND status='pending' ''',
             (admin_id, note, now, action_id))
         conn.commit()
+
+        # Same guard as approve(): a repeated reject must not re-notify the
+        # requester, and an already-approved action must not report as
+        # rejected (issue #92).
+        if cur.rowcount == 0:
+            return None
 
         action = self.get_by_id(action_id)
         if not action:
@@ -6979,7 +6992,7 @@ def api_approve_pending_action(action_id):
 
     action = pending_action_manager.approve(action_id, admin_id, note)
     if not action:
-        return api_error('Pending action not found', 404)
+        return api_error('Pending action not found or already reviewed', 404)
 
     result = _execute_approved_action(action)
     return api_success(executionResult=result)
@@ -6993,7 +7006,7 @@ def api_reject_pending_action(action_id):
 
     action = pending_action_manager.reject(action_id, admin_id, note)
     if not action:
-        return api_error('Pending action not found', 404)
+        return api_error('Pending action not found or already reviewed', 404)
     return api_success()
 
 
