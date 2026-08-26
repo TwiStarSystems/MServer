@@ -9877,6 +9877,61 @@ def _name_from_json_by_uuid(server_path, filename, uuid):
     return None
 
 
+def _resolve_java_player(server_path, player_name, player_uuid):
+    """Resolve a Java player to (uuid, name) for the ops/whitelist/ban routes.
+
+    The stopped-server path of add_operator(), add_to_whitelist() and
+    ban_player() all need the same two values before they can append an entry
+    to ops.json / whitelist.json / banned-players.json. A running server is
+    driven by console command instead and returns before reaching this.
+
+    Args:
+        server_path: The server directory, searched for usercache.json.
+        player_name: Name from the request body; may be ''.
+        player_uuid: UUID from the request body; may be ''. Takes precedence
+            over player_name when both are supplied.
+
+    Returns:
+        (uuid, name, None) on success, or (None, None, error_response) when
+        the caller should return that response as-is — 400 if neither
+        identifier was supplied, 404 if a name could not be resolved. Callers
+        follow the same shape as reject_if_not_zip():
+
+            resolved_uuid, actual_name, error = _resolve_java_player(...)
+            if error:
+                return error
+
+    Side effects:
+        A name-only request calls get_player_uuid(), which hits the Mojang
+        API with a 5s timeout — so this is Java-only and must never be reached
+        on a Bedrock path, where it would always 404 (see get_player_uuid).
+        A supplied UUID is trusted as given and never fails: usercache.json is
+        consulted only to put a friendly name on it, and a UUID the cache does
+        not know still resolves, falling back to the supplied name, or to the
+        UUID itself when no name was sent.
+    """
+    if player_uuid:
+        usercache_file = server_path / 'usercache.json'
+        if usercache_file.exists():
+            try:
+                with open(usercache_file, 'r') as f:
+                    for entry in json.load(f):
+                        if entry.get('uuid') == player_uuid:
+                            return player_uuid, entry.get('name', player_uuid), None
+            except Exception:
+                pass
+        return player_uuid, player_name or player_uuid, None
+
+    if player_name:
+        resolved_uuid, actual_name = get_player_uuid(player_name)
+        if not resolved_uuid:
+            return None, None, api_error(
+                f'Could not find player "{player_name}". Make sure the name is correct.', 404)
+        return resolved_uuid, actual_name, None
+
+    return None, None, api_error('Player name or UUID is required', 400)
+
+
 # ==================== Bedrock player management ====================
 #
 # Bedrock Dedicated Server stores none of the Java files. Operators live in
@@ -10634,31 +10689,10 @@ def add_operator(server_id):
             description=f'{user.get("username","Unknown")} added operator "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
 
-    resolved_uuid = None
-    actual_name = None
-
-    if player_uuid:
-        usercache_file = server_path / 'usercache.json'
-        if usercache_file.exists():
-            try:
-                with open(usercache_file, 'r') as f:
-                    cache = json.load(f)
-                for entry in cache:
-                    if entry.get('uuid') == player_uuid:
-                        actual_name = entry.get('name', player_uuid)
-                        resolved_uuid = player_uuid
-                        break
-            except Exception:
-                pass
-        if not resolved_uuid:
-            resolved_uuid = player_uuid
-            actual_name = player_name or player_uuid
-    elif player_name:
-        resolved_uuid, actual_name = get_player_uuid(player_name)
-        if not resolved_uuid:
-            return api_error(f'Could not find player "{player_name}". Make sure the name is correct.', 404)
-    else:
-        return api_error('Player name or UUID is required', 400)
+    resolved_uuid, actual_name, error = _resolve_java_player(
+        server_path, player_name, player_uuid)
+    if error:
+        return error
 
     def do_add_op():
         try:
@@ -10950,30 +10984,10 @@ def add_to_whitelist(server_id):
             description=f'{user.get("username","Unknown")} whitelisted "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
 
-    resolved_uuid = actual_name = None
-
-    if player_uuid:
-        usercache_file = server_path / 'usercache.json'
-        if usercache_file.exists():
-            try:
-                with open(usercache_file, 'r') as f:
-                    cache = json.load(f)
-                for entry in cache:
-                    if entry.get('uuid') == player_uuid:
-                        actual_name = entry.get('name', player_uuid)
-                        resolved_uuid = player_uuid
-                        break
-            except Exception:
-                pass
-        if not resolved_uuid:
-            resolved_uuid = player_uuid
-            actual_name = player_name or player_uuid
-    elif player_name:
-        resolved_uuid, actual_name = get_player_uuid(player_name)
-        if not resolved_uuid:
-            return api_error(f'Could not find player "{player_name}"', 404)
-    else:
-        return api_error('Player name or UUID is required', 400)
+    resolved_uuid, actual_name, error = _resolve_java_player(
+        server_path, player_name, player_uuid)
+    if error:
+        return error
 
     def do_add():
         try:
@@ -11244,30 +11258,10 @@ def ban_player(server_id):
             description=f'{user.get("username","Unknown")} banned "{live_name}" on "{server_name}".')
         return jsonify(result) if isinstance(result, dict) else result, status
 
-    resolved_uuid = actual_name = None
-
-    if player_uuid:
-        usercache_file = server_path / 'usercache.json'
-        if usercache_file.exists():
-            try:
-                with open(usercache_file, 'r') as f:
-                    cache = json.load(f)
-                for entry in cache:
-                    if entry.get('uuid') == player_uuid:
-                        actual_name = entry.get('name', player_uuid)
-                        resolved_uuid = player_uuid
-                        break
-            except Exception:
-                pass
-        if not resolved_uuid:
-            resolved_uuid = player_uuid
-            actual_name = player_name or player_uuid
-    elif player_name:
-        resolved_uuid, actual_name = get_player_uuid(player_name)
-        if not resolved_uuid:
-            return api_error(f'Could not find player "{player_name}"', 404)
-    else:
-        return api_error('Player name or UUID is required', 400)
+    resolved_uuid, actual_name, error = _resolve_java_player(
+        server_path, player_name, player_uuid)
+    if error:
+        return error
 
     def do_ban():
         try:
