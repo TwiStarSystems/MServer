@@ -59,6 +59,11 @@ class APIPermission:
 # response gets a top-level `success` boolean, and `data`/`extra` merge flat.
 
 def api_success(data=None, status=200, **extra):
+    """
+    JSON success envelope: {'success': True} merged with `data` and `extra`,
+    returned with `status` (issue #28). Local twin of server.py's api_success
+    — this module never imports from server.py.
+    """
     body = {'success': True}
     if data:
         body.update(data)
@@ -67,6 +72,10 @@ def api_success(data=None, status=200, **extra):
 
 
 def api_error(message, status=400, **extra):
+    """
+    JSON error envelope: {'success': False, 'error': message} merged with
+    `extra`, returned with `status` (default 400).
+    """
     body = {'success': False, 'error': message}
     body.update(extra)
     return jsonify(body), status
@@ -322,14 +331,35 @@ def _check_rate_limit(key_id, limit):
 
 def require_api_key(permissions=None):
     """
-    Decorator to require API key authentication.
-    
+    Decorator to require API key authentication on an /api/v1/* route.
+
+    The key is read from the `X-API-Key` header or the `api_key` query
+    parameter, hashed and looked up by validate_api_key(), then checked
+    against `permissions` and the key's own per-minute rate limit.
+
     Args:
-        permissions: List of required permissions (any one of them)
+        permissions: List of permission strings; the key needs ANY one of
+            them (a key holding APIPermission.ADMIN always passes). None
+            means authentication only, no permission check.
+
+    Returns:
+        A decorator that wraps the view. On success the wrapped view runs
+        with the key row available as `g.api_key`. On failure it short-
+        circuits with a JSON body carrying 'success': False, 'error' and
+        'message': 401 (missing/invalid/expired/disabled key), 403
+        (insufficient permissions) or 429 (rate limit exceeded).
+
+    Side effects:
+        Records the call via increment_api_stats() (both the success and
+        every failure path), sets `g.api_key`, and registers an
+        after_this_request hook that adds the X-RateLimit-Limit/
+        -Remaining/-Reset headers to whatever response is returned.
     """
     def decorator(f):
+        """Bind the view function `f` to the permission/rate-limit checks."""
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            """Authenticate the request, then call the wrapped view."""
             # Get API key from header or query param
             api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
             
@@ -375,6 +405,7 @@ def require_api_key(permissions=None):
 
             @after_this_request
             def _add_rate_headers(resp):
+                """Attach the rate-limit headers to whatever response the view returns."""
                 resp.headers['X-RateLimit-Limit'] = str(limit)
                 resp.headers['X-RateLimit-Remaining'] = str(max(0, remaining))
                 resp.headers['X-RateLimit-Reset'] = str(reset_ts)
@@ -486,7 +517,20 @@ def api_get_stats():
 
 @api_v1.route('/docs', methods=['GET'])
 def api_docs():
-    """Return API documentation."""
+    """
+    Return the machine-readable description of the public API.
+
+    Unauthenticated on purpose — this is the one /api/v1 route with no
+    @require_api_key guard, so clients can discover the endpoint list,
+    the permission each one needs and the rate-limit headers before they
+    hold a key.
+
+    Returns:
+        api_success() envelope whose body is a static dict describing the
+        API name/version, the two accepted key locations, the permission
+        vocabulary, every endpoint (params, body and response shape) and
+        the default rate limit. Reads no state and has no side effects.
+    """
     docs = {
         'name': 'MServer API',
         'version': 'v1',

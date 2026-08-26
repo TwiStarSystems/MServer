@@ -333,6 +333,15 @@ _DEFAULT_USER_PERMISSIONS = json.dumps([
 
 
 def _seed_default_groups():
+    """
+    Insert the three built-in RBAC groups if they are not already present.
+
+    Called from init_db() on every boot. Uses INSERT OR IGNORE keyed on the
+    fixed ids ('builtin-admin', 'builtin-user', 'builtin-public'), so it is
+    idempotent and never overwrites permissions an operator has edited.
+    'builtin-user' is the is_default group new accounts land in;
+    'builtin-admin' carries the '*' wildcard. Commits before returning.
+    """
     conn = get_db()
     now = datetime.now().isoformat()
     conn.execute(

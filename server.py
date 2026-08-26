@@ -1344,7 +1344,37 @@ class BackupScheduler:
     # ── Backup execution ──────────────────────────────────────────────────────
 
     def _execute_backup(self, server_id):
-        """Execute a scheduled backup for a server."""
+        """
+        Run one scheduled backup for a server. APScheduler job body.
+
+        Args:
+            server_id: Id of the server to back up. Unknown ids and servers
+                whose serverPath is missing are logged and skipped.
+
+        Returns:
+            None — this runs on a scheduler thread with no caller to report
+            to. Every failure is swallowed and reported through the side
+            effects below instead of raising.
+
+        Side effects (in order):
+            - Fires the 'backup_start' in-game message event.
+            - If the server is running and the schedule's stopServer is set
+              (the default), warns players over three 10s intervals, stops
+              the server, waits up to 60s and kills it if it has not exited.
+              With stopServer=False the server keeps running and the archive
+              may be inconsistent.
+            - Writes backups/<server_id>/scheduled-backup-<ts>.zip: the whole
+              server directory at the schedule's compressionLevel (0-9,
+              default 6) plus a backup_manifest.json member.
+            - Verifies the archive (checksum), then attempts the configured
+              external upload; both only warn on failure.
+            - Logs a backup_events row, and prunes old backups when the app
+              setting autoDeleteExpiredBackups is on.
+            - Restarts the server if it stopped it and restartAfter is set.
+            - Emits 'backup_completed' (or 'backup_failed') to the
+              server_<id> Socket.IO room and dispatches the
+              'backup_complete' / 'backup_failure' notification off-thread.
+        """
         print(f"[Scheduler] Starting scheduled backup for server: {server_id}")
         try:
             server_config = server_manager.get_server_config(server_id)
@@ -1754,10 +1784,24 @@ class TaskScheduler:
             print(f"[TaskScheduler] Task execution failed for {task_id}: {e}")
 
     def _is_server_running(self, server_id):
+        """Whether the panel currently holds a running process for this server."""
         instance = self.server_manager.servers.get(server_id)
         return instance is not None and instance.is_running()
 
     def _execute_start(self, server_id, task):
+        """
+        Scheduled-task handler: start the server. APScheduler job body.
+
+        Args:
+            server_id: Server to start.
+            task: The task row; unused for this action, taken for the common
+                handler signature.
+
+        Returns:
+            None. An already-running server is logged and skipped, and every
+            exception is caught and printed — a failure must not kill the
+            scheduler thread or stop later tasks firing.
+        """
         try:
             if not self._is_server_running(server_id):
                 self.server_manager.start_server(server_id)
@@ -1768,6 +1812,17 @@ class TaskScheduler:
             print(f"[TaskScheduler] Failed to start server {server_id}: {e}")
 
     def _execute_stop(self, server_id, task):
+        """
+        Scheduled-task handler: stop the server. APScheduler job body.
+
+        Args:
+            server_id: Server to stop.
+            task: The task row; unused, taken for the common handler signature.
+
+        Returns:
+            None. A server that is not running is logged and skipped; exceptions
+            are caught and printed rather than raised.
+        """
         try:
             if self._is_server_running(server_id):
                 self.server_manager.stop_server(server_id)
@@ -1778,6 +1833,22 @@ class TaskScheduler:
             print(f"[TaskScheduler] Failed to stop server {server_id}: {e}")
 
     def _execute_reboot(self, server_id, task):
+        """
+        Scheduled-task handler: restart the server. APScheduler job body.
+
+        Args:
+            server_id: Server to reboot.
+            task: The task row; unused, taken for the common handler signature.
+
+        Returns:
+            None; exceptions are caught and printed.
+
+        Side effects:
+            Stops the server, waits up to 60s for the process to exit plus a 3s
+            settle, then starts it again. If it has still not exited after that
+            wait the start is attempted anyway — which can fail on the port still
+            being held. A server that was already stopped is simply started.
+        """
         try:
             if self._is_server_running(server_id):
                 print(f"[TaskScheduler] Rebooting server {server_id}...")
@@ -1793,6 +1864,18 @@ class TaskScheduler:
             print(f"[TaskScheduler] Failed to reboot server {server_id}: {e}")
 
     def _execute_command(self, server_id, task):
+        """
+        Scheduled-task handler: send a console command. APScheduler job body.
+
+        Args:
+            server_id: Server to send to.
+            task: The task row; 'command' is the line written to stdin.
+
+        Returns:
+            None. An empty command, or a server that is not running, is logged
+            and skipped — the command is not queued for later. Exceptions are
+            caught and printed.
+        """
         try:
             command = task.get('command', '')
             if command and self._is_server_running(server_id):
@@ -1934,6 +2017,10 @@ class MessageScheduler:
 
     @staticmethod
     def _row_to_dict(row):
+        """
+        Convert a scheduled_messages row to the frontend's camelCase shape,
+        turning the integer flag columns into booleans. None for a missing row.
+        """
         if row is None:
             return None
         return {
@@ -1958,6 +2045,10 @@ class MessageScheduler:
         }
 
     def _restore_jobs(self):
+        """
+        Re-register APScheduler jobs for every enabled cron message. Called from
+        __init__, since the scheduler is in-memory and starts empty on each boot.
+        """
         rows = get_db().execute(
             "SELECT * FROM scheduled_messages WHERE enabled=1 AND trigger='cron'"
         ).fetchall()
@@ -1965,6 +2056,22 @@ class MessageScheduler:
             self._add_cron_job(row['server_id'], row['id'], row['cron_expr'])
 
     def _add_cron_job(self, server_id, msg_id, cron_expr):
+        """
+        Register (or re-register) one cron-triggered message with APScheduler.
+
+        Args:
+            server_id, msg_id: Identify the message; together they form the
+                APScheduler job id "msg_<server>_<msg>".
+            cron_expr: Standard 5-field expression (minute hour day month
+                day-of-week). Empty, malformed, or any other field count is
+                ignored — no job is scheduled and the message simply never fires.
+
+        Side effects:
+            Removes any existing job with the same id first, so this doubles as
+            the re-schedule path and can never leave two jobs for one message.
+            Failures are printed, not raised: a bad expression must not take down
+            the caller (a create/update request, or _restore_jobs at boot).
+        """
         job_id = f"msg_{server_id}_{msg_id}"
         try:
             self.scheduler.remove_job(job_id)
@@ -1987,6 +2094,26 @@ class MessageScheduler:
             print(f"[MessageScheduler] Failed to add cron job {job_id}: {e}")
 
     def _build_command(self, msg, is_bedrock):
+        """
+        Turn a stored message row into the console command that sends it.
+
+        Args:
+            msg: A _row_to_dict() message — msgType ('say', 'msg', 'chat',
+                'title', 'subtitle', 'actionbar'), target, message, color and the
+                five style flags.
+            is_bedrock: Selects Bedrock's tellraw/titreaw "rawtext" form, which
+                supports no colour or style flags, over Java's JSON component.
+
+        Returns:
+            The command string, or None when the target is unusable or the type
+            is unrecognised — the caller sends nothing in that case.
+
+        Side effects:
+            None; pure string building. Text and target are re-sanitised here
+            rather than trusted from the row, so a message stored before this
+            hardening (or written through the raw API) still cannot smuggle a
+            second console command past stdin.
+        """
         msg_type = msg['msgType']
         # Sanitize at send time so rows created before this hardening (or via
         # the raw API) can't smuggle a second console command past stdin.
@@ -2028,6 +2155,24 @@ class MessageScheduler:
         return None
 
     def _execute_message(self, server_id, msg_id):
+        """
+        Send one scheduled message now, if its server is up. Job/event body.
+
+        Args:
+            server_id: Server to send to.
+            msg_id: Row to send. Re-read from the DB rather than trusted from the
+                scheduler, so an edit or disable between firings takes effect.
+
+        Returns:
+            None. A disabled row, a deleted row, a stopped server or an
+            unbuildable command are all silent no-ops; exceptions are caught and
+            printed so one bad message never kills the scheduler thread.
+
+        Side effects:
+            Writes the command to the server's stdin, then bumps run_count and
+            stamps last_run (committed). Both only happen when the command was
+            actually sent.
+        """
         try:
             conn = get_db()
             row = conn.execute('SELECT * FROM scheduled_messages WHERE id=?', (msg_id,)).fetchone()
@@ -2066,6 +2211,26 @@ class MessageScheduler:
             print(f"[MessageScheduler] Error firing event {event_type} for {server_id}: {e}")
 
     def create_message(self, server_id, config):
+        """
+        Create a scheduled message and, if it is a cron one, schedule it.
+
+        Args:
+            server_id: Server the message belongs to.
+            config: 'name', 'trigger' ('cron' or an event name such as
+                'backup_start'), 'cronExpr' (cron triggers only), 'msgType',
+                'target', 'message', 'color', the five style flags, and 'enabled'
+                (default True). Every field has a default, so a partial config is
+                accepted.
+
+        Returns:
+            The created message as a dict (the _row_to_dict() shape).
+
+        Side effects:
+            Inserts the scheduled_messages row and commits. Registers an
+            APScheduler job only when the message is enabled, cron-triggered and
+            carries an expression; event-triggered messages are dispatched by
+            fire_event() instead and are never scheduled.
+        """
         msg_id = str(int(datetime.now().timestamp() * 1000))
         trigger = config.get('trigger', 'cron')
         cron_expr = config.get('cronExpr', '') if trigger == 'cron' else None
@@ -2101,6 +2266,25 @@ class MessageScheduler:
         return msg
 
     def update_message(self, server_id, msg_id, config):
+        """
+        Update a scheduled message and re-sync its APScheduler job.
+
+        Args:
+            server_id: Owning server — part of the lookup, so a message cannot be
+                edited through another server's route.
+            msg_id: Message to update.
+            config: Partial; any field left out keeps its current value.
+
+        Returns:
+            The updated message dict, or None if no such message exists for that
+            server.
+
+        Side effects:
+            Updates the row and commits, then always removes the existing
+            APScheduler job and re-adds it only if the message is still enabled,
+            cron-triggered and has an expression — so disabling a message, or
+            switching it to an event trigger, actually stops it firing.
+        """
         conn = get_db()
         row = conn.execute(
             'SELECT * FROM scheduled_messages WHERE id=? AND server_id=?',
@@ -2145,6 +2329,21 @@ class MessageScheduler:
         return updated
 
     def delete_message(self, server_id, msg_id):
+        """
+        Delete a scheduled message and unschedule it.
+
+        Args:
+            server_id: Owning server — part of the WHERE clause, so a message
+                cannot be deleted through another server's route.
+            msg_id: Message to delete.
+
+        Returns:
+            True if a row was deleted, False if nothing matched.
+
+        Side effects:
+            Deletes the row, commits, and removes the APScheduler job if one
+            exists (harmless when it does not).
+        """
         conn = get_db()
         result = conn.execute(
             'DELETE FROM scheduled_messages WHERE id=? AND server_id=?',
@@ -2158,6 +2357,18 @@ class MessageScheduler:
         return result.rowcount > 0
 
     def get_messages(self, server_id):
+        """
+        List a server's scheduled messages, oldest first.
+
+        Args:
+            server_id: Server to list for.
+
+        Returns:
+            List of message dicts. Cron messages additionally carry 'nextRun'
+            (ISO timestamp) when APScheduler holds a live job for them — absent
+            if the message is disabled or its expression failed to parse, which
+            is what makes a silently-not-running message visible in the UI.
+        """
         rows = get_db().execute(
             'SELECT * FROM scheduled_messages WHERE server_id=? ORDER BY created',
             (server_id,)
@@ -2176,6 +2387,18 @@ class MessageScheduler:
         return result
 
     def get_message(self, server_id, msg_id):
+        """
+        Fetch one scheduled message.
+
+        Args:
+            server_id: Owning server — part of the lookup, so a message cannot be
+                read through another server's route.
+            msg_id: Message to fetch.
+
+        Returns:
+            The message dict, with 'nextRun' added for a live cron job (see
+            get_messages), or None if no such message exists for that server.
+        """
         row = get_db().execute(
             'SELECT * FROM scheduled_messages WHERE id=? AND server_id=?',
             (msg_id, server_id)
@@ -2309,6 +2532,10 @@ class GroupManager:
 
     @staticmethod
     def _row_to_dict(row):
+        """
+        Convert a groups row to the frontend's camelCase shape, JSON-decoding the
+        permissions list (a corrupt blob becomes []). None for a missing row.
+        """
         if row is None:
             return None
         perms = []
@@ -2329,6 +2556,23 @@ class GroupManager:
     # ── Permission checking ──────────────────────────────────────────────────
 
     def has_permission(self, group_id, permission):
+        """
+        Test whether a group holds a permission. The core RBAC check.
+
+        Args:
+            group_id: Group to test. A falsy id or an unknown group is False —
+                never an error, so a user with no group simply has no rights.
+            permission: Dotted permission string, e.g. 'panel.jars.manage'.
+
+        Returns:
+            True if the group holds '*' (admin), the exact permission, or any
+            prefix wildcard covering it ('panel.*', 'panel.jars.*', …).
+
+        Side effects:
+            None beyond populating the in-memory group cache on first use. Reads
+            that cache, not the DB — every mutating method calls _invalidate(),
+            which is what keeps the two in step.
+        """
         self._ensure_cache()
         if not group_id:
             return False
@@ -2348,6 +2592,15 @@ class GroupManager:
         return False
 
     def is_admin_group(self, group_id):
+        """
+        Whether a group is an admin group — i.e. holds the '*' wildcard.
+
+        Args:
+            group_id: Group to test; falsy or unknown is False.
+
+        Returns:
+            bool. This is the check behind @admin_required.
+        """
         self._ensure_cache()
         if not group_id:
             return False
@@ -2355,6 +2608,18 @@ class GroupManager:
         return group is not None and '*' in group.get('permissions', [])
 
     def get_permissions_for_group(self, group_id):
+        """
+        Expand a group's stored permissions into the concrete list it grants.
+
+        Args:
+            group_id: Group to resolve; an unknown group yields [].
+
+        Returns:
+            A list of real permission strings from ALL_PERMISSIONS — every
+            wildcard resolved, so the UI can tick individual checkboxes rather
+            than render '*' or 'panel.*'. An admin group returns everything.
+            Wildcards for permissions that no longer exist simply drop out.
+        """
         self._ensure_cache()
         group = self._cache.get(group_id)
         if not group:
@@ -2378,14 +2643,35 @@ class GroupManager:
     # ── CRUD ─────────────────────────────────────────────────────────────────
 
     def get_group(self, group_id):
+        """Fetch one group as a dict from the cache, or None if unknown."""
         self._ensure_cache()
         return self._cache.get(group_id)
 
     def get_all_groups(self):
+        """All groups as dicts, highest priority first (the UI's display order)."""
         self._ensure_cache()
         return sorted(self._cache.values(), key=lambda g: -g['priority'])
 
     def create_group(self, name, permissions, is_default=False):
+        """
+        Create a custom (non-builtin) group.
+
+        Args:
+            name: Display name. Not checked for uniqueness here — update_group()
+                is what enforces that.
+            permissions: Permission strings. Anything not in ALL_PERMISSIONS, not
+                a '.*' wildcard and not '*' is silently dropped, so a stale
+                client cannot store a permission the app no longer knows.
+            is_default: Make this the group new users land in.
+
+        Returns:
+            The new group id.
+
+        Side effects:
+            Inserts the row with is_builtin=0 and priority=0, clears is_default
+            on every other group when is_default is set (it is exclusive),
+            commits, and invalidates the permission cache.
+        """
         conn = get_db()
         group_id = str(uuid.uuid4())[:8]
         valid_perms = [p for p in permissions if p in self.ALL_PERMISSIONS or p.endswith('.*') or p == '*']
@@ -2402,6 +2688,31 @@ class GroupManager:
         return group_id
 
     def update_group(self, group_id, name=None, permissions=None, is_default=None, priority=None):
+        """
+        Update a group's name, permissions, default flag and/or priority.
+
+        Args:
+            group_id: Group to update.
+            name: New display name. Rejected for built-in groups and for a name
+                another group already uses (case-insensitive).
+            permissions: Replacement list — not merged. Entries outside
+                ALL_PERMISSIONS that are not wildcards are dropped. 'builtin-admin'
+                always keeps '*' whatever is passed, so the admin group cannot be
+                demoted into a locked-out panel.
+            is_default: Only True does anything; a group is un-defaulted by making
+                another one default, since exactly one must hold the flag.
+            priority: Sort order used when listing groups.
+
+        Returns:
+            (True, message) on success, (False, reason) if the group is unknown or
+            a rule above rejected the change. Each field is applied independently,
+            so an early rejection can leave earlier fields already written.
+
+        Side effects:
+            Writes the row, commits, and invalidates the permission cache — which
+            is what makes a permission change take effect on the next request
+            rather than at the next restart.
+        """
         group = self.get_group(group_id)
         if not group:
             return False, 'Group not found'
@@ -2431,6 +2742,22 @@ class GroupManager:
         return True, 'Group updated'
 
     def delete_group(self, group_id):
+        """
+        Delete a custom group and re-home its members.
+
+        Args:
+            group_id: Group to delete.
+
+        Returns:
+            (True, message), or (False, reason) for an unknown group, a built-in
+            group, or the current default group — refusing the last two is what
+            guarantees every user always has a group to fall back to.
+
+        Side effects:
+            Moves every user in the group to the default group *before* deleting
+            it, commits, and invalidates the permission cache. Users keep their
+            accounts but silently lose whatever the old group granted.
+        """
         group = self.get_group(group_id)
         if not group:
             return False, 'Group not found'
@@ -2448,6 +2775,10 @@ class GroupManager:
         return True, 'Group deleted'
 
     def get_default_group_id(self):
+        """
+        Id of the group new users are placed in, falling back to 'builtin-user'
+        when no group carries the flag.
+        """
         self._ensure_cache()
         for gid, g in self._cache.items():
             if g.get('isDefault'):
@@ -2455,9 +2786,24 @@ class GroupManager:
         return 'builtin-user'
 
     def get_admin_group_id(self):
+        """Id of the built-in admin group. Fixed, not looked up."""
         return 'builtin-admin'
 
     def set_default_group(self, group_id):
+        """
+        Make one group the default for new users.
+
+        Args:
+            group_id: Group to promote; unknown ids return False and change
+                nothing.
+
+        Returns:
+            True if the flag moved.
+
+        Side effects:
+            Clears is_default everywhere, then sets it on this group (the flag is
+            exclusive), commits, and invalidates the cache.
+        """
         self._ensure_cache()
         if group_id not in self._cache:
             return False
@@ -2469,6 +2815,7 @@ class GroupManager:
         return True
 
     def get_user_count(self, group_id):
+        """Number of users currently in a group. Used to warn before deleting one."""
         conn = get_db()
         row = conn.execute('SELECT COUNT(*) AS cnt FROM users WHERE group_id=?',
                            (group_id,)).fetchone()
@@ -2477,6 +2824,10 @@ class GroupManager:
     # ── Server group access (sharing) ────────────────────────────────────────
 
     def get_server_groups(self, server_id):
+        """
+        Groups a server is shared with, as dicts. Rows referring to a since-
+        deleted group are skipped rather than raising.
+        """
         self._ensure_cache()
         conn = get_db()
         rows = conn.execute(
@@ -2486,6 +2837,11 @@ class GroupManager:
                 if r['group_id'] in self._cache]
 
     def get_server_group_ids(self, server_id):
+        """
+        Ids of the groups a server is shared with. The id-only counterpart of
+        get_server_groups(), and one of the three things can_access_server()
+        checks.
+        """
         conn = get_db()
         rows = conn.execute(
             'SELECT group_id FROM server_group_access WHERE server_id=?',
@@ -2493,6 +2849,20 @@ class GroupManager:
         return [r['group_id'] for r in rows]
 
     def set_server_groups(self, server_id, group_ids):
+        """
+        Replace the set of groups a server is shared with.
+
+        Args:
+            server_id: Server whose sharing is being set.
+            group_ids: The complete new set — not merged. Unknown ids are
+                skipped, so a stale client cannot create a dangling grant.
+
+        Side effects:
+            Deletes every existing server_group_access row for the server before
+            inserting the new ones, then commits. Passing an empty list is how
+            sharing is turned off, and it revokes access for anyone who reached
+            the server only through a group.
+        """
         self._ensure_cache()
         conn = get_db()
         conn.execute('DELETE FROM server_group_access WHERE server_id=?',
@@ -2695,7 +3065,32 @@ class UserManager:
     # ── Authentication ────────────────────────────────────────────────────────
 
     def authenticate(self, username, password):
-        """Authenticate a user and return (user_id, user_dict) or (None, error_str)."""
+        """
+        Check credentials and maintain the failed-attempt lockout.
+
+        Args:
+            username: Matched case-insensitively (COLLATE NOCASE).
+            password: Plaintext, compared against the stored hash.
+
+        Returns:
+            (user_id, user_dict) on success. Otherwise (None, message) with a
+            message safe to show the user: bad credentials (identical for an
+            unknown username and a wrong password, so the response does not
+            reveal which accounts exist), a temporary lockout, an
+            administratively disabled account, or "Account pending approval".
+            MFA is not considered here — the caller decides that from the
+            returned user_dict.
+
+        Side effects:
+            Every branch writes to the users row and commits. Success resets
+            failed_login_attempts and stamps last_login. A failure increments
+            failed_login_attempts and, at 5, sets account_disabled with a
+            disabled_at timestamp; that lockout auto-expires after
+            LOCKOUT_DURATION_SECONDS, cleared lazily on the next attempt
+            rather than by any scheduled job. Locking an account also runs
+            _check_anti_lockout(), which is what guarantees a recovery admin
+            still exists when every real admin has locked themselves out.
+        """
         conn = get_db()
         row = conn.execute(
             'SELECT * FROM users WHERE username=? COLLATE NOCASE', (username,)
@@ -3330,6 +3725,28 @@ class NotificationManager:
 
     def create(self, user_id, ntype, title, message='', link=None,
                ref_type=None, ref_id=None):
+        """
+        Create one notification for one user and push it to their bell.
+
+        Args:
+            user_id: Recipient.
+            ntype: Type tag ('action_notify', 'approval_request', …); the UI uses
+                it to pick an icon.
+            title: Headline text.
+            message: Body text.
+            link: Optional in-panel URL the notification opens.
+            ref_type, ref_id: What the notification is about (e.g. 'server' +
+                id) — the handle dismiss_by_ref() uses to retract it later.
+
+        Returns:
+            The created notification as a dict.
+
+        Side effects:
+            Inserts the notifications row, commits, and emits 'notification:new'
+            to the recipient's Socket.IO room. A failed emit is swallowed — the
+            row is written either way, so an offline user still sees it on their
+            next page load.
+        """
         nid = str(uuid.uuid4())
         conn = get_db()
         conn.execute(
@@ -3351,6 +3768,23 @@ class NotificationManager:
 
     def notify_admins(self, ntype, title, message='', link=None,
                       ref_type=None, ref_id=None):
+        """
+        Send the same notification to every user who can act on it.
+
+        Recipients are the members of any group holding '*' or
+        'panel.approvals.manage' — so a non-admin group given only the approvals
+        permission still gets the alerts it is expected to handle.
+
+        Args:
+            ntype, title, message, link, ref_type, ref_id: As create().
+
+        Returns:
+            The list of notifications created — empty when no group qualifies.
+
+        Side effects:
+            One create() per recipient, so one call can write several rows and
+            emit several events.
+        """
         conn = get_db()
         admin_gids = [g['id'] for g in group_manager.get_all_groups()
                       if '*' in g.get('permissions', [])
@@ -3368,6 +3802,19 @@ class NotificationManager:
         return notes
 
     def get_for_user(self, user_id, include_dismissed=False, limit=50):
+        """
+        A user's notifications, newest first.
+
+        Args:
+            user_id: Whose notifications to read; scoping is by user_id in the
+                query, so this cannot return another user's rows.
+            include_dismissed: False (the default) hides dismissed ones — what
+                the bell dropdown shows.
+            limit: Cap on rows returned (default 50).
+
+        Returns:
+            List of notification dicts.
+        """
         conn = get_db()
         if include_dismissed:
             rows = conn.execute(
@@ -3382,6 +3829,7 @@ class NotificationManager:
         return [self._row_to_dict(r) for r in rows]
 
     def unread_count(self, user_id):
+        """Count of a user's unread, undismissed notifications — the bell's badge."""
         conn = get_db()
         row = conn.execute(
             '''SELECT COUNT(*) AS cnt FROM notifications
@@ -3390,6 +3838,10 @@ class NotificationManager:
         return row['cnt'] if row else 0
 
     def mark_read(self, notification_id, user_id):
+        """
+        Mark one notification read. No-op unless it belongs to user_id, which is
+        what stops one user marking another's. Commits.
+        """
         conn = get_db()
         conn.execute(
             'UPDATE notifications SET read=1 WHERE id=? AND user_id=?',
@@ -3397,6 +3849,10 @@ class NotificationManager:
         conn.commit()
 
     def dismiss(self, notification_id, user_id):
+        """
+        Dismiss one notification (also marks it read), scoped to its owner.
+        Dismissed rows are hidden, not deleted. Commits.
+        """
         conn = get_db()
         conn.execute(
             'UPDATE notifications SET dismissed=1, read=1 WHERE id=? AND user_id=?',
@@ -3404,6 +3860,7 @@ class NotificationManager:
         conn.commit()
 
     def mark_all_read(self, user_id):
+        """Mark all of a user's unread notifications read. Commits."""
         conn = get_db()
         conn.execute(
             'UPDATE notifications SET read=1 WHERE user_id=? AND read=0',
@@ -3411,6 +3868,7 @@ class NotificationManager:
         conn.commit()
 
     def dismiss_all(self, user_id):
+        """Dismiss all of a user's notifications (also marks them read). Commits."""
         conn = get_db()
         conn.execute(
             'UPDATE notifications SET dismissed=1, read=1 WHERE user_id=? AND dismissed=0',
@@ -3418,6 +3876,14 @@ class NotificationManager:
         conn.commit()
 
     def dismiss_by_ref(self, ref_type, ref_id):
+        """
+        Dismiss every notification pointing at one thing, for every user.
+
+        Used to retract alerts that no longer need action — e.g. once a pending
+        action is approved, the request notification is cleared from all the
+        admins who received it, so only the admin who acted doesn't see a stale
+        prompt. Commits.
+        """
         conn = get_db()
         conn.execute(
             'UPDATE notifications SET dismissed=1, read=1 WHERE ref_type=? AND ref_id=?',
@@ -3426,6 +3892,10 @@ class NotificationManager:
 
     @staticmethod
     def _row_to_dict(row):
+        """
+        Convert a notifications row to the frontend's camelCase shape, with the
+        read/dismissed flags as booleans. None for a missing row.
+        """
         if not row:
             return None
         return {
@@ -3458,6 +3928,27 @@ class PendingActionManager:
     """Manages actions that require admin approval before execution."""
 
     def create(self, action_type, user_id, payload, target_id=None):
+        """
+        Queue an action for admin approval instead of running it.
+
+        Called by check_action_policy() when the policy for the action type is
+        'require_approval'. The work itself is not stored — only enough to replay
+        it later via _execute_approved_action().
+
+        Args:
+            action_type: Policy key, e.g. 'serverDelete' or 'playerManagement'.
+            user_id: The requester, notified when the action is reviewed.
+            payload: Everything the replay will need, JSON-encoded into the row.
+            target_id: Usually the server the action applies to.
+
+        Returns:
+            The new pending action's id, returned to the caller as 'pendingId'.
+
+        Side effects:
+            Inserts the pending_actions row (status 'pending') and commits, then
+            notifies every admin with an 'approval_request' linking to the
+            approvals tab. Nothing is executed here.
+        """
         action_id = str(uuid.uuid4())
         conn = get_db()
         conn.execute(
@@ -3482,6 +3973,7 @@ class PendingActionManager:
         return action_id
 
     def get_pending(self):
+        """All actions still awaiting review, newest first — the approvals queue."""
         conn = get_db()
         rows = conn.execute(
             '''SELECT * FROM pending_actions WHERE status='pending'
@@ -3489,6 +3981,10 @@ class PendingActionManager:
         return [self._row_to_dict(r) for r in rows]
 
     def get_all(self, limit=100):
+        """
+        Recent actions in every status (default 100), newest first — the audit
+        view, unlike get_pending() which shows only the open queue.
+        """
         conn = get_db()
         rows = conn.execute(
             'SELECT * FROM pending_actions ORDER BY created DESC LIMIT ?',
@@ -3496,12 +3992,17 @@ class PendingActionManager:
         return [self._row_to_dict(r) for r in rows]
 
     def get_by_id(self, action_id):
+        """Fetch one pending action by id, in any status; None if unknown."""
         conn = get_db()
         row = conn.execute(
             'SELECT * FROM pending_actions WHERE id=?', (action_id,)).fetchone()
         return self._row_to_dict(row)
 
     def get_pending_for_user(self, user_id):
+        """
+        One user's own still-pending requests — what the requester sees while
+        waiting, as opposed to the admin-wide get_pending().
+        """
         conn = get_db()
         rows = conn.execute(
             '''SELECT * FROM pending_actions
@@ -3510,6 +4011,27 @@ class PendingActionManager:
         return [self._row_to_dict(r) for r in rows]
 
     def approve(self, action_id, admin_id, note=None):
+        """
+        Approve a queued action and hand it back to the caller to execute.
+
+        Args:
+            action_id: The action to approve.
+            admin_id: Reviewing admin, recorded on the row.
+            note: Optional reviewer note.
+
+        Returns:
+            The approved action dict — but ONLY for the call that actually moved
+            the row out of 'pending'. A second approve, or an approve on an
+            already-rejected action, returns None, because the caller executes
+            whatever it gets back and must not do so twice (issue #92).
+
+        Side effects:
+            Flips the row to 'approved' with the reviewer and timestamp, commits,
+            notifies the requester, and dismisses the outstanding approval-request
+            notifications for this action across every admin who received one.
+            Does NOT execute the action — the route calls
+            _execute_approved_action() with the returned dict.
+        """
         conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
         cur = conn.execute(
@@ -3540,6 +4062,25 @@ class PendingActionManager:
         return action
 
     def reject(self, action_id, admin_id, note=None):
+        """
+        Reject a queued action so it is never executed.
+
+        Args:
+            action_id: The action to reject.
+            admin_id: Reviewing admin, recorded on the row.
+            note: Optional reason; included in the requester's notification.
+
+        Returns:
+            The rejected action dict, or None if the row was not still pending —
+            the same guard as approve(), so a repeat call cannot re-notify the
+            requester (issue #92).
+
+        Side effects:
+            Flips the row to 'rejected' with the reviewer and timestamp, commits,
+            notifies the requester (with the reason when one was given), and
+            dismisses the outstanding approval-request notifications for this
+            action.
+        """
         conn = get_db()
         now = datetime.now(timezone.utc).isoformat()
         cur = conn.execute(
@@ -3572,6 +4113,10 @@ class PendingActionManager:
 
     @staticmethod
     def _row_to_dict(row):
+        """
+        Convert a pending_actions row to the frontend's camelCase shape,
+        JSON-decoding the stored payload. None for a missing row.
+        """
         if not row:
             return None
         return {
@@ -3654,8 +4199,13 @@ def login_required(f):
 def permission_required(*permissions):
     """Decorator requiring the current user to have ALL listed permissions."""
     def decorator(f):
+        """Bind the view to the permission check."""
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            """
+            Reject unauthenticated (401) or under-permissioned (403) callers, else
+            run the view.
+            """
             user_id, user = get_current_user()
             if not user:
                 return api_error('Authentication required', 401, code='AUTH_REQUIRED')
@@ -3952,7 +4502,30 @@ class NBTEditor:
         }
     
     def _read_tag_payload(self, reader, tag_type):
-        """Read tag payload based on type"""
+        """
+        Read one NBT payload of a known type from the stream.
+
+        Args:
+            reader: File-like positioned at the start of the payload — the
+                tag id and name have already been consumed by the caller.
+            tag_type: One of the TAG_* constants, telling this how many
+                bytes to read and how to interpret them.
+
+        Returns:
+            The decoded value, in the panel's JSON-friendly form: a Python
+            number for the scalar tags, str for TAG_STRING, list of numbers
+            for the three array tags, {'listType', 'items': [{'type',
+            'typeName', 'value'}]} for TAG_LIST, and a list of named-tag
+            dicts for TAG_COMPOUND. None for an unrecognised tag_type.
+
+        Side effects:
+            Advances the reader by exactly the payload's length — the caller
+            depends on that to reach the next tag. Recurses through
+            TAG_LIST/TAG_COMPOUND (via _read_named_tag), so a deeply nested
+            structure recurses as deep as the file does. All values are
+            big-endian, per the NBT spec. A truncated or malformed file
+            raises out of struct/decode; the route layer catches it.
+        """
         if tag_type == self.TAG_BYTE:
             return struct.unpack('>b', reader.read(1))[0]
         
@@ -4634,7 +5207,45 @@ class ServerManager:
     def import_server_from_zip(self, name, zip_path, java_args=DEFAULT_JAVA_ARGS,
                                executable_name=None, owner=None, approved=True,
                                category='unmodded', port=None, engine=None):
-        """Import a server from a ZIP file."""
+        """
+        Extract a ZIP of an existing server directory into a new managed one.
+
+        Args:
+            name: Display name. Overridden by the archive's own managed.conf
+                ServerName when it carries one.
+            zip_path: Path to the uploaded archive. Not consumed — the caller
+                owns its cleanup.
+            java_args: Launch arguments for the new server row.
+            executable_name: JAR inside the archive to use. Ignored if it is
+                missing or not a .jar; auto-detection then takes over.
+            owner: User id recorded as the owner, in both the DB row and
+                managed.conf.
+            approved: False writes the row unapproved (server exists on disk
+                but cannot be started until an admin approves it).
+            category: 'unmodded', 'modded' or 'bedrock'.
+            port: Port recorded in managed.conf (default '25565'). Not
+                checked for collisions here — the caller does that.
+            engine: Engine label for a fresh managed.conf; when omitted it is
+                guessed from category. Unused if the archive has one.
+
+        Returns:
+            (True, server_id) on success, (False, error_message) on failure.
+            Never raises.
+
+        Side effects:
+            Creates servers/<new-id>/ and extracts into it via
+            safe_extractall(), which rejects traversal, absolute and symlink
+            members. Flattens a single wrapping directory when the archive
+            was zipped with its folder. Renames the detected JAR to
+            server.jar (the panel's fixed name), preferring an explicit
+            executable_name, then a known name such as paper.jar, then any
+            'server'/'paper'-ish JAR. Reuses the archive's managed.conf when
+            present — re-stamping ServerId/Owner and taking its ServerName
+            and Version — otherwise writes a new one. Inserts the servers
+            row with server_type='imported' and commits. On any failure the
+            whole new directory is removed, so a partial import leaves
+            nothing behind.
+        """
         server_id = str(uuid.uuid4())[:8]
         server_dir = SERVERS_DIR / server_id
 
@@ -4921,6 +5532,21 @@ class ServerInstance:
     """Represents a running Minecraft server instance"""
     
     def __init__(self, server_id, server_path, executable, java_args, is_bedrock=False):
+        """
+        Build the wrapper for one Minecraft server process.
+
+        Args:
+            server_id: Id used for the Socket.IO room and DB lookups.
+            server_path: The server's directory; also the process's cwd.
+            executable: 'server.jar' for Java, 'server.sh' for Bedrock.
+            java_args: JVM arguments; ignored for Bedrock.
+            is_bedrock: Selects the Bedrock launch and status-detection paths.
+
+        No process is started here — construction only sets up state. start()
+        spawns the subprocess and the reader/monitor threads. The console ring
+        buffer is capped at max_buffer_size lines, which is what a newly
+        subscribing client is replayed.
+        """
         self.server_id = server_id
         self.server_path = Path(server_path)
         self.executable = executable
@@ -4983,7 +5609,33 @@ class ServerInstance:
         self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': True})
     
     def _read_output_unbuffered(self):
-        """Read output from the process in real-time and broadcast to clients"""
+        """
+        Stream the server process's stdout to subscribers. Thread body.
+
+        Reads the raw fd rather than iterating the pipe, because Python's
+        line iteration blocks until a full line arrives — a Minecraft server
+        writes a prompt-like partial line and pauses, which would otherwise
+        leave the console looking frozen. Takes no arguments and returns
+        nothing; runs until the process exits.
+
+        How it batches: select() with a 0.01s timeout, then complete lines
+        are flushed immediately, while a trailing partial line is only sent
+        once it exceeds 100 bytes or 0.1s has passed since the last partial
+        flush — enough to show progress without emitting one message per
+        character. Any output still buffered after the process exits is
+        flushed at the end. Decoding is UTF-8 with replacement, falling back
+        to latin-1, so a mod logging non-UTF-8 bytes cannot kill the reader.
+
+        Side effects:
+            For every chunk: broadcasts an 'output' message to the server's
+            Socket.IO room, appends to the instance's console ring buffer
+            (what a newly-subscribing client is replayed), and — for complete
+            lines only — runs _parse_player_events(), which is what maintains
+            the online-player list and the Bedrock XUID cache. A partial line
+            is not parsed, so events are never matched against half a line.
+            An unexpected exception is reported to the room as an 'error'
+            message and ends the stream; the process itself keeps running.
+        """
         try:
             buffer = b''
             fd = self.process.stdout.fileno()
@@ -5231,7 +5883,31 @@ class ServerInstance:
         return 25565  # Default Minecraft port
     
     def _monitor_status(self):
-        """Background thread to monitor server status"""
+        """
+        Poll this instance's real state and publish transitions. Thread body.
+
+        Loops every 2s until self._stop_status_monitor is set; takes no
+        arguments and returns nothing. The status itself is the output —
+        read from self.status and broadcast to subscribers.
+
+        How readiness is decided differs by edition:
+            - Java: the server is RUNNING once its TCP port accepts a
+              connection, STARTING for the first 30s while it does not, and
+              UNRESPONSIVE after that — a live process that never opens its
+              port (a crashed world load, a stuck mod) is visibly stuck
+              rather than falsely "running".
+            - Bedrock: process-liveness only, with a 10s startup grace
+              period, because Bedrock answers on UDP and has no equivalent
+              cheap readiness check.
+        A dead or missing process is STOPPED on either edition.
+
+        Side effects:
+            Mutates self.status and emits a 'status' message to the server's
+            Socket.IO room on every change (never on an unchanged poll), and
+            calls _dispatch_start_notification() on the first transition into
+            RUNNING, so a start notification goes out once per lifecycle
+            rather than once per poll.
+        """
         while not self._stop_status_monitor:
             if self.process is None or self.process.poll() is not None:
                 # Process not running
@@ -5415,6 +6091,19 @@ class JobManager:
     ACTIVE_STATUSES = ('queued', 'running')
 
     def __init__(self, socketio, server_manager, max_workers=4):
+        """
+        Build the job queue.
+
+        Args:
+            socketio: Used to push job_* events to the owner and admins.
+            server_manager: Handed to handlers that need it.
+            max_workers: Size of the thread pool, i.e. how many jobs run at once.
+
+        Handlers are registered afterwards with register(), since they are
+        defined below this class. The dicts guarded by _guard track only
+        in-flight state; job history lives in the jobs table, and init_db()
+        flips rows left 'running' by a crash to 'failed' at boot.
+        """
         self.socketio = socketio
         self.server_manager = server_manager
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='job')
@@ -5433,6 +6122,8 @@ class JobManager:
 
     # ---- helpers ----
     def _server_lock(self, server_id):
+        """Return (creating on first use) the lock that serialises jobs for
+        one server. Jobs on different servers run concurrently."""
         with self._guard:
             lock = self._server_locks.get(server_id)
             if lock is None:
@@ -5442,6 +6133,9 @@ class JobManager:
 
     @staticmethod
     def _row_to_dict(row):
+        """Convert a jobs row to the frontend's camelCase shape, JSON-decoding
+        the stored params/result blobs (a corrupt blob becomes None). Returns
+        None for a missing row."""
         if row is None:
             return None
         d = dict(row)
@@ -5481,6 +6175,7 @@ class JobManager:
 
     # ---- public read API ----
     def get_job(self, job_id):
+        """Look up one job by id; None if it does not exist."""
         row = get_db().execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
         return self._row_to_dict(row)
 
@@ -5507,6 +6202,27 @@ class JobManager:
 
     # ---- submission ----
     def submit(self, job_type, title, params=None, created_by=None, server_id=None):
+        """
+        Queue a job and return its id immediately.
+
+        Args:
+            job_type: Must already be register()ed, else ValueError.
+            title: Human label shown in the jobs UI.
+            params: Handler-specific dict, JSON-encoded into the row.
+            created_by: User id; determines who sees the job and its events.
+            server_id: When set, this job serialises against other jobs for
+                the same server (see _server_lock).
+
+        Returns:
+            The new job id. The work has not started when this returns —
+            poll GET /api/jobs/<id> or listen for the job_* events.
+
+        Side effects:
+            Inserts the 'queued' jobs row and commits, allocates the job's
+            cancel flag, emits 'job_queued', and submits _run() to the
+            executor. Because the row is persisted, a job survives a restart
+            as history (init_db() flips still-running rows to 'failed').
+        """
         if job_type not in self.handlers:
             raise ValueError(f'Unknown job type: {job_type}')
         job_id = str(uuid.uuid4())
@@ -5547,6 +6263,7 @@ class JobManager:
 
     # ---- internal lifecycle ----
     def _set_running(self, job_id):
+        """Flip the row to 'running', stamp `started`, and emit 'job_started'."""
         conn = get_db()
         conn.execute(
             "UPDATE jobs SET status='running', started=?, message=? WHERE id=?",
@@ -5579,6 +6296,21 @@ class JobManager:
         self._emit('job_progress', self.get_job(job_id))
 
     def _finish(self, job_id, status, *, result=None, error=None):
+        """
+        Terminal transition for a job: write the outcome and clean up.
+
+        Args:
+            job_id: The job to close out.
+            status: 'completed', 'failed' or 'cancelled'.
+            result: Handler return value, JSON-encoded into the row.
+            error: Message stored for a failure or cancellation.
+
+        Side effects:
+            Updates the row (a completed job is forced to 100%; anything else
+            keeps whatever progress it reached), commits, emits the matching
+            job_completed/job_failed/job_cancelled event, and drops the job's
+            in-memory cancel flag, future and progress-throttle entries.
+        """
         conn = get_db()
         if status == 'completed':
             final_pct = 100
@@ -5605,6 +6337,26 @@ class JobManager:
             self._last_pct.pop(job_id, None)
 
     def _run(self, job_id):
+        """
+        Executor body for one job: acquire, dispatch, and close it out.
+
+        Args:
+            job_id: The queued job to run.
+
+        Returns:
+            None — the outcome is written to the row by _finish() and pushed
+            over Socket.IO. Never raises: a handler exception becomes a
+            'failed' job (with the traceback printed), JobCancelled becomes
+            'cancelled'.
+
+        Side effects:
+            Takes the per-server lock when the job names a server, so jobs on
+            one server serialise while jobs on different servers run in
+            parallel — and re-checks cancellation after that wait, since a
+            job can sit behind the lock for a long time. Hands the handler a
+            progress callback bound to this job id and the cancel event, then
+            forces 100% before completing.
+        """
         job = self.get_job(job_id)
         if not job:
             return
@@ -5660,6 +6412,38 @@ job_manager = JobManager(socketio, server_manager)
 # time, so registering before those are defined is fine.
 
 def _job_backup(job_id, params, progress, cancel):
+    """
+    JobManager handler for an on-demand backup. Runs on a worker thread.
+
+    The manual counterpart of BackupScheduler._execute_backup(): same
+    archive format, but cancellable, progress-reporting, and it reports
+    failure by raising rather than by swallowing.
+
+    Args:
+        job_id: Id of the jobs row (unused here; the runner owns the row).
+        params: 'serverId' (required), 'compressionLevel' (0-9, clamped,
+            default 6), 'backupType' (label for the event log, default
+            'manual') and 'customName' (defaults to backup-<timestamp>.zip).
+        progress: Callback(pct, message=None) pushed to the client over
+            Socket.IO — 5-85% is the archive walk, then verify and restart.
+        cancel: threading.Event the runner sets when the user cancels;
+            checked once per file.
+
+    Returns:
+        {'backup', 'size', 'verified', 'checksum'} — stored as the job's
+        result. Raises JobCancelled on cancellation, or the original
+        exception on failure; the runner records either as the job's status.
+
+    Side effects:
+        Stops a running server first (a 'say' warning, then up to 60s for a
+        clean exit) and restarts it afterwards — including on the cancel and
+        failure paths, so a failed backup never leaves the server down.
+        Writes backups/<server_id>/<name>.zip with a backup_manifest.json
+        member, verifies it, attempts the configured external upload
+        (warn-only), logs a backup_events row either way, and prunes old
+        backups when autoDeleteExpiredBackups is on. A cancelled run deletes
+        its partial archive.
+    """
     server_id = params['serverId']
     compression_level = max(0, min(9, int(params.get('compressionLevel', 6))))
     backup_type = str(params.get('backupType', 'manual'))
@@ -5751,6 +6535,31 @@ def _job_backup(job_id, params, progress, cancel):
 
 
 def _job_restore(job_id, params, progress, cancel):
+    """
+    JobManager handler that restores a server from a backup archive.
+
+    Args:
+        job_id: Id of the jobs row (unused).
+        params: 'serverId' and 'backupName' — the name is already sanitised
+            by the submitting route, which is why it is joined directly here.
+        progress: Callback(pct, message=None).
+        cancel: threading.Event; honoured only while clearing the directory,
+            not during extraction.
+
+    Returns:
+        {'backup': backup_name}. Raises on failure, or JobCancelled if the
+        user cancels during the clearing phase.
+
+    Side effects:
+        **Destructive and only partly reversible.** Stops a running server
+        (a 'say' warning, then up to 60s for a clean exit), then deletes
+        every entry in the server directory before extracting the archive
+        over it via safe_extractall(). A failure or cancellation part-way
+        through the clear leaves the directory emptied — the server is
+        restarted, but its contents are whatever the archive managed to
+        restore. The server is restarted on both the success and failure
+        paths if it was running.
+    """
     server_id = params['serverId']
     backup_name = params['backupName']  # already sanitized in the route
     backup_path = BACKUPS_DIR / server_id / backup_name
@@ -5798,6 +6607,26 @@ def _job_restore(job_id, params, progress, cancel):
 
 
 def _job_delete_server(job_id, params, progress, cancel):
+    """
+    JobManager handler that deletes a server.
+
+    Args:
+        job_id: Id of the jobs row (unused).
+        params: 'serverId', and 'deleteFiles' — False (the default) removes
+            only the DB row and leaves servers/<id>/ on disk.
+        progress: Callback(pct, message=None).
+        cancel: Accepted for the handler signature but not honoured; rmtree
+            cannot be interrupted mid-call, so this job is effectively
+            uncancellable once it starts.
+
+    Returns:
+        {'deleted': True}. Raises if the server id is unknown.
+
+    Side effects:
+        Delegates to ServerManager.delete_server(), which stops the server,
+        optionally removes its directory, and deletes the row. **Not
+        reversible** — with deleteFiles the world goes with it.
+    """
     server_id = params['serverId']
     delete_files = bool(params.get('deleteFiles', False))
     progress(10, 'Stopping server…')
@@ -5811,6 +6640,28 @@ def _job_delete_server(job_id, params, progress, cancel):
 
 
 def _job_zip_download(job_id, params, progress, cancel):
+    """
+    JobManager handler that zips a server folder for download.
+
+    Args:
+        job_id: Id of the jobs row; also names the output file.
+        params: 'serverId' and 'requestedPath' (relative to the server
+            directory; '' means the whole server folder).
+        progress: Callback(pct, message=None); 2-98% covers the archive walk.
+        cancel: threading.Event checked once per file.
+
+    Returns:
+        {'download': True, 'filename': <suggested name>, 'size': ...} —
+        the caller fetches the bytes from the download route, which resolves
+        the artifact by job id. Raises if the path is missing or is not a
+        directory, or JobCancelled if the user cancels.
+
+    Side effects:
+        Writes uploads/jobs/<job_id>.zip, which stays on disk after the job
+        finishes so the client can collect it. A cancelled run deletes its
+        partial archive. Note the path is joined without an is_safe_path()
+        check here — the submitting route is what validates containment.
+    """
     server_id = params['serverId']
     requested_path = params.get('requestedPath', '')
     server_path = server_manager.get_server_path(server_id)
@@ -6172,7 +7023,38 @@ def static_files(path):
 @csrf.exempt
 @limiter.limit("10 per minute")
 def api_login():
-    """Authenticate user"""
+    """
+    Authenticate a username/password and open (or defer) the session.
+
+    Args:
+        JSON body: 'username' and 'password'.
+
+    Returns:
+        One of four shapes, all 200 except the failures:
+        - Success: api_success(user={'id', 'username', 'groupId',
+          'groupName'}) — the session is now fully authenticated.
+        - MFA enrolled: api_success(mfaRequired=True); the client must call
+          /api/auth/mfa/verify-login next.
+        - MFA mandatory but not enrolled: api_success(mfaSetupRequired=True);
+          the client must complete enrollment.
+        - 400 for missing credentials, 401 with the reason for a failed
+          authenticate() (bad credentials, locked or disabled account).
+
+    Side effects:
+        Always clears the session before writing anything to it, so a
+        session id fixed before login never carries into an authenticated
+        one. Which keys it then writes depends on the branch: a full session
+        (user_id/username/group_id), a challenge session ('temp_user_id',
+        'mfa_required', 'mfa_timestamp'), or an enrollment session
+        ('mfa_enroll_user_id', 'mfa_enroll_timestamp'). The last two carry no
+        user_id and so grant no panel access on their own.
+
+        MFA can be mandatory by policy (requireMfaForAllUsers /
+        requireMfaForAdmins). Rather than locking out a user who has not
+        enrolled, that case issues the enrollment session. The hidden
+        anti-lockout admin is exempt from enforcement — it is the recovery
+        path and must stay usable.
+    """
     data = request.get_json()
     username = data.get('username', '')
     password = data.get('password', '')
@@ -6445,7 +7327,32 @@ def api_mfa_disable():
 @csrf.exempt
 @limiter.limit("10 per minute")
 def api_mfa_verify_login():
-    """Verify MFA code during login"""
+    """
+    Second leg of login: verify the MFA challenge and promote the session.
+
+    Reached only after api_login() left a half-authenticated session holding
+    'temp_user_id' — that key, not anything in the body, identifies the user,
+    so the challenge cannot be answered for someone else.
+
+    Args:
+        JSON body: 'code' (required) — a TOTP code, or a recovery code when
+        'useRecovery' is true.
+
+    Returns:
+        200 api_success(message=..., user={'id', 'username', 'groupId',
+        'groupName'}); 400 when no MFA verification is pending, the pending
+        one is older than MFA_TIMEOUT_SECONDS (default 5 min), the code is
+        missing, or TOTP is not enrolled; 401 for a wrong code; 404 if the
+        pending user no longer exists.
+
+    Side effects:
+        On success clears the session and rebuilds it with user_id/username/
+        group_id — regenerating rather than upgrading in place, so a fixated
+        pre-login session cannot survive into an authenticated one. On
+        timeout the temp keys are dropped and the user starts over. A
+        successful recovery code is single-use and **disables MFA** on the
+        account, which is why the response message differs from a TOTP login.
+    """
     temp_user_id = session.get('temp_user_id')
     mfa_timestamp = session.get('mfa_timestamp')
 
@@ -6928,6 +7835,13 @@ def api_update_server_access(server_id):
 @app.route('/api/notifications', methods=['GET'])
 @login_required
 def api_get_notifications():
+    """
+    Notifications for the current user, plus the unread count for the badge.
+
+    Query params: 'includeDismissed' ('true' to include dismissed ones) and
+    'limit' (default 50). Scoped to the session user — there is no way to
+    read another user's notifications through this route.
+    """
     user_id, _ = get_current_user()
     include_dismissed = request.args.get('includeDismissed', 'false').lower() == 'true'
     limit = min(int(request.args.get('limit', 50)), 200)
@@ -6986,6 +7900,24 @@ def api_get_pending_actions():
 @app.route('/api/admin/pending-actions/<action_id>/approve', methods=['POST'])
 @permission_required('panel.approvals.manage')
 def api_approve_pending_action(action_id):
+    """
+    Approve a queued action and run it.
+
+    Args:
+        action_id: Pending action to approve (path param).
+        JSON body: optional 'note' recorded against the review.
+
+    Returns:
+        200 api_success(executionResult=<what the replay returned>); 404 if
+        the action does not exist or has already been reviewed. Guarded by
+        'panel.approvals.manage'.
+
+    Side effects:
+        Marks the action approved, notifies the requester, and executes the
+        deferred work via _execute_approved_action() — which for a job-backed
+        action only *starts* it. Approving is idempotent: a repeat call is a
+        404 rather than a second execution (issue #92).
+    """
     admin_id, _ = get_current_user()
     data = request.get_json(silent=True) or {}
     note = data.get('note', '')
@@ -7000,6 +7932,21 @@ def api_approve_pending_action(action_id):
 @app.route('/api/admin/pending-actions/<action_id>/reject', methods=['POST'])
 @permission_required('panel.approvals.manage')
 def api_reject_pending_action(action_id):
+    """
+    Reject a queued action so it never runs.
+
+    Args:
+        action_id: Pending action to reject (path param).
+        JSON body: optional 'note' — the reason, shown to the requester.
+
+    Returns:
+        200 api_success(); 404 if the action does not exist or has already
+        been reviewed. Guarded by 'panel.approvals.manage'.
+
+    Side effects:
+        Marks the action rejected and notifies the requester. Nothing is
+        executed, and the row is kept for the audit view.
+    """
     admin_id, _ = get_current_user()
     data = request.get_json(silent=True) or {}
     note = data.get('note', '')
@@ -7011,7 +7958,39 @@ def api_reject_pending_action(action_id):
 
 
 def _execute_approved_action(action):
-    """Execute the deferred action after admin approval."""
+    """
+    Replay a queued action once an admin has approved it.
+
+    The counterpart of check_action_policy(): where that queued the request
+    instead of running it, this dispatches on the stored action type and
+    performs the work, on behalf of the user who originally asked.
+
+    Args:
+        action: A pending_actions row — 'id', 'actionType', 'payload' (the
+            dict recorded at queue time), 'userId' (the original requester,
+            not the approving admin) and optional 'targetId' (the server,
+            used when the payload has no 'serverId').
+
+    Returns:
+        A small dict describing the outcome, stored as the action's result
+        and shown to the admin — {'jobId': ...} for work handed to the job
+        queue, an action-specific flag such as {'deleted': True}, {'error':
+        ...} for a failure, or {'note': ...} for the action types that cannot
+        be replayed. Never raises: exceptions are logged and returned as
+        {'error': str(e)}.
+
+    Side effects:
+        Depends entirely on the action type. serverDelete and backupCreate
+        submit jobs and return immediately (the work has only started when
+        this returns); serverEdit updates the row, dropping the immutable
+        keys id/created/owner/serverPath; serverLifecycle starts, stops,
+        restarts or kills the server; backupDelete unlinks the archive after
+        re-checking that it resolves inside BACKUPS_DIR; modManagement
+        renames or deletes the file under the server's mods/plugins folder.
+        fileUpload, mod 'upload' and playerManagement are deliberately not
+        replayed — the uploaded bytes are gone and the player state may have
+        moved on, so those return a note asking for re-submission.
+    """
     action_type = action['actionType']
     payload = action['payload']
     user_id = action['userId']
@@ -7190,7 +8169,23 @@ def get_servers():
 
 
 def _generate_server_properties(custom_properties, server_name='A Minecraft Server'):
-    """Generate a server.properties file with custom properties merged with defaults"""
+    """
+    Build the text of a fresh Java server.properties file.
+
+    Args:
+        custom_properties: Caller's overrides, merged over the built-in
+            defaults. Any key is accepted, including ones not in the default
+            set. Values are stringified, with bools rendered lowercase so the
+            file reads like a hand-written one rather than 'True'/'False'.
+        server_name: Used only to build the default motd; ignored when the
+            caller supplies its own 'motd'.
+
+    Returns:
+        The complete file contents as a string (comment header, then every
+        key sorted alphabetically, trailing newline). A motd longer than the
+        59-character client limit is silently truncated. Nothing is written —
+        the caller owns the file.
+    """
     # Default server.properties template with common settings
     default_properties = {
         'server-port': '25565',
@@ -7283,7 +8278,41 @@ def _find_port_conflict(requested_ports, exclude_server_id=None):
 @app.route('/api/servers', methods=['POST'])
 @permission_required('servers.create')
 def create_server():
-    """Create a new server"""
+    """
+    Create a server: DB row, directory, and its initial config files.
+
+    Args:
+        JSON body: 'name' (default 'New Server'), 'serverPath' (optional;
+            must resolve inside SERVERS_DIR), 'javaArgs' (default
+            DEFAULT_JAVA_ARGS), 'category' ('unmodded', 'modded' or
+            'bedrock'; picks server.jar vs server.sh as the executable),
+            'serverEngine' / legacy 'serverType', 'version', 'downloadJar'
+            (copy a JAR from the bucket) and 'serverProperties' (the wizard's
+            server.properties values).
+
+    Returns:
+        200 {'success': True, 'serverId': ...}; plus 'pendingApproval' and a
+        message when the serverCreate policy holds it for approval, or
+        'warning' when the server was created but the JAR copy failed (the
+        server exists either way). 400 for a serverPath outside SERVERS_DIR
+        or a 'server-port' another server already claims.
+
+    Side effects:
+        Inserts the servers row owned by the caller, creates servers/<id>/,
+        and — for Java servers — copies the requested JAR in, writes an
+        eula.txt stub (eula=false; the operator still has to accept), and
+        writes server.properties. Bedrock stops after the row: the archive,
+        server.properties and launcher all come from the separate
+        /setup-bedrock call. Under a 'notify' policy admins are notified;
+        under 'require_approval' the row is written unapproved.
+
+        The duplicate-port check and the create/write both happen under
+        server_manager.port_lock so two concurrent requests cannot both pass
+        the "port is free" test and then claim it (issue #11). This stays a
+        synchronous route rather than a queued job because several frontend
+        wizards need the serverId back immediately, and the work is only a
+        row plus a local file copy.
+    """
     user_id, user = get_current_user()
     
     data = request.get_json()
@@ -7394,7 +8423,43 @@ def create_server():
 @app.route('/api/servers/<server_id>/setup-bedrock', methods=['POST'])
 @server_access_required
 def setup_bedrock_server(server_id):
-    """Download and set up a Bedrock server: download zip, extract, write server.properties, set permissions"""
+    """
+    Install the Bedrock Dedicated Server into an already-created server row.
+
+    Validates everything it can up front, then hands the slow part (fetch,
+    extract, configure) to a background thread so the request returns at
+    once. Anything checked here fails as a plain 400 instead of disappearing
+    into the progress feed after a ~100MB download.
+
+    Args:
+        server_id: Target server (path param). Must exist and have
+            category == 'bedrock'.
+        JSON body (all optional): 'serverName'; 'serverProperties' — the
+            wizard's values ('server-port', 'server-portv6', 'max-players',
+            'gamemode', 'force-gamemode', 'difficulty', 'level-seed',
+            'allow-list' (or legacy 'white-list'), 'view-distance',
+            'tick-distance', 'player-idle-timeout', 'level-name');
+            'source' — 'auto' (default: use a cached build, download only if
+            the bucket has none), 'local' (require a cached build) or
+            'download' (force a fresh one); and 'localFile' to pin a specific
+            cached archive, which implies source='local'.
+
+    Returns:
+        202-style api_success(progressId=..., message=...) as soon as the
+        worker is running — progressId is the handle for the progress feed,
+        not a completed install. 404 if the server does not exist; 400 for a
+        non-Bedrock server, an invalid source/localFile, no matching cached
+        build, an out-of-range or duplicate port, or IPv4 and IPv6 ports that
+        collide.
+
+    Side effects:
+        Registers a progress entry with jar_bucket and starts a daemon thread
+        running do_bedrock_setup() (see its docstring for what that writes).
+        Note the IPv6 port: Bedrock binds both stacks, the wizard only asks
+        for the IPv4 port, so server-portv6 is derived as IPv4 + 1 unless it
+        is given explicitly — hardcoding 19133 would stop the second server
+        from ever binding IPv6 (issue #44).
+    """
     server_config = server_manager.get_server_config(server_id)
     if not server_config:
         return api_error('Server not found', 404)
@@ -7492,6 +8557,38 @@ def setup_bedrock_server(server_id):
     })
 
     def do_bedrock_setup():
+        """
+        Worker body of the setup: run steps 2-5 on a background thread.
+
+        Closes over everything the request already validated (server_dir,
+        progress_id, source/local_zip, port_v4/port_v6, server_name,
+        server_properties). Takes no arguments and returns nothing — the
+        outcome is published only through jar_bucket progress updates, which
+        the client polls or receives over Socket.IO: a terminal
+        status='complete' (progress 100, success=True) or status='error'
+        with a message. Exceptions never escape the thread.
+
+        Side effects:
+            - Obtains the archive: uses the cached bucket build if there is
+              one, else streams the CDN download to a hidden .part file,
+              verifies it really is a Bedrock archive, and renames it into
+              serverexecutables/bedrock so the next install works offline.
+              If the bucket is not writable it downloads a throwaway copy
+              into the server directory and deletes it afterwards.
+            - Extracts over the server directory via safe_extractall(),
+              skipping the preserve set (server.properties, permissions.json,
+              allowlist.json, worlds/ and the panel's two dot-files) so an
+              update never clobbers operator state.
+            - chmods bedrock_server and writes the server.sh launcher that
+              ServerInstance actually executes.
+            - Writes server.properties from the wizard's values, with control
+              characters stripped so no value can inject extra lines.
+            - Re-checks both ports under server_manager.port_lock immediately
+              before that write: the request-time check happened before a
+              multi-minute download, so first writer wins and the loser fails
+              here rather than silently sharing a port (issue #44).
+            - Updates the server row with executable='server.sh'.
+        """
         # A cached archive belongs to the operator and is never deleted; only a
         # throwaway copy downloaded into the server directory is cleaned up.
         zip_path = local_zip
@@ -7738,7 +8835,33 @@ def setup_bedrock_server(server_id):
 @permission_required('servers.create')
 @limiter.limit("5 per 15 minutes")
 def import_server():
-    """Import a server from a ZIP file"""
+    """
+    Create a server from an uploaded ZIP of an existing server directory.
+
+    Args:
+        Multipart body: 'file' — a .zip of the server folder. Form fields:
+            'name' (default 'Imported Server'), 'executableName' (the JAR or
+            launcher inside the archive; auto-detected when blank),
+            'javaArgs' (default DEFAULT_JAVA_ARGS), 'category' ('unmodded',
+            'modded' or 'bedrock'; default 'unmodded'), 'port' (default
+            '25565') and 'engine'.
+
+    Returns:
+        200 {'success': True, 'serverId': ...}, plus 'pendingApproval' and a
+        message when the serverCreate policy holds it for approval; 400 if
+        the upload is missing, is not a .zip, or the extraction/registration
+        fails; 500 on an unexpected error.
+
+    Side effects:
+        Saves the upload to uploads/ and removes it in a finally block.
+        Delegates the real work to
+        ServerManager.import_server_from_zip(), which extracts into a new
+        servers/<id>/ directory and inserts the servers row owned by the
+        caller. Under a 'require_approval' serverCreate policy the row is
+        written unapproved (the server exists on disk but cannot be started
+        until an admin approves it); under 'notify' it is created immediately
+        and admins get a notification.
+    """
     user_id, user = get_current_user()
     
     if 'file' not in request.files:
@@ -7801,7 +8924,33 @@ def import_server():
 @server_access_required
 @limiter.limit("5 per 15 minutes")
 def import_world(server_id):
-    """Import a world ZIP into an existing server, placing it as the world/ folder"""
+    """
+    Import a world ZIP into an existing server as its world/ folder.
+
+    Handles the three shapes uploads come in: level.dat at the archive root,
+    a nested directory containing level.dat, or a single top-level directory
+    taken as the world when no level.dat is found.
+
+    Args:
+        server_id: Target server (path param).
+        Multipart body: 'file' — a .zip. Rate-limited to 5 per 15 minutes.
+
+    Returns:
+        200 api_success(); 400 for a missing/non-zip file, a corrupt archive,
+        a ZIP whose members fail containment validation, or one with no
+        locatable world; 404 if the server does not exist; 500 otherwise.
+
+    Side effects:
+        **Destructive** — an existing world/ directory is deleted outright
+        before the import is written, and there is no undo. Should only be
+        run against a stopped server; the world is not hot-swappable and a
+        running server holds the region files open. Every member is checked
+        with validate_zip_members() before anything is written (issue #14),
+        so traversal, absolute and symlink members are rejected while the
+        target is still empty. The upload lands in uploads/ and is removed in
+        a finally block; the scratch directory _world_import_tmp/ is created
+        inside the server folder and cleaned up on all paths.
+    """
     if 'file' not in request.files:
         return api_error('No file uploaded', 400)
 
@@ -9180,7 +10329,33 @@ def unban_ip(server_id, ip_address):
 @app.route('/api/servers/<server_id>/players/message', methods=['POST'])
 @server_access_required
 def message_players(server_id):
-    """Send a message to players via console commands (say/msg/tellraw/title/actionbar)"""
+    """
+    Send an in-game message by building the right console command for it.
+
+    Args:
+        server_id: Target server (path param).
+        JSON body: 'message' (required), 'type' — 'chat' (default, tellraw),
+            'say', 'msg', 'title', 'subtitle' or 'actionbar' — 'target' (a
+            selector @a/@p/@r/@s/@e or a player name; default '@a'), 'color'
+            (must be in VALID_MESSAGE_COLORS, otherwise silently forced to
+            'white') and the style flags 'bold', 'italic', 'underlined',
+            'strikethrough', 'obfuscated'.
+
+    Returns:
+        200 {'success': True, 'message': <human label>, 'command': <the
+        command actually sent>}; 400 for an empty message, an invalid
+        target, '/msg' aimed at @a, an unknown type, or when the server is
+        not running to receive the command.
+
+    Side effects:
+        Writes one line to the running server's stdin — nothing is persisted
+        by the panel. Message text and target are sanitised
+        (_safe_console_text / _safe_message_target) and quotes and
+        backslashes are escaped before being embedded in the JSON payload, so
+        a crafted message cannot inject a second command. Bedrock is handled
+        separately throughout: it takes tellraw/titleraw with a "rawtext"
+        payload and supports no colour or style flags.
+    """
     data = request.get_json()
     msg_type = data.get('type', 'chat')
     target = _safe_message_target(data.get('target', '@a'))
@@ -9361,7 +10536,41 @@ def get_operators(server_id):
 @app.route('/api/servers/<server_id>/players/ops', methods=['POST'])
 @server_access_required
 def add_operator(server_id):
-    """Add a player as operator"""
+    """
+    Grant operator status (Java) / set a permission level (Bedrock).
+
+    Args:
+        server_id: Target server (path param).
+        JSON body: 'name' and/or 'uuid' (at least one; a running Java server
+            needs 'name', since `op` is name-based and so also works in
+            offline mode), plus Java-only 'level' (default 4) and
+            'bypassesPlayerLimit'. Bedrock instead takes 'permission'
+            ('visitor' | 'member' | 'operator', default 'operator') and
+            accepts an 'xuid' in either 'xuid' or 'uuid'.
+
+    Returns:
+        200 {'success': True, 'message': ...}; 400 for a missing/invalid
+        identifier, an unknown Bedrock permission, or a player who is already
+        an operator; 404 when a Java name cannot be resolved to a UUID or
+        when no XUID is known for a Bedrock gamertag; 500 on a file error.
+        Routed through check_action_policy(), so a non-admin under a
+        require_approval policy gets the 202 {'pending': True, ...} shape and
+        nothing is applied until an admin approves.
+
+    Side effects (exactly one path runs):
+        - Bedrock: writes the XUID-keyed entry into permissions.json and
+          sends `permission reload`. The XUID must already be known — the
+          panel only learns one from a `Player connected:` console line, so
+          an unseen player has to join once or have their XUID entered by
+          hand.
+        - Java, server running: sends `op <name>` over the console, which
+          takes effect immediately; the server persists ops.json itself.
+          'level' and 'bypassesPlayerLimit' are not applied on this path —
+          the console command uses the server's own defaults.
+        - Java, server stopped: resolves the UUID (from the body, from
+          usercache.json, or via the Mojang lookup) and appends the entry to
+          ops.json with the requested level.
+    """
     user_id, user = get_current_user()
     data = request.get_json()
     player_name = data.get('name', '').strip()
@@ -9527,7 +10736,28 @@ def update_operator(server_id, uuid):
 @app.route('/api/servers/<server_id>/players/ops/<uuid>', methods=['DELETE'])
 @server_access_required
 def remove_operator(server_id, uuid):
-    """Remove an operator (Bedrock: <uuid> is the player's XUID)"""
+    """
+    Revoke a player's operator status.
+
+    Args:
+        server_id: Target server (path param).
+        uuid: Java — the operator's UUID as stored in ops.json. Bedrock —
+            the player's XUID, since permissions.json is XUID-keyed.
+
+    Returns:
+        200 {'success': True, 'message': ...}; 404 when there is no ops.json
+        or no matching entry; 400 for a malformed Bedrock XUID; 500 on a file
+        error. Routed through check_action_policy(), so a non-admin under a
+        require_approval policy gets the 202 {'pending': True, ...} shape and
+        nothing is applied until an admin approves.
+
+    Side effects (exactly one path runs):
+        - Bedrock: removes the permissions.json entry and sends
+          `permission reload` if the server is running.
+        - Java, server running: sends `deop <name>` — the server owns
+          ops.json and persists the change itself.
+        - Java, server stopped: rewrites ops.json without the entry.
+    """
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     ops_file = server_path / 'ops.json'
@@ -9621,7 +10851,37 @@ def get_whitelist(server_id):
 @app.route('/api/servers/<server_id>/players/whitelist', methods=['POST'])
 @server_access_required
 def add_to_whitelist(server_id):
-    """Add a player to whitelist"""
+    """
+    Add a player to the whitelist (Java) / allow list (Bedrock).
+
+    Args:
+        server_id: Target server (path param).
+        JSON body: 'name' and/or 'uuid' (at least one; Bedrock and running
+            Java servers need 'name', since both apply the change by
+            gamertag/username). Bedrock also accepts 'xuid' and
+            'ignoresPlayerLimit'.
+
+    Returns:
+        200 {'success': True, 'message': ...}; 400 for a missing/invalid
+        identifier or an already-listed player; 404 when a Java name cannot
+        be resolved to a UUID; 500 on a file error. Routed through
+        check_action_policy(), so a non-admin under a require_approval policy
+        gets the 202 {'pending': True, ...} shape and nothing is applied
+        until an admin approves.
+
+    Side effects (exactly one path runs):
+        - Bedrock: appends a name-keyed entry to allowlist.json (Bedrock
+          fills in the xuid itself on first join; the panel supplies one when
+          its gamertag cache already knows it), then sends
+          `allowlist reload`. The message says whether the reload was
+          actually delivered (server running) or takes effect on next start.
+        - Java, server running: sends `whitelist add <name>` over the console
+          — the server persists whitelist.json itself and reloads
+          enforcement. Name-only, so offline-mode servers work.
+        - Java, server stopped: resolves the UUID (from the body, from
+          usercache.json, or via the Mojang lookup) and appends the entry to
+          whitelist.json.
+    """
     user_id, user = get_current_user()
     data = request.get_json()
     player_name = data.get('name', '').strip()
@@ -9741,7 +11001,30 @@ def add_to_whitelist(server_id):
 @app.route('/api/servers/<server_id>/players/whitelist/<uuid>', methods=['DELETE'])
 @server_access_required
 def remove_from_whitelist(server_id, uuid):
-    """Remove a player from the whitelist (Bedrock: <uuid> is an XUID or gamertag)"""
+    """
+    Drop a player from the whitelist / allow list.
+
+    Args:
+        server_id: Target server (path param).
+        uuid: Java — the player's UUID as stored in whitelist.json. Bedrock —
+            allowlist.json entries have no UUID, so this carries the XUID
+            when Bedrock has filled one in and the gamertag otherwise.
+
+    Returns:
+        200 {'success': True, 'message': ...}; 404 when there is no list file
+        or no matching entry; 400 for an unusable Bedrock identifier; 500 on
+        a file error. Routed through check_action_policy(), so a non-admin
+        under a require_approval policy gets the 202 {'pending': True, ...}
+        shape and nothing is applied until an admin approves.
+
+    Side effects (exactly one path runs):
+        - Bedrock: rewrites allowlist.json without the entry, then sends
+          `allowlist reload`. The message says whether the reload was
+          actually delivered (server running) or takes effect on next start.
+        - Java, server running: sends `whitelist remove <name>` — the server
+          owns whitelist.json and reloads enforcement itself.
+        - Java, server stopped: rewrites whitelist.json without the entry.
+    """
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     whitelist_file = server_path / 'whitelist.json'
@@ -9848,7 +11131,39 @@ def get_banned_players(server_id):
 @app.route('/api/servers/<server_id>/players/banned', methods=['POST'])
 @server_access_required
 def ban_player(server_id):
-    """Ban a player"""
+    """
+    Ban a player, by whichever of the three routes fits the server's state.
+
+    Args:
+        server_id: Target server (path param).
+        JSON body: 'name' and/or 'uuid' (at least one; Bedrock needs 'name',
+            and a running Java server needs 'name' since the console `ban`
+            command is name-based and works in offline mode), 'reason'
+            (default 'Banned By Admin') and 'expires' ('forever' or an
+            ISO-8601 timestamp). Bedrock also accepts an explicit 'xuid'.
+
+    Returns:
+        200 {'success': True, 'message': ...}; 400 for a missing/invalid
+        identifier, a malformed Bedrock expiry, or an already-banned player;
+        404 when a Java name cannot be resolved to a UUID; 500 on a file
+        error. Routed through check_action_policy(), so a non-admin under a
+        require_approval policy gets the 202 {'pending': True, ...} shape and
+        nothing is applied until an admin approves.
+
+    Side effects (exactly one path runs):
+        - Bedrock: appends to the panel's own .mserver_bans.json (Bedrock has
+          no native ban list or ban command), dropping already-lapsed entries
+          while the file is being rewritten, resolves the XUID from the
+          gamertag cache when possible, and kicks the player if they are
+          online. Enforcement afterwards happens on connect.
+        - Java, server running: sends `ban <name> <reason>` over the console,
+          which kicks immediately and lets the server persist
+          banned-players.json itself — a direct file edit would not take
+          effect until restart.
+        - Java, server stopped: resolves the UUID (from the body, from
+          usercache.json, or via the Mojang lookup) and appends the entry to
+          banned-players.json.
+    """
     user_id, user = get_current_user()
     data = request.get_json()
     player_name = data.get('name', '').strip()
@@ -9984,7 +11299,33 @@ def ban_player(server_id):
 @app.route('/api/servers/<server_id>/players/banned/<uuid>', methods=['DELETE'])
 @server_access_required
 def unban_player(server_id, uuid):
-    """Unban a player (Bedrock: <uuid> is the XUID or gamertag of a panel ban)"""
+    """
+    Lift a ban, by whichever of the three routes fits the server's state.
+
+    Args:
+        server_id: Target server (path param).
+        uuid: Java — the banned player's UUID as it appears in
+            banned-players.json. Bedrock — the XUID, or the gamertag when
+            the panel banned a player it never learned an XUID for.
+
+    Returns:
+        200 {'success': True, 'message': ...}; 404 when there is no ban list
+        or no matching entry; 400 for an unusable Bedrock identifier; 500 on
+        a file error. Like every playerManagement route this goes through
+        check_action_policy(), so a non-admin under a require_approval policy
+        gets the 202 {'pending': True, 'pendingId': ...} shape instead and
+        nothing is applied until an admin approves.
+
+    Side effects (exactly one path runs):
+        - Bedrock: removes the entry from the panel's own .mserver_bans.json
+          (Bedrock has no native ban list). Already-connected players are not
+          kicked; the entry simply stops being enforced on connect.
+        - Java, server running: sends `pardon <name>` over the console —
+          the server owns banned-players.json and would overwrite a direct
+          edit, so the file is left to it.
+        - Java, server stopped: rewrites banned-players.json without the
+          matching entry.
+    """
     user_id, user = get_current_user()
     server_path = server_manager.get_server_path(server_id)
     banned_file = server_path / 'banned-players.json'
@@ -10205,7 +11546,28 @@ def toggle_whitelist_setting(server_id):
 @app.route('/api/servers/<server_id>/players/playerdata', methods=['GET'])
 @server_access_required
 def get_playerdata(server_id):
-    """Get list of player data files"""
+    """
+    List the per-player .dat files in the server's world folder.
+
+    Args:
+        server_id: Target server (path param).
+
+    Returns:
+        200 api_success with 'players' — one entry per .dat file: 'uuid'
+        (the filename stem), 'filename', 'path' (relative to the server
+        directory, the handle the NBT editor routes take), 'size' and
+        'modified'. Bedrock servers always return an empty list plus a
+        'message' explaining that player state lives in the world LevelDB
+        and is managed through permissions.json/allowlist.json instead;
+        Java servers with no playerdata folder yet return the same empty
+        shape with a different message. 500 on a read error.
+
+    Side effects:
+        None — directory listing and stat only. Note that the world folder
+        is probed for both known layouts: 26.1+ (<world>/players/data/) is
+        checked before legacy (<world>/playerdata/), and only the first
+        world-like subdirectory that matches is used.
+    """
     # Check if this is a Bedrock server
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
@@ -10364,7 +11726,28 @@ def zip_server_folder(server_id):
 @limiter.limit("10 per 15 minutes")
 @server_access_required
 def upload_server_file(server_id):
-    """Upload a file"""
+    """
+    Upload a file into a server's directory.
+
+    Args:
+        server_id: Target server (path param).
+        Multipart body: 'file'; form field 'path' — the destination
+            directory relative to the server root ('' means the root).
+
+    Returns:
+        200 {'success': True}; 403 if 'path' escapes the server directory;
+        400 if no file was sent; 500 on a write error. Routed through
+        check_action_policy(), so a non-admin under a require_approval
+        fileUpload policy gets the 202 {'pending': True, ...} shape — and
+        note the upload is NOT stored for later: an approved file upload
+        has to be re-submitted (see _execute_approved_action).
+
+    Side effects:
+        Creates the destination directory if needed and writes the file,
+        overwriting any existing file of the same name. The filename is
+        passed through secure_filename() and the destination is checked
+        with is_safe_path() before anything is written.
+    """
     user_id, user = get_current_user()
     if 'file' not in request.files:
         return api_error('No file uploaded', 400)
@@ -10445,7 +11828,30 @@ def list_mods(server_id):
 @limiter.limit("20 per 15 minutes")
 @server_access_required
 def upload_mod(server_id):
-    """Upload a mod or plugin"""
+    """
+    Upload a mod or plugin JAR.
+
+    Args:
+        server_id: Target server (path param).
+        Multipart body: 'file' — must end in .jar; form field 'type' —
+            'plugins' (default) or 'mods', which picks the destination
+            folder.
+
+    Returns:
+        200 {'success': True, 'filename': ...}; 400 for a missing file, an
+        unknown type, or a non-.jar name; 500 on a write error. Routed
+        through check_action_policy(), so a non-admin under a
+        require_approval modManagement policy gets the 202
+        {'pending': True, ...} shape — and the upload is NOT stored for
+        later: an approved mod upload has to be re-submitted.
+
+    Side effects:
+        Creates mods/ or plugins/ if needed and writes the JAR there,
+        overwriting a same-named file. After the write the file is checked
+        with reject_if_not_zip() — a JAR is a zip, so a file merely renamed
+        to .jar is refused. The server only picks the mod up on its next
+        restart.
+    """
     user_id, user = get_current_user()
     if 'file' not in request.files:
         return api_error('No file uploaded', 400)
@@ -10612,7 +12018,31 @@ def _modrinth_get(path, params=None, timeout=15):
 @app.route('/api/servers/<server_id>/mods/search', methods=['GET'])
 @server_access_required
 def modrinth_search(server_id):
-    """Proxy a Modrinth project search to keep credentials/UA server-side."""
+    """
+    Proxy a Modrinth project search to keep credentials/UA server-side.
+
+    Args:
+        server_id: Target server (path param) — used only for the access
+            guard; the search itself is not server-specific.
+        Query params: 'query' (free text), 'projectType' ('mod', 'plugin'
+            or 'modpack'; default 'mod'), 'loader' (fabric, forge, paper …),
+            'mcVersion', 'limit' (default 20, capped at 50) and 'offset'
+            (floored at 0).
+
+    Returns:
+        200 api_success with 'hits' (slimmed project records: projectId,
+        slug, title, description, iconUrl, downloads, categories, versions,
+        gameVersions, latestVersion, projectType, author), plus 'totalHits',
+        'offset' and 'limit' for paging. 504 if Modrinth times out, 502 on
+        any other Modrinth error.
+
+    Side effects:
+        Read-only; one outbound GET to Modrinth's /search. The facets are
+        built here, not by the client: 'plugin' maps to project_type:mod
+        narrowed by loader category (or the whole Bukkit-family set when no
+        loader is given), and every search is constrained to
+        server_side:required/optional so client-only projects never appear.
+    """
     query        = request.args.get('query', '').strip()
     project_type = request.args.get('projectType', 'mod')   # mod | plugin | modpack
     loader       = request.args.get('loader', '')             # fabric, forge, spigot, paper …
@@ -10788,7 +12218,33 @@ def modrinth_install(server_id):
 @app.route('/api/servers/<server_id>/mods/updates', methods=['GET'])
 @server_access_required
 def check_mod_updates(server_id):
-    """Check installed mods/plugins for available updates via Modrinth's hash lookup."""
+    """
+    Check installed mods/plugins for available updates via Modrinth.
+
+    Identifies each installed JAR by its SHA-512 rather than by filename, so
+    renamed files are still matched and no local index is needed.
+
+    Args:
+        server_id: Target server (path param).
+        Query params: 'loader' (e.g. 'fabric', 'paper') and 'mcVersion' —
+            both optional; when given they constrain Modrinth to versions
+            compatible with that loader/game version.
+
+    Returns:
+        200 api_success with 'updates' — one entry per JAR whose newest
+        compatible Modrinth version differs from the installed hash
+        ('currentFilename', 'folder', 'projectId', 'versionId',
+        'versionNumber', 'filename', 'url', 'sha512', 'size') — and
+        'notOnModrinth', the filenames Modrinth could not identify. Both
+        lists are empty when the server has no mods/ or plugins/ JARs.
+        504 if Modrinth times out, 502 on any other Modrinth error.
+
+    Side effects:
+        Read-only: hashes every JAR under mods/ and plugins/ (unreadable
+        files are skipped) and makes one POST to Modrinth's
+        /version_files/update endpoint with a 20s timeout. Nothing is
+        downloaded or installed — the caller decides what to act on.
+    """
     server_path  = server_manager.get_server_path(server_id)
     loader       = request.args.get('loader', '')
     mc_version   = request.args.get('mcVersion', '')
@@ -10916,7 +12372,29 @@ def get_properties(server_id):
 @app.route('/api/servers/<server_id>/properties', methods=['POST'])
 @server_access_required
 def save_properties(server_id):
-    """Save server properties"""
+    """
+    Write edited server.properties values back to disk.
+
+    Args:
+        server_id: Target server (path param).
+        JSON body: {'properties': {key: value, ...}} — a partial map. Keys
+            already in the file are updated in place; keys that are not are
+            appended under an "# Added by MServer" header. Keys absent from
+            the map are left untouched, so this never drops a property.
+
+    Returns:
+        200 {'success': True}; 404 if the server has no server.properties
+        yet (it is created on first server start, not here); 400 for a
+        missing body or a 'server-port' that another server already claims;
+        500 on a read/write error.
+
+    Side effects:
+        Rewrites server.properties, preserving comments, blank lines and
+        key order. Held changes only reach the running server on its next
+        restart. The port check and the write happen together under
+        server_manager.port_lock so two concurrent saves cannot both pass
+        the "port is free" test and assign the same port (issue #11).
+    """
     server_path = server_manager.get_server_path(server_id)
     properties_path = server_path / 'server.properties'
     
@@ -11024,7 +12502,31 @@ def get_resourcepack_info(server_id):
 @app.route('/api/servers/<server_id>/resourcepack/upload', methods=['POST'])
 @server_access_required
 def upload_resourcepack(server_id):
-    """Upload a resource pack for a server"""
+    """
+    Store a resource pack for a server and point server.properties at it.
+
+    Args:
+        server_id: Target server (path param). Bedrock servers are rejected.
+        Multipart body: 'file' — a .zip no larger than
+            MAX_RESOURCEPACK_SIZE_MB (default 100MB, set in .env). The saved
+            file is re-checked with reject_if_not_zip(), so a mislabelled
+            upload is refused after it lands.
+
+    Returns:
+        200 {'success': True, 'filename', 'size', 'sha1', 'url',
+        'propertiesUpdated'} on success; 400 for a Bedrock server, a missing
+        or non-zip file, an oversized file, or an unset branding baseUrl
+        (the pack URL cannot be built without it); 500 on an unexpected
+        error.
+
+    Side effects:
+        Writes public/resourcepacks/<server_id>.zip, overwriting any
+        previous pack for the server, then rewrites the server's
+        server.properties in place — replacing resource-pack and
+        resource-pack-sha1 if present, appending them under a comment header
+        if not. The file is only rewritten when it already exists; it is
+        never created here. Clients pick the pack up on their next join.
+    """
     server_config = server_manager.get_server_config(server_id)
     if server_config and server_config.get('category') == 'bedrock':
         return api_error('Resource packs are not supported for Bedrock servers', 400)
@@ -11306,6 +12808,25 @@ def delete_backup(server_id):
 @app.route('/api/servers/<server_id>/backups/rename', methods=['POST'])
 @server_access_required
 def rename_backup(server_id):
+    """
+    Rename a stored backup archive.
+
+    Args:
+        server_id: Target server (path param).
+        JSON body: 'oldName' and 'newName'. Both are passed through
+            secure_filename(); '.zip' is appended to newName if absent.
+
+    Returns:
+        200 {'success': True, 'newName': ...}; 400 for an empty name or a
+        path that resolves outside the server's backup directory; 404 if the
+        source archive is missing; 409 if the target name is taken; 500 on a
+        filesystem error.
+
+    Side effects:
+        Renames the archive in place and, when one exists, its companion
+        .sha256 file — so verification keeps working after the rename.
+        Nothing in the DB refers to backups by name, so no row is touched.
+    """
     data = request.get_json()
     old_name = secure_filename(data.get('oldName', ''))
     new_name = secure_filename(data.get('newName', ''))
@@ -12468,6 +13989,14 @@ class JarBucketManager:
     PROGRESS_RETENTION_SECONDS = 3600  # 1 hour
 
     def __init__(self):
+        """
+        Load the JAR bucket's caches from disk.
+
+        Reads the version/URL cache and any operator link overrides. The
+        download-progress map starts empty — it is per-process, not persisted, so
+        a restart during a download leaves the client polling an id that no
+        longer exists.
+        """
         self.cache = self._load_cache()
         # Download/refresh progress, keyed by a unique progress id. Written from
         # multiple background threads and read by the progress routes, so ALL
@@ -13114,7 +14643,29 @@ class JarBucketManager:
         self._save_cache()
 
     def get_versions(self, server_type, force_refresh=False):
-        """Get available versions for a server type"""
+        """
+        List the versions available upstream for one server engine.
+
+        Args:
+            server_type: Engine key — 'paper', 'folia', 'purpur', 'vanilla',
+                'fabric', 'forge', 'neoforge', 'spigot' or 'bedrock'. An
+                unknown key yields an empty list rather than an error.
+            force_refresh: Skip the on-disk cache and re-query upstream.
+
+        Returns:
+            List of versions, newest first. Shape depends on the engine:
+            'vanilla' returns dicts of {'version', 'manifestUrl'}; every
+            other engine returns plain version strings. Empty list if the
+            upstream fetch fails.
+
+        Side effects:
+            Performs network I/O on a cache miss (may block), then writes
+            the result and a lastUpdated stamp into the version cache and
+            persists it. For forge/neoforge it also stashes the resolved
+            MC-version → loader-version map under the engine's cache entry
+            so get_download_info() can build an installer URL without
+            re-fetching.
+        """
         # Check cache first
         if not force_refresh and self._is_cache_valid(server_type):
             cached = self.cache.get('versions', {}).get(server_type, {}).get('data', [])
@@ -13179,7 +14730,30 @@ class JarBucketManager:
         return versions
     
     def get_download_info(self, server_type, version):
-        """Get download URL and hash for a specific version"""
+        """
+        Resolve one version of one engine to a concrete download.
+
+        Args:
+            server_type: Engine key — 'paper', 'folia', 'purpur', 'vanilla',
+                'fabric', 'forge', 'neoforge', 'bedrock' or 'spigot'.
+            version: Minecraft version string as returned by get_versions().
+                Ignored for 'bedrock', which only exposes the latest build.
+
+        Returns:
+            dict with 'url', 'hash' (may be None), 'filename' and 'hashType'
+            ('sha256' for a 64-char hash, else 'sha1') — for forge/neoforge
+            the URL points at the *installer* JAR, not a ready server JAR.
+            Spigot instead returns {'requiresBuild': True, 'message',
+            'buildtoolsUrl'} because it ships no binary. None when the
+            version is unknown or the upstream lookup fails.
+
+        Side effects:
+            Hits the upstream API for the engine on a cache miss (network
+            I/O; may block), and writes the resolved URL back into the URL
+            cache so the next call for the same version answers locally.
+            forge/neoforge fall back to re-fetching the whole version map if
+            get_versions() has not populated it in this process yet.
+        """
         # Spigot has no downloadable JAR — short-circuit before cache check
         if server_type == 'spigot':
             return {
