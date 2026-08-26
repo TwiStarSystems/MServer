@@ -42,17 +42,14 @@ Thumbs.db
 .env
 .env.local
 
-# temp files
-docs/TEMP FILES/*
-
 # Test artifacts
 test-results/
 
 # Claude stuff
 .claude/
 
-# servers file
+# servers file (prod credentials — never commit)
 servers.md
-.github/prompts/temp.md
 
- 
+# Local holding area for unused/unreferenced files (see docs/cleanup/README.md)
+docs/cleanup/*

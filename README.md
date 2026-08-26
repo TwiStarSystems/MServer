@@ -615,11 +615,13 @@ MServer/
 ├── api_manager.py            # Public API v1 blueprint (key auth endpoints)
 ├── requirements.txt          # Python dependencies
 ├── version                   # Application version file
-├── nginx.conf                # Nginx reverse proxy configuration
+├── nginx.conf                # Nginx reverse proxy reference template
 ├── install.sh                # Interactive installation script
+├── mserver-hostctl           # Root-owned host-control helper (installed to /usr/local/sbin)
 ├── git-release.sh            # Git release/versioning helper
+├── .env.example              # Environment template — install.sh copies this to .env
 ├── msc.db                    # SQLite database (users, servers, jobs, stats — generated)
-├── config.json               # Server configurations (generated)
+├── settings.json             # App settings and branding (generated)
 ├── configs/
 │   └── jarurls.conf          # JAR download URL configuration
 ├── public/                   # Frontend files
@@ -637,7 +639,7 @@ MServer/
 │   ├── styles.css            # Application styles
 │   ├── favicons/             # Uploaded favicon files
 │   └── resourcepacks/        # Hosted resource packs
-├── docs/                     # Documentation
+├── docs/                     # Documentation guides
 ├── servers/                  # Minecraft server files (per-server subdirectories)
 ├── serverexecutables/        # Downloaded server JARs (by type)
 ├── backups/                  # Server backups (per-server subdirectories)
