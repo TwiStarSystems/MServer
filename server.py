@@ -310,6 +310,32 @@ BEDROCK_XUID_CACHE = '.mserver_xuids.json'
 # under the panel.
 BEDROCK_BANS_FILE = '.mserver_bans.json'
 
+# The server.sh launcher the panel writes for a Bedrock server. It must `exec`
+# bedrock_server so the process the panel holds IS the server: the first
+# version ran it as a child of bash, and Kill (or the forced kill after a slow
+# Stop) then ended only the bash wrapper, leaving bedrock_server running and
+# holding its ports while the panel showed it stopped (issue #109).
+BEDROCK_LAUNCHER_LEGACY_LINE = 'LD_LIBRARY_PATH=. ./bedrock_server\n'
+BEDROCK_LAUNCHER_EXEC_LINES = 'export LD_LIBRARY_PATH=.\nexec ./bedrock_server\n'
+BEDROCK_LAUNCHER = '#!/bin/bash\ncd "$(dirname "$0")"\n' + BEDROCK_LAUNCHER_EXEC_LINES
+
+
+def upgrade_bedrock_launcher(launcher_path):
+    """Rewrite a panel-generated legacy server.sh to the exec form, in place.
+
+    Only touches a launcher that still contains the exact line the panel used
+    to write; an operator's own script is left alone. Best-effort: a launcher
+    that cannot be read or written is simply started as it is.
+    """
+    try:
+        text = Path(launcher_path).read_text(encoding='utf-8')
+        if BEDROCK_LAUNCHER_LEGACY_LINE in text and 'exec ' not in text:
+            Path(launcher_path).write_text(
+                text.replace(BEDROCK_LAUNCHER_LEGACY_LINE, BEDROCK_LAUNCHER_EXEC_LINES),
+                encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        pass
+
 # ── Tunable configuration (env-overridable) ───────────────────────────────────
 DEFAULT_JAVA_ARGS = _env_str('DEFAULT_JAVA_ARGS', '-Xmx4G -Xms1G')  # default JVM args for new servers
 JAVA_BINARY = _env_str('JAVA_BINARY', 'java')                        # java executable (name on PATH or absolute path)
@@ -5780,6 +5806,7 @@ class ServerInstance:
         if self.is_bedrock:
             # Bedrock server: run the server.sh wrapper script
             executable_path = self.server_path / self.executable
+            upgrade_bedrock_launcher(executable_path)
             args = ['bash', str(executable_path)]
         else:
             # Java server: run java -jar
@@ -9113,9 +9140,7 @@ def setup_bedrock_server(server_id):
             # Create server.sh launcher wrapper
             server_sh = server_dir / 'server.sh'
             with open(str(server_sh), 'w') as f:
-                f.write('#!/bin/bash\n')
-                f.write('cd "$(dirname "$0")"\n')
-                f.write('LD_LIBRARY_PATH=. ./bedrock_server\n')
+                f.write(BEDROCK_LAUNCHER)
             if os.name != 'nt':
                 os.chmod(str(server_sh), 0o755)
             
