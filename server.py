@@ -6586,6 +6586,22 @@ def _job_restore(job_id, params, progress, cancel):
     backup_path = BACKUPS_DIR / server_id / backup_name
     server_path = server_manager.get_server_path(server_id)
 
+    # Prove the archive is usable before anything is stopped or deleted. The
+    # directory is cleared ahead of the extract, so a missing, truncated or
+    # unsafe archive discovered only at extract time used to leave the server
+    # with nothing at all (issue #99).
+    progress(2, 'Checking backup…')
+    if not backup_path.is_file():
+        raise Exception(f'Backup not found: {backup_name}')
+    try:
+        with zipfile.ZipFile(backup_path, 'r') as zipf:
+            validate_zip_members(zipf, server_path)
+            bad_member = zipf.testzip()
+    except zipfile.BadZipFile as e:
+        raise Exception(f'Backup is not a readable ZIP archive: {e}')
+    if bad_member is not None:
+        raise Exception(f'Backup is corrupt (bad entry: {bad_member}); nothing was changed')
+
     instance = server_manager.servers.get(server_id)
     was_running = instance is not None and instance.is_running()
     if was_running:
@@ -9137,17 +9153,17 @@ def import_world(server_id):
             if 'level.dat' in names:
                 # World files are at ZIP root → extract into world/ subfolder
                 world_dir = server_path / 'world'
-                if world_dir.exists():
-                    shutil.rmtree(world_dir)
-                world_dir.mkdir()
                 # Reject traversal/symlink members and members whose resolved
-                # target would land outside world_dir (issue #14) before writing
-                # anything — a substring '..' check alone isn't sufficient.
+                # target would land outside world_dir (issue #14) — and do it
+                # before the existing world is removed, so a rejected archive
+                # costs the operator nothing (issue #99).
                 try:
                     validate_zip_members(zipf, world_dir)
                 except ValueError as e:
-                    shutil.rmtree(world_dir, ignore_errors=True)
                     return api_error(f'Invalid ZIP: {e}', 400)
+                if world_dir.exists():
+                    shutil.rmtree(world_dir)
+                world_dir.mkdir()
                 for member in names:
                     if member.endswith('/'):
                         continue
