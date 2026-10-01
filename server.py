@@ -1530,7 +1530,7 @@ class BackupScheduler:
                 _fail_name = server_id
             threading.Thread(
                 target=dispatch_notification,
-                args=('backup_failure', {'serverName': _fail_name, 'error': str(e)}),
+                args=('backup_failure', {'serverId': server_id, 'serverName': _fail_name, 'error': str(e)}),
                 daemon=True
             ).start()
 
@@ -3613,19 +3613,41 @@ admin account has been ENABLED:
         conn.commit()
         return result.rowcount > 0
 
-    def get_notification_recipients(self, pref_key):
-        """Return email addresses of users who have pref_key enabled."""
-        rows = get_db().execute(
-            'SELECT email, notification_prefs FROM users WHERE email != \'\''
+    def get_notification_recipients(self, pref_key, server_id=None):
+        """Return email addresses of users who have pref_key enabled.
+
+        Only approved accounts are included. With server_id given — every
+        per-server event — a user is included only if they could open that
+        server in the panel (servers.access.all, owner, or a group it is shared
+        with): the same rule as can_access_server(). Without this the emails
+        told any opted-in user about servers, and the players on them, that
+        they have no access to (issue #107).
+        """
+        conn = get_db()
+        rows = conn.execute(
+            'SELECT id, email, group_id, notification_prefs FROM users '
+            'WHERE email != \'\' AND approved=1'
         ).fetchall()
+        owner = None
+        shared_groups = set()
+        if server_id:
+            server = conn.execute('SELECT owner FROM servers WHERE id=?', (server_id,)).fetchone()
+            owner = server['owner'] if server else None
+            shared_groups = set(group_manager.get_server_group_ids(server_id))
         recipients = []
         for row in rows:
             try:
                 prefs = json.loads(row['notification_prefs'] or '{}')
             except Exception:
                 prefs = {}
-            if prefs.get(pref_key, False):
-                recipients.append(row['email'])
+            if not prefs.get(pref_key, False):
+                continue
+            if server_id and not (
+                    group_manager.has_permission(row['group_id'], 'servers.access.all')
+                    or row['id'] == owner
+                    or row['group_id'] in shared_groups):
+                continue
+            recipients.append(row['email'])
         return recipients
 
     # ── MFA ───────────────────────────────────────────────────────────────────
@@ -3779,7 +3801,8 @@ def dispatch_notification(event_type, context):
     }
     pref_key = _PREF_MAP.get(event_type)
     if pref_key:
-        recipients = user_manager.get_notification_recipients(pref_key)
+        recipients = user_manager.get_notification_recipients(
+            pref_key, server_id=context.get('serverId'))
         if recipients:
             try:
                 email_service.send_event_notification(event_type, context, recipients)
