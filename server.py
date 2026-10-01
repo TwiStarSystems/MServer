@@ -4776,7 +4776,15 @@ class ServerStatus(Enum):
 # endpoint, but could otherwise 'op' a player and gain full in-game control.
 # The Operators tab (add_operator route) is the supported way to do this,
 # gated at the same @server_access_required level with proper auditing.
-BLOCKED_CONSOLE_COMMANDS = re.compile(r'^\s*/?\s*(op|deop)\b', re.IGNORECASE)
+#
+# Matched wherever the verb can actually be invoked, not just at the start of
+# the string: after "execute ... run", and with a "namespace:" prefix
+# (minecraft:op on Bukkit-family servers). Console input is also required to be
+# a single line — see ServerManager.send_command — since every extra line would
+# be a separate command the first-line check never sees (issue #102).
+_CMD_NAMESPACE = r'(?:[a-z0-9_.-]+:)?'
+BLOCKED_CONSOLE_COMMANDS = re.compile(
+    rf'^\s*/?\s*{_CMD_NAMESPACE}(?:execute\b.*\brun\s*/?\s*{_CMD_NAMESPACE})?(op|deop)\b', re.IGNORECASE)
 
 
 class ServerManager:
@@ -5454,7 +5462,10 @@ class ServerManager:
     
     def send_command(self, server_id, command):
         """Send a command to a running server"""
-        if BLOCKED_CONSOLE_COMMANDS.match(command or ''):
+        command = command if isinstance(command, str) else ''
+        if '\n' in command or '\r' in command:
+            return False, "A console command must be a single line."
+        if BLOCKED_CONSOLE_COMMANDS.search(command):
             return False, "The 'op'/'deop' commands are blocked from the console — use the Operators tab (or its API) instead."
 
         if server_id not in self.servers:
