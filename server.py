@@ -832,9 +832,16 @@ class EmailService:
     # ---- Jinja2 helpers ----
 
     def _render(self, template_str, context, html=True):
-        """Render a Jinja2 template string with the given context."""
-        from jinja2 import Environment
-        env = Environment(autoescape=html)
+        """Render a Jinja2 template string with the given context.
+
+        Sandboxed: the template text is operator-editable (panel.settings.manage,
+        via the email-template routes), and a plain Environment lets a template
+        walk from any value to Python internals — i.e. run code as the panel
+        user. The built-in templates only substitute variables, which the
+        sandbox allows (issue #98).
+        """
+        from jinja2.sandbox import SandboxedEnvironment
+        env = SandboxedEnvironment(autoescape=html)
         return env.from_string(template_str).render(**context)
 
     def _get_template(self, event_type):
