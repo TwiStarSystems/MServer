@@ -265,6 +265,17 @@ JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 TOOLS_DIR = BASE_DIR / 'tools'
 VERSION_FILE = BASE_DIR / 'version'
 
+# Java join/leave console lines. Anchored to the log prefix so the *whole*
+# message has to be "<name> joined the game": a bare search for that text also
+# matched chat ("<Steve> : Admin joined the game"), letting any player fake
+# joins — and with them the notification emails, webhook and in-game event
+# messages (issue #103). Covers vanilla "[12:00:00] [Server thread/INFO]: ",
+# Paper "[12:00:00 INFO]: " and Forge's extra "[logger/]" group.
+_JAVA_LOG_PREFIX = r'^\[[^\]]*\](?: \[[^\]]*\])*: '
+_JAVA_PLAYER_NAME = r'([A-Za-z0-9_.\-]{1,32})'
+JAVA_JOIN_RE = re.compile(_JAVA_LOG_PREFIX + _JAVA_PLAYER_NAME + r' joined the game\s*$')
+JAVA_LEAVE_RE = re.compile(_JAVA_LOG_PREFIX + _JAVA_PLAYER_NAME + r' left the game\s*$')
+
 # Per-server panel-side cache of Bedrock gamertag -> XUID, learned from the
 # "Player connected: <name>, xuid: <id>" console lines. Bedrock's permissions.json
 # is keyed by XUID only and there is no public gamertag->XUID lookup, so this is
@@ -5758,7 +5769,7 @@ class ServerInstance:
         """Parse console output for player join/leave events and update online_players"""
         # Java Minecraft: "[HH:MM:SS] [Server thread/INFO]: PlayerName joined the game"
         # Also handles Paper/Spigot/Folia variants
-        join_match = re.search(r':\s+(\S+) joined the game', line)
+        join_match = JAVA_JOIN_RE.match(line)
         if join_match:
             name = join_match.group(1)
             self.online_players[name] = time.time()
@@ -5766,7 +5777,7 @@ class ServerInstance:
             self._dispatch_player_event('player_join', name)
             return
 
-        leave_match = re.search(r':\s+(\S+) left the game', line)
+        leave_match = JAVA_LEAVE_RE.match(line)
         if leave_match:
             name = leave_match.group(1)
             self.online_players.pop(name, None)
