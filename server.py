@@ -9243,22 +9243,31 @@ def upload_custom_jar(server_id):
     if not server_config:
         return api_error('Server not found', 404)
 
+    if server_config.get('category') == 'bedrock':
+        return api_error('Bedrock servers do not use a JAR file', 400)
+
+    # The panel always launches server.jar — update_server() pins the
+    # executable to that name — so the upload has to land under it. Saving it
+    # under its own name left the server with a JAR it never ran (issue #110).
+    # Written to a temp name first so a rejected upload cannot clobber a
+    # working server.jar.
     server_path = Path(server_config['serverPath'])
-    filename = secure_filename(file.filename)
-    jar_path = server_path / filename
+    jar_path = server_path / 'server.jar'
+    tmp_path = server_path / f'.upload-{uuid.uuid4().hex}.jar'
 
     try:
-        file.save(str(jar_path))
+        file.save(str(tmp_path))
 
-        rejected = reject_if_not_zip(jar_path)
+        rejected = reject_if_not_zip(tmp_path)
         if rejected:
             return rejected
 
-        # Update server config to use this JAR
-        server_manager.update_server(server_id, executable=filename, serverType='custom')
+        os.replace(tmp_path, jar_path)
+        server_manager.update_server(server_id, serverType='custom')
 
-        return api_success(executable=filename)
+        return api_success(executable='server.jar')
     except Exception as e:
+        tmp_path.unlink(missing_ok=True)
         return api_error(str(e), 500)
 
 @app.route('/api/servers/<server_id>', methods=['GET'])
