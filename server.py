@@ -6794,9 +6794,34 @@ def is_server_path_allowed(server_path):
     try:
         base = SERVERS_DIR.resolve()
         full = Path(server_path).resolve()
-        return full == base or base in full.parents
+        # Strictly inside: SERVERS_DIR itself is the parent of every server, so
+        # a server rooted there would have all of them as its files (issue #93).
+        return base in full.parents
     except Exception:
         return False
+
+
+def server_path_conflict(server_path, exclude_server_id=None):
+    """Name of an existing server whose directory overlaps server_path, or None.
+
+    is_server_path_allowed() only proves a path is under SERVERS_DIR. That is
+    not enough to hand it to a new server row: if it equals, contains, or sits
+    inside another server's directory, the new row's file routes operate on
+    that other server's files without ever passing can_access_server() for it
+    (issue #93).
+    """
+    full = Path(server_path).resolve()
+    rows = get_db().execute('SELECT id, name, server_path FROM servers').fetchall()
+    for row in rows:
+        if exclude_server_id and row['id'] == exclude_server_id:
+            continue
+        try:
+            other = Path(row['server_path']).resolve()
+        except Exception:
+            continue
+        if full == other or other in full.parents or full in other.parents:
+            return row['name']
+    return None
 
 
 def validate_zip_members(zipf, dest_dir):
@@ -8320,8 +8345,18 @@ def create_server():
     server_path = data.get('serverPath', '')
     # Reject server paths outside SERVERS_DIR — a user-controlled base directory
     # would let the per-server file routes read/write anywhere on disk (RCE).
-    if server_path and not is_server_path_allowed(server_path):
-        return api_error('Invalid server path: must be within the servers directory', 400)
+    if server_path:
+        # Choosing the directory is an operator decision: an existing folder
+        # under SERVERS_DIR may be a deleted server's leftover files, which a
+        # regular user has no claim to. Everyone else gets servers/<id>/.
+        if not user_manager.user_has_permission(user, 'servers.access.all'):
+            return api_error('Only administrators can choose a custom server directory. '
+                             'Leave the path empty to create one automatically.', 403)
+        if not is_server_path_allowed(server_path):
+            return api_error('Invalid server path: must be a directory inside the servers directory', 400)
+        conflict = server_path_conflict(server_path)
+        if conflict:
+            return api_error(f'That directory is already in use by server: {conflict}', 400)
     java_args = data.get('javaArgs', DEFAULT_JAVA_ARGS)
     category = data.get('category', 'unmodded')
     executable = 'server.sh' if category == 'bedrock' else 'server.jar'
