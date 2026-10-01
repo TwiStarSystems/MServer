@@ -3660,7 +3660,7 @@ function onVersionChangeSelection() {
     warningDiv.className = 'version-warning downgrade';
     warningDiv.innerHTML = `
       <strong>⚠️ Downgrade to a Legacy Version Not Possible</strong>
-      <p>You cannot move ${current} back to ${newVersion}.</p>
+      <p>You cannot move ${escapeHtml(current)} back to ${escapeHtml(newVersion)}.</p>
       <p><strong>Reason:</strong> Minecraft's modern (26.1+) world storage format is not backwards-compatible. Downgrading to a legacy version is not supported and would corrupt the world. Create a new server if you need a legacy version.</p>
     `;
     warningDiv.style.display = 'block';
@@ -3675,7 +3675,7 @@ function onVersionChangeSelection() {
     warningDiv.className = 'version-warning upgrade';
     warningHtml = `
       <strong>⬆️ Upgrading to a Modern Version</strong>
-      <p>You are upgrading from ${current} to ${newVersion}.</p>
+      <p>You are upgrading from ${escapeHtml(current)} to ${escapeHtml(newVersion)}.</p>
       <p><strong>📦 World Storage Changes:</strong> Minecraft 26.1+ uses a new world storage format. Your world will be automatically converted, but this process is one-way and cannot be undone.</p>
     `;
   } else if (cmp > 0) {
@@ -3683,14 +3683,14 @@ function onVersionChangeSelection() {
     warningDiv.className = 'version-warning upgrade';
     warningHtml = `
       <strong>⬆️ Upgrading Version</strong>
-      <p>You are upgrading from ${current} to ${newVersion}.</p>
+      <p>You are upgrading from ${escapeHtml(current)} to ${escapeHtml(newVersion)}.</p>
     `;
   } else if (cmp < 0) {
     // Same-generation downgrade: warn about feature differences / corruption.
     warningDiv.className = 'version-warning downgrade';
     warningHtml = `
       <strong>⚠️ Downgrading Version</strong>
-      <p>You are downgrading from ${current} to ${newVersion}.</p>
+      <p>You are downgrading from ${escapeHtml(current)} to ${escapeHtml(newVersion)}.</p>
       <p><strong>Warning:</strong> Newer world data and features may be incompatible with the older version and can cause feature loss or world corruption. Proceed with caution.</p>
     `;
   } else {
@@ -6195,12 +6195,12 @@ async function loadOperators() {
         <td><strong>${escapeHtml(op.name)}</strong></td>
         <td class="uuid-cell">${escapeHtml(op.uuid)}</td>
         <td>
-          <span class="level-badge level-${op.level}">Level ${op.level}</span>
+          <span class="level-badge level-${Number(op.level) || 0}">Level ${Number(op.level) || 0}</span>
         </td>
         <td>${op.bypassesPlayerLimit ? '✅' : '❌'}</td>
         <td class="actions-cell">
-          <button class="btn btn-small" onclick="editOperator('${op.uuid}', '${escapeAttr(op.name)}', ${op.level}, ${op.bypassesPlayerLimit})">Edit</button>
-          <button class="btn btn-danger btn-small" onclick="removeOperator('${op.uuid}', '${escapeAttr(op.name)}')">Remove</button>
+          <button class="btn btn-small" onclick="editOperator('${escapeAttr(op.uuid)}', '${escapeAttr(op.name)}', ${Number(op.level) || 0}, ${!!op.bypassesPlayerLimit})">Edit</button>
+          <button class="btn btn-danger btn-small" onclick="removeOperator('${escapeAttr(op.uuid)}', '${escapeAttr(op.name)}')">Remove</button>
         </td>
       </tr>
     `).join('');
@@ -6251,16 +6251,16 @@ async function loadPlayerData() {
     _allPlayerRows = players.map(player => {
       const op = ops.find(o => o.uuid === player.uuid);
       const opButton = op 
-        ? `<button class="btn btn-small btn-danger" onclick="removeOperator('${player.uuid}', '${escapeAttr(op.name)}')">Remove OP</button>`
-        : `<button class="btn btn-small btn-success" onclick="makePlayerOp('${player.uuid}')">Make OP</button>`;
+        ? `<button class="btn btn-small btn-danger" onclick="removeOperator('${escapeAttr(player.uuid)}', '${escapeAttr(op.name)}')">Remove OP</button>`
+        : `<button class="btn btn-small btn-success" onclick="makePlayerOp('${escapeAttr(player.uuid)}')">Make OP</button>`;
 
       const wlButton = whitelistUuids.has(player.uuid)
         ? `<button class="btn btn-small btn-secondary" disabled title="Already whitelisted">✓ WL</button>`
-        : `<button class="btn btn-small" onclick="whitelistPlayerByUuid('${player.uuid}')">Whitelist</button>`;
+        : `<button class="btn btn-small" onclick="whitelistPlayerByUuid('${escapeAttr(player.uuid)}')">Whitelist</button>`;
 
       const banButton = bannedUuids.has(player.uuid)
         ? `<button class="btn btn-small btn-secondary" disabled title="Already banned">Banned</button>`
-        : `<button class="btn btn-small btn-danger" onclick="banPlayerByUuid('${player.uuid}')">Ban</button>`;
+        : `<button class="btn btn-small btn-danger" onclick="banPlayerByUuid('${escapeAttr(player.uuid)}')">Ban</button>`;
       
       return `
         <tr>
@@ -6268,9 +6268,9 @@ async function loadPlayerData() {
           <td>${formatDateTime(player.modified)}</td>
           <td>${formatBytes(player.size)}</td>
           <td class="actions-cell">
-            <button class="btn btn-small" onclick="openPlayerNbtEditor('${player.uuid}', '${escapeAttr(player.path || '')}')">Edit NBT</button>
-            <button class="btn btn-small" onclick="viewPlayerStats('${player.uuid}')">📊 Stats</button>
-            <button class="btn btn-small" onclick="viewPlayerInventory('${player.uuid}')">🎒 Inventory</button>
+            <button class="btn btn-small" onclick="openPlayerNbtEditor('${escapeAttr(player.uuid)}', '${escapeAttr(player.path || '')}')">Edit NBT</button>
+            <button class="btn btn-small" onclick="viewPlayerStats('${escapeAttr(player.uuid)}')">📊 Stats</button>
+            <button class="btn btn-small" onclick="viewPlayerInventory('${escapeAttr(player.uuid)}')">🎒 Inventory</button>
             ${opButton}
             ${wlButton}
             ${banButton}
@@ -6342,7 +6342,7 @@ async function loadWhitelist() {
         <td><strong>${escapeHtml(player.name)}</strong></td>
         <td class="uuid-cell">${escapeHtml(player.uuid)}</td>
         <td class="actions-cell">
-          <button class="btn btn-danger btn-small" onclick="removeFromWhitelist('${player.uuid}', '${escapeAttr(player.name)}')">Remove</button>
+          <button class="btn btn-danger btn-small" onclick="removeFromWhitelist('${escapeAttr(player.uuid)}', '${escapeAttr(player.name)}')">Remove</button>
         </td>
       </tr>
     `).join('');

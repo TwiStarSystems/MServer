@@ -10726,14 +10726,24 @@ def get_operators(server_id):
 
     ops_file = server_path / 'ops.json'
 
-    try:
-        if ops_file.exists():
-            with open(ops_file, 'r') as f:
-                ops = json.load(f)
-            return api_success({'operators': ops})
-        return api_success({'operators': []})
-    except Exception as e:
-        return api_error(str(e), 500)
+    # ops.json sits in the server directory, so anyone with access to the server
+    # can put anything in it. Return only the four known fields, coerced to
+    # their types, rather than relaying the file verbatim to the UI (issue #97).
+    operators = []
+    for entry in _read_json_list(ops_file):
+        if not isinstance(entry, dict):
+            continue
+        try:
+            level = max(0, min(4, int(entry.get('level', 4))))
+        except (TypeError, ValueError):
+            level = 4
+        operators.append({
+            'uuid': str(entry.get('uuid') or ''),
+            'name': str(entry.get('name') or ''),
+            'level': level,
+            'bypassesPlayerLimit': bool(entry.get('bypassesPlayerLimit', False)),
+        })
+    return api_success({'operators': operators})
 
 @app.route('/api/servers/<server_id>/players/ops', methods=['POST'])
 @server_access_required
