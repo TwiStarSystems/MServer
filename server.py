@@ -2936,6 +2936,8 @@ class UserManager:
     }
 
     def __init__(self):
+        self._totp_lock = threading.Lock()
+        self._last_totp_step = {}   # user_id -> last accepted TOTP time step
         self._ensure_anti_lockout_admin_exists()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -3144,10 +3146,18 @@ class UserManager:
             if not row['approved'] and not group_manager.is_admin_group(row['group_id']):
                 return None, "Account pending approval"
 
-            conn.execute(
-                'UPDATE users SET failed_login_attempts=0, last_login=? WHERE id=?',
-                (datetime.now().isoformat(), user_id)
-            )
+            # With MFA enrolled the password is only half the login, so the
+            # failure counter is not cleared here — record_mfa_success() does
+            # that. Clearing it now would let someone who knows the password
+            # reset the count before every batch of code guesses (issue #105).
+            if row['mfa_enabled']:
+                conn.execute('UPDATE users SET last_login=? WHERE id=?',
+                             (datetime.now().isoformat(), user_id))
+            else:
+                conn.execute(
+                    'UPDATE users SET failed_login_attempts=0, last_login=? WHERE id=?',
+                    (datetime.now().isoformat(), user_id)
+                )
             conn.commit()
             return user_id, self._row_to_dict(row)
         else:
@@ -3627,9 +3637,59 @@ admin account has been ENABLED:
         parts = [''.join(secrets.choice('ABCDEF0123456789') for _ in range(8)) for _ in range(3)]
         return '-'.join(parts)
 
-    def verify_totp(self, secret, code):
-        """Verify a TOTP code."""
-        return pyotp.TOTP(secret).verify(code, valid_window=1)
+    def verify_totp(self, secret, code, user_id=None):
+        """Verify a TOTP code (current 30s step, or one step either side).
+
+        With user_id given — the login path — a code is single-use: the time
+        step it matched is remembered and that step or any earlier one is
+        refused afterwards, so a code observed in transit cannot be replayed
+        inside its validity window (issue #105). The memory is per-process,
+        which is all a ~90s window needs.
+        """
+        totp = pyotp.TOTP(secret)
+        now = time.time()
+        matched_step = None
+        for offset in (0, -1, 1):
+            if totp.verify(str(code).strip(), for_time=now + offset * 30):
+                matched_step = int(now // 30) + offset
+                break
+        if matched_step is None:
+            return False
+        if user_id is not None:
+            with self._totp_lock:
+                if matched_step <= self._last_totp_step.get(user_id, -1):
+                    return False
+                self._last_totp_step[user_id] = matched_step
+        return True
+
+    def record_mfa_failure(self, user_id):
+        """Count a wrong MFA/recovery code like a wrong password.
+
+        Returns True if this failure locked the account (5 failures, same
+        30-minute lockout as authenticate()).
+        """
+        conn = get_db()
+        row = conn.execute(
+            'SELECT failed_login_attempts FROM users WHERE id=?', (user_id,)).fetchone()
+        if row is None:
+            return False
+        attempts = (row['failed_login_attempts'] or 0) + 1
+        if attempts >= 5:
+            conn.execute(
+                'UPDATE users SET failed_login_attempts=?, account_disabled=1, disabled_at=? WHERE id=?',
+                (attempts, datetime.now().isoformat(), user_id))
+            conn.commit()
+            self._check_anti_lockout()
+            return True
+        conn.execute('UPDATE users SET failed_login_attempts=? WHERE id=?', (attempts, user_id))
+        conn.commit()
+        return False
+
+    def record_mfa_success(self, user_id):
+        """Clear the failure counter once the second factor has been accepted."""
+        conn = get_db()
+        conn.execute('UPDATE users SET failed_login_attempts=0 WHERE id=?', (user_id,))
+        conn.commit()
 
     def enable_mfa(self, user_id, secret, recovery_code):
         """Enable MFA for user with hashed recovery code."""
@@ -7378,8 +7438,15 @@ def api_mfa_setup():
     if not user:
         return api_error('User not found', 404)
 
-    # Generate secret
+    # Replacing an existing enrolment needs proof, and the disable route
+    # (which asks for the password) is where that proof is taken.
+    if user.get('mfaEnabled'):
+        return api_error('MFA is already enabled. Disable it first to set it up again.', 400)
+
+    # Generate secret. Kept in the session so the verify step enables exactly
+    # the secret this server issued, not one supplied by the client.
     secret, _ = user_manager.generate_mfa_secret(user_id)
+    session['mfa_pending_secret'] = secret
 
     # Generate QR code
     username = user['username']
@@ -7413,11 +7480,17 @@ def api_mfa_verify():
     user_id = session.get('user_id')
     data = request.get_json()
 
-    secret = data.get('secret', '')
+    secret = session.get('mfa_pending_secret')
     code = data.get('code', '')
 
-    if not secret or not code:
-        return api_error('Secret and code are required', 400)
+    if not secret:
+        return api_error('MFA setup has not been started, or has expired. Start it again.', 400)
+    if not code:
+        return api_error('Verification code is required', 400)
+
+    current = user_manager.get_user(user_id)
+    if current and current.get('mfaEnabled'):
+        return api_error('MFA is already enabled. Disable it first to set it up again.', 400)
 
     # Verify the code
     if not user_manager.verify_totp(secret, code):
@@ -7432,6 +7505,7 @@ def api_mfa_verify():
     if not success:
         return api_error(message, 400)
 
+    session.pop('mfa_pending_secret', None)
     _restamp_session()
     return api_success(message='MFA enabled successfully', recoveryCode=recovery_code)
 
@@ -7518,6 +7592,14 @@ def api_mfa_verify_login():
 
     verified = False
 
+    def _failed(reason):
+        """Count the failure; a fifth one locks the account and ends this challenge."""
+        if user_manager.record_mfa_failure(temp_user_id):
+            session.clear()
+            return api_error('Account temporarily locked due to too many failed attempts. '
+                             'Try again later.', 401)
+        return api_error(reason, 401)
+
     if use_recovery:
         # Verify recovery code
         verified = user_manager.verify_recovery_code(temp_user_id, code)
@@ -7525,18 +7607,19 @@ def api_mfa_verify_login():
             # Recovery code disables MFA
             message = 'MFA has been disabled using recovery code'
         else:
-            return api_error('Invalid recovery code', 401)
+            return _failed('Invalid recovery code')
     else:
         # Verify TOTP code
         if not user.get('mfaSecret'):
             return api_error('MFA not enabled for this user', 400)
 
-        verified = user_manager.verify_totp(user.get('mfaSecret'), code)
+        verified = user_manager.verify_totp(user.get('mfaSecret'), code, user_id=temp_user_id)
         if not verified:
-            return api_error('Invalid verification code', 401)
+            return _failed('Invalid verification code')
         message = 'Login successful'
 
     if verified:
+        user_manager.record_mfa_success(temp_user_id)
         # Complete login - clear temp session and regenerate to prevent session fixation
         # (a recovery code has just disabled MFA, so _begin_session re-reads
         # the user rather than stamping the session from the stale dict)
@@ -7585,6 +7668,7 @@ def api_mfa_enroll_setup():
     user_id, user = resolved
 
     secret, _ = user_manager.generate_mfa_secret(user_id)
+    session['mfa_enroll_secret'] = secret
     app_name = settings_manager.get_branding().get('siteTitle', 'MServer')
     totp_uri = pyotp.totp.TOTP(secret).provisioning_uri(
         name=user['username'], issuer_name=app_name)
@@ -7612,10 +7696,12 @@ def api_mfa_enroll_verify():
     user_id, user = resolved
 
     data = request.get_json() or {}
-    secret = data.get('secret', '')
+    secret = session.get('mfa_enroll_secret')
     code = data.get('code', '')
-    if not secret or not code:
-        return api_error('Secret and code are required', 400)
+    if not secret:
+        return api_error('MFA setup has not been started, or has expired. Start it again.', 400)
+    if not code:
+        return api_error('Verification code is required', 400)
     if not user_manager.verify_totp(secret, code):
         return api_error('Invalid verification code', 400)
 
