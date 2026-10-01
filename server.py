@@ -12082,6 +12082,23 @@ def upload_mod(server_id):
         description=f'{user.get("username","Unknown")} uploaded {mod_type[:-1]} "{filename}" to "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
 
+def _mod_file_or_error(mod_dir, filename):
+    """Resolve a mod/plugin file name to a path directly inside mod_dir.
+
+    Returns (path, None), or (None, error_response). The name is checked for
+    containment, not spelling: real mod files carry characters that
+    secure_filename() strips ('+', spaces, brackets — fabric-api-0.92.0+1.20.1.jar),
+    and comparing against its output made those mods unmanageable (issue #111).
+    """
+    if (not filename or filename in ('.', '..') or '/' in filename or '\\' in filename
+            or '\x00' in filename or not is_safe_path(mod_dir, filename)):
+        return None, api_error('Invalid filename', 400)
+    path = mod_dir / filename
+    if path.resolve().parent != Path(mod_dir).resolve():
+        return None, api_error('Invalid filename', 400)
+    return path, None
+
+
 @app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>/enable', methods=['POST'])
 @server_access_required
 def enable_mod(server_id, mod_type, filename):
@@ -12093,12 +12110,10 @@ def enable_mod(server_id, mod_type, filename):
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
 
-    safe_fn = secure_filename(filename)
-    if safe_fn != filename or '..' in filename or '/' in filename:
-        return api_error('Invalid filename', 400)
-
-    disabled_path = mod_dir / filename
-    if not disabled_path.exists() or not filename.endswith('.disabled'):
+    disabled_path, error = _mod_file_or_error(mod_dir, filename)
+    if error:
+        return error
+    if not disabled_path.is_file() or not filename.endswith('.disabled'):
         return api_error('Disabled mod not found', 404)
 
     enabled_name = filename.rsplit('.disabled', 1)[0]
@@ -12131,12 +12146,10 @@ def disable_mod(server_id, mod_type, filename):
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
 
-    safe_fn = secure_filename(filename)
-    if safe_fn != filename or '..' in filename or '/' in filename:
-        return api_error('Invalid filename', 400)
-
-    mod_path = mod_dir / filename
-    if not mod_path.exists():
+    mod_path, error = _mod_file_or_error(mod_dir, filename)
+    if error:
+        return error
+    if not mod_path.is_file():
         return api_error('Mod not found', 404)
 
     cfg = server_manager.get_server_config(server_id) or {}
@@ -12168,12 +12181,10 @@ def delete_mod(server_id, mod_type, filename):
     server_path = server_manager.get_server_path(server_id)
     mod_dir = server_path / mod_type
 
-    safe_fn = secure_filename(filename)
-    if safe_fn != filename or '..' in filename or '/' in filename:
-        return api_error('Invalid filename', 400)
-
-    mod_path = mod_dir / filename
-    if not mod_path.exists():
+    mod_path, error = _mod_file_or_error(mod_dir, filename)
+    if error:
+        return error
+    if not mod_path.is_file():
         return api_error('Mod not found', 404)
 
     cfg = server_manager.get_server_config(server_id) or {}
