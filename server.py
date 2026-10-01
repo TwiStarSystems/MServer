@@ -4198,12 +4198,58 @@ def check_action_policy(action_type, user, payload, target_id=None,
 
 # ==================== Authentication Decorators ====================
 
+def _session_stamp(user):
+    """Short digest of the credentials a session was issued against.
+
+    Sessions are signed client-side cookies with no server-side record, so
+    there is nothing to delete when a password is changed or reset. Instead the
+    session carries this digest of the user's current password hash and MFA
+    secret, and get_current_user() rejects a session whose digest no longer
+    matches — every cookie issued before the change dies with it (issue #104).
+    """
+    material = f"{user.get('password') or ''}|{user.get('mfaSecret') or ''}"
+    return hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]
+
+
+def _begin_session(user_id):
+    """Replace the current session with a fully authenticated one for user_id.
+
+    Clears first, so a session id fixed before login never carries over.
+    Returns the user dict the session was issued for.
+    """
+    user = user_manager.get_user(user_id)
+    session.clear()
+    session.permanent = True
+    session['user_id'] = user_id
+    session['username'] = user['username']
+    session['group_id'] = user.get('groupId')
+    session['stamp'] = _session_stamp(user)
+    return user
+
+
+def _restamp_session():
+    """Re-issue the current session's stamp after the user changed their own
+    credentials, so the session that made the change survives it."""
+    user = user_manager.get_user(session.get('user_id'))
+    if user:
+        session['stamp'] = _session_stamp(user)
+
+
 def get_current_user():
     """Get the currently logged in user from session"""
     user_id = session.get('user_id')
     if user_id:
         user = user_manager.get_user(user_id)
         if user and user.get('approved', False):
+            # Administratively disabled (no disabled_at): the hidden
+            # anti-lockout admin once a real admin is back. A failed-login
+            # lockout (which has a disabled_at) deliberately does NOT end live
+            # sessions — otherwise anyone could log a user out by guessing
+            # their password five times.
+            if user.get('accountDisabled') and not user.get('disabledAt'):
+                return None, None
+            if session.get('stamp') != _session_stamp(user):
+                return None, None
             return user_id, user
     return None, None
 
@@ -7188,11 +7234,7 @@ def api_login():
                                 message='MFA is required for your account. Set it up now to continue.')
 
     # Regenerate session before setting auth data (prevents session fixation)
-    session.clear()
-    session.permanent = True
-    session['user_id'] = user_id
-    session['username'] = result['username']
-    session['group_id'] = result.get('groupId')
+    _begin_session(user_id)
 
     return api_success(user={
         'id': user_id,
@@ -7266,6 +7308,8 @@ def api_change_password():
     if not success:
         return api_error(message, 400)
 
+    # Every other session for this account is now invalid; keep this one.
+    _restamp_session()
     return api_success(message=message)
 
 @app.route('/api/auth/profile/username', methods=['PUT'])
@@ -7388,6 +7432,7 @@ def api_mfa_verify():
     if not success:
         return api_error(message, 400)
 
+    _restamp_session()
     return api_success(message='MFA enabled successfully', recoveryCode=recovery_code)
 
 @app.route('/api/auth/mfa/disable', methods=['POST'])
@@ -7412,6 +7457,7 @@ def api_mfa_disable():
     if not success:
         return api_error(message, 400)
 
+    _restamp_session()
     return api_success(message=message)
 
 @app.route('/api/auth/mfa/verify-login', methods=['POST'])
@@ -7492,11 +7538,9 @@ def api_mfa_verify_login():
 
     if verified:
         # Complete login - clear temp session and regenerate to prevent session fixation
-        session.clear()
-        session.permanent = True
-        session['user_id'] = temp_user_id
-        session['username'] = user['username']
-        session['group_id'] = user.get('groupId')
+        # (a recovery code has just disabled MFA, so _begin_session re-reads
+        # the user rather than stamping the session from the stale dict)
+        _begin_session(temp_user_id)
 
         return api_success(message=message, user={
             'id': temp_user_id,
@@ -7581,11 +7625,7 @@ def api_mfa_enroll_verify():
         return api_error(message, 400)
 
     # Promote the limited enrollment session into a full authenticated session.
-    session.clear()
-    session.permanent = True
-    session['user_id'] = user_id
-    session['username'] = user['username']
-    session['group_id'] = user.get('groupId')
+    _begin_session(user_id)
 
     return api_success(message='MFA enabled successfully', recoveryCode=recovery_code)
 
@@ -16082,8 +16122,9 @@ def _resync_all_connected_rooms():
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
-    # Check if user is authenticated
-    if 'user_id' not in session:
+    # Check if user is authenticated — through get_current_user(), so a
+    # revoked or stale session is refused here exactly as it is over HTTP.
+    if get_current_user()[1] is None:
         return False  # Reject connection
     # Join per-user (and, for admins, an 'admins') room so background job events
     # can be pushed only to the relevant clients.
@@ -16126,7 +16167,7 @@ def handle_disconnect():
 def handle_command(data):
     """Handle command from client"""
     # Verify user is authenticated
-    if 'user_id' not in session:
+    if get_current_user()[1] is None:
         emit('message', {'type': 'error', 'data': 'Not authenticated\n'})
         return
 
@@ -16162,7 +16203,7 @@ def handle_command(data):
 def handle_subscribe(data):
     """Subscribe to a server's output"""
     # Verify user is authenticated
-    if 'user_id' not in session:
+    if get_current_user()[1] is None:
         return
 
     if _socket_rate_limited('subscribe', SOCKET_SUBSCRIBE_RATE_LIMIT, SOCKET_SUBSCRIBE_RATE_WINDOW):
