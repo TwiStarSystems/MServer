@@ -5355,6 +5355,13 @@ class ServerManager:
             server_config = self.get_server_config(server_id)
             if not server_config:
                 return False, "Server configuration not found"
+
+            # A server created under a require_approval policy exists on disk
+            # but must not run until an admin approves it. Enforced here, the
+            # one place every start funnels through (routes, public API,
+            # scheduled tasks, auto-start), rather than per route (issue #100).
+            if not server_config.get('approved', True):
+                return False, "This server is waiting for admin approval and cannot be started yet."
             
             server_path = Path(server_config.get('serverPath', ''))
             executable = server_config.get('executable', 'server.jar')
@@ -8167,7 +8174,7 @@ def _execute_approved_action(action):
 
         if action_type == 'serverEdit':
             safe = {k: v for k, v in payload.items()
-                    if k not in ('id', 'created', 'owner', 'serverPath')}
+                    if k not in ('id', 'created', 'owner', 'serverPath', 'approved')}
             server_manager.update_server(target_id, **safe)
             return {'updated': True}
 
@@ -9295,6 +9302,8 @@ def update_server(server_id):
     data.pop('created', None)
     data.pop('owner', None)
     data.pop('serverPath', None)
+    # Approval is granted only through /api/admin/servers/<id>/approve.
+    data.pop('approved', None)
 
     def do_update():
         if server_manager.update_server(server_id, **data):
