@@ -1312,6 +1312,13 @@
                       <button type="button" class="help-icon" data-tip="Start this server 15 seconds after MServer starts, e.g. after a host reboot." aria-label="More information">?</button>
                     </label>
                   </div>
+
+                  <!-- Sharing (edit mode only; shown to the owner and to users who can access all servers) -->
+                  <div class="form-field" id="server-sharing-field" style="display: none;">
+                    <label>Share with groups</label>
+                    <div id="server-sharing-groups" class="sharing-groups"></div>
+                    <small class="field-hint">Members of a selected group get full access to this server: console, files, backups and settings.</small>
+                  </div>
                 </div>
               </section>
             </div>

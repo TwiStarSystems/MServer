@@ -3491,6 +3491,8 @@ async function openEditServerModal() {
     
     // Default autoStart from config.json; may be overridden by managed.conf below
     document.getElementById('input-auto-start').checked = !!server.autoStart;
+
+    loadServerSharing(currentServerId);
     
     if (versionSection && versionDisplay) {
       versionSection.style.display = 'block';
@@ -3821,6 +3823,10 @@ async function saveServer(e) {
   
   try {
     if (editingServerId) {
+      // Sharing is saved on its own route (owner / access-all only) and is not
+      // subject to the serverEdit policy, so it goes first.
+      await saveServerSharing(editingServerId);
+
       // Update existing server
       const editResult = await apiRequest(`/api/servers/${editingServerId}`, {
         method: 'PUT',
@@ -3857,6 +3863,58 @@ async function saveServer(e) {
 }
 
 // Note: formatBytes is in utils.js
+
+// ==================== Server sharing (group access) ====================
+
+// Group ids the server was shared with when the edit form opened, as a sorted
+// comma-joined string; null while the section is hidden (the user may not
+// change sharing), which also tells saveServerSharing() to do nothing.
+let _serverSharingInitial = null;
+
+async function loadServerSharing(serverId) {
+  const field = document.getElementById('server-sharing-field');
+  const list = document.getElementById('server-sharing-groups');
+  if (!field || !list) return;
+
+  _serverSharingInitial = null;
+  field.style.display = 'none';
+  list.innerHTML = '';
+
+  try {
+    const data = await apiRequest(`/api/servers/${serverId}/access`);
+    if (!data.canManage) return;
+
+    const shared = new Set((data.sharedGroups || []).map(g => g.id));
+    const groups = data.availableGroups || [];
+    list.innerHTML = groups.length
+      ? groups.map(g => `
+          <label class="switch-row">
+            <input type="checkbox" value="${escapeAttrValue(g.id)}" ${shared.has(g.id) ? 'checked' : ''}>
+            <span class="switch-label">${escapeHtml(g.name)}</span>
+          </label>`).join('')
+      : '<small class="field-hint">There are no groups to share with yet.</small>';
+
+    _serverSharingInitial = [...shared].sort().join(',');
+    field.style.display = '';
+  } catch (error) {
+    // Sharing is optional; the rest of the form still works without it.
+    console.error('Failed to load server sharing:', error);
+  }
+}
+
+async function saveServerSharing(serverId) {
+  if (_serverSharingInitial === null) return;
+  const selected = [...document.querySelectorAll('#server-sharing-groups input[type="checkbox"]:checked')]
+    .map(input => input.value)
+    .sort();
+  if (selected.join(',') === _serverSharingInitial) return;
+
+  await apiRequest(`/api/servers/${serverId}/access`, {
+    method: 'PUT',
+    body: JSON.stringify({ groupIds: selected })
+  });
+  _serverSharingInitial = selected.join(',');
+}
 
 function deleteServer() {
   if (!currentServerId) return;

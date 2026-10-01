@@ -8365,6 +8365,15 @@ select.form-control:disabled {
   flex-wrap: nowrap;
 }
 
+/* ---------- Server sharing (group list in the edit form) ---------- */
+
+.sharing-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+
 /* ---------- Import hint ---------- */
 
 .import-props-hint {

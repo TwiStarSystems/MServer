@@ -8201,10 +8201,25 @@ def api_get_server_access(server_id):
     owner_id = server_config.get('owner') if server_config else None
     owner = user_manager.get_user_by_id(owner_id) if owner_id else None
     shared_groups = group_manager.get_server_groups(server_id)
-    return api_success({
+    # Whoever may change sharing (same rule as the PUT below) also gets the
+    # groups there are to share with, so the server settings UI does not need
+    # the admin-only group list. Groups that already reach every server are
+    # left out — sharing with them would change nothing.
+    user_id, user = get_current_user()
+    can_manage = (user_manager.user_has_permission(user, 'servers.access.all')
+                  or owner_id == user_id)
+    result = {
         'owner': {'id': owner_id, 'username': owner['username'], 'name': owner.get('name', '')} if owner else None,
-        'sharedGroups': shared_groups,
-    })
+        'sharedGroups': [{'id': g['id'], 'name': g['name']} for g in shared_groups],
+        'canManage': can_manage,
+    }
+    if can_manage:
+        result['availableGroups'] = [
+            {'id': g['id'], 'name': g['name']}
+            for g in group_manager.get_all_groups()
+            if not group_manager.has_permission(g['id'], 'servers.access.all')
+        ]
+    return api_success(result)
 
 @app.route('/api/servers/<server_id>/access', methods=['PUT'])
 @server_access_required
@@ -8215,8 +8230,10 @@ def api_update_server_access(server_id):
     if not user_manager.user_has_permission(user, 'servers.access.all'):
         if not server_config or server_config.get('owner') != user_id:
             return api_error('Only the server owner can change sharing', 403)
-    data = request.get_json()
+    data = request.get_json() or {}
     group_ids = data.get('groupIds', [])
+    if not isinstance(group_ids, list):
+        return api_error('groupIds must be a list of group ids', 400)
     group_manager.set_server_groups(server_id, group_ids)
     # Unsharing can revoke access for every connected member of an affected group.
     _resync_all_connected_rooms()
