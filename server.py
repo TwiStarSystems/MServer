@@ -178,9 +178,14 @@ def handle_csrf_error(e):
 #
 # CORS: set CORS_ORIGINS in .env to a comma-separated list of allowed origins,
 # e.g. CORS_ORIGINS=https://panel.example.com,https://example.com
-# Leave unset (or set to *) only for local/dev use.
+# Unset — or "*", which older installs shipped with — means same-origin only:
+# None makes Socket.IO accept just the panel's own scheme://host (it honours
+# X-Forwarded-Proto/Host, so this works behind the reverse proxy). The socket
+# is authenticated by the session cookie, so "any origin" was never a setting
+# anyone needed; it only let another host on the same site drive the console
+# with a logged-in user's cookie (issue #106).
 _cors_env = _env_str('CORS_ORIGINS', '')
-_socketio_cors: object = [o.strip() for o in _cors_env.split(',') if o.strip()] if _cors_env and _cors_env != '*' else '*'
+_socketio_cors: object = [o.strip() for o in _cors_env.split(',') if o.strip()] if _cors_env and _cors_env != '*' else None
 
 socketio = SocketIO(
     app,
@@ -13709,7 +13714,7 @@ def get_network_settings():
     """Get network/environment settings (admin only)."""
     env = _read_env_file()
     return api_success({
-        'corsOrigins':             env.get('CORS_ORIGINS', '*'),
+        'corsOrigins':             env.get('CORS_ORIGINS', ''),
         'sessionCookieSecure':     env.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true',
         'sessionCookieDomain':     env.get('SESSION_COOKIE_DOMAIN', ''),
         'permanentSessionLifetime': int(env.get('PERMANENT_SESSION_LIFETIME', 604800)),
@@ -16425,7 +16430,9 @@ signal.signal(signal.SIGINT, _graceful_shutdown)
 def run_server(host='0.0.0.0', port=3000):
     """Run the MServer server"""
     _is_dev = os.environ.get('FLASK_ENV', 'production') == 'development'
-    _cors_display = os.environ.get('CORS_ORIGINS', '*') or '*'
+    _cors_display = os.environ.get('CORS_ORIGINS', '').strip()
+    if _cors_display in ('', '*'):
+        _cors_display = 'same-origin only'
     _cookie_secure = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
 
     print('=' * 60)
@@ -16435,8 +16442,6 @@ def run_server(host='0.0.0.0', port=3000):
     print(f'Listening on:  {host}:{port}')
     print(f'Environment:   {"development" if _is_dev else "production"}')
     print(f'CORS origins:  {_cors_display}')
-    if _cors_display == '*':
-        print('  ⚠️  CORS is open to all origins. Set CORS_ORIGINS in .env for production.')
     if not _cookie_secure:
         print('  ⚠️  SESSION_COOKIE_SECURE is False. Set SESSION_COOKIE_SECURE=true in .env when using HTTPS.')
     if user_manager.needs_setup():

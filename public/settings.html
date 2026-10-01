@@ -300,7 +300,7 @@
             <div class="form-group" style="margin-bottom: 16px;">
               <label for="cors-origins">CORS / WebSocket Origins</label>
               <textarea id="cors-origins" class="form-control" rows="3" placeholder="https://panel.mc.example.com"></textarea>
-              <small>Comma-separated list of allowed origins for WebSocket and CORS requests. Use <code>*</code> to allow all (not recommended for production). Bare domains will have <code>https://</code> auto-prepended.</small>
+              <small>Extra origins allowed to open the realtime (WebSocket) connection, comma-separated. Leave empty for same-origin only &mdash; the panel's own URL always works; <code>*</code> is treated the same as empty. Bare domains will have <code>https://</code> auto-prepended.</small>
             </div>
 
             <div class="settings-option">
