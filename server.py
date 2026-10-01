@@ -4254,6 +4254,11 @@ def server_access_required(f):
             return api_error('Authentication required', 401, code='AUTH_REQUIRED')
         if not can_access_server(server_id):
             return api_error('Access denied to this server', 403, code='FORBIDDEN')
+        # servers.access.all passes can_access_server() for any id, including
+        # one with no row. Stop here rather than let a route run against a
+        # server that does not exist (issue #94).
+        if not server_manager.get_server_config(server_id):
+            return api_error('Server not found', 404)
         return f(server_id, *args, **kwargs)
     return decorated_function
 
@@ -5521,11 +5526,17 @@ class ServerManager:
             conf_path.write_text(json.dumps(default, indent=2), encoding='utf-8')
 
     def get_server_path(self, server_id):
-        """Get the path for a specific server"""
+        """Get the directory of a specific server.
+
+        Raises LookupError for an id with no servers row. This used to fall
+        back to SERVERS_DIR, which made every caller treat the parent of *all*
+        servers as this one's directory — a restore or zip job that outlived
+        its server then cleared or archived every server (issue #94).
+        """
         server_config = self.get_server_config(server_id)
-        if server_config:
-            return Path(server_config.get('serverPath', SERVERS_DIR))
-        return SERVERS_DIR
+        if not server_config or not server_config.get('serverPath'):
+            raise LookupError(f'Server not found: {server_id}')
+        return Path(server_config['serverPath'])
 
 
 class ServerInstance:
