@@ -8468,6 +8468,12 @@ def _execute_approved_action(action):
                     return {'deleted': True}
             elif act == 'upload':
                 return {'note': 'Mod uploads must be re-submitted after approval.'}
+            elif act == 'modrinth_install':
+                body, status = _modrinth_download(
+                    sid, payload.get('url', ''), fname, mod_type, payload.get('sha512', ''))
+                if status == 200:
+                    return {'installed': body.get('filename')}
+                return {'error': body.get('error', 'Modrinth install failed')}
             return {'error': f'Mod action {act} could not be completed'}
 
         if action_type == 'playerManagement':
@@ -12588,11 +12594,68 @@ def modrinth_project_versions(server_id, project_id):
         return api_error(f'Modrinth API error: {str(e)}', 502)
 
 
+def _modrinth_download(server_id, url, safe_filename, mod_type, sha512_expected=''):
+    """Download one Modrinth file into the server's mods/ or plugins/ folder.
+
+    Shared by the install route and by the approval replay, so an install that
+    was held for approval runs exactly the code a direct one does. Inputs are
+    re-checked here because the replay calls this with a stored payload.
+
+    Returns (body_dict, http_status).
+    """
+    if mod_type not in ('mods', 'plugins'):
+        return {'success': False, 'error': 'modType must be mods or plugins'}, 400
+    if not url.startswith('https://cdn.modrinth.com/'):
+        return {'success': False, 'error': 'Only Modrinth CDN URLs are permitted'}, 400
+    if not safe_filename or safe_filename != secure_filename(safe_filename) \
+            or not safe_filename.endswith('.jar'):
+        return {'success': False, 'error': 'Invalid filename'}, 400
+
+    server_path = server_manager.get_server_path(server_id)
+    target_dir  = server_path / mod_type
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest_path   = target_dir / safe_filename
+
+    try:
+        resp = requests.get(url, headers={'User-Agent': MODRINTH_UA}, timeout=120, stream=True)
+        resp.raise_for_status()
+
+        sha512_actual = hashlib.sha512()
+        with open(str(dest_path), 'wb') as f:
+            for chunk in resp.iter_content(65536):
+                f.write(chunk)
+                sha512_actual.update(chunk)
+
+        # Verify integrity if hash provided
+        if sha512_expected and sha512_actual.hexdigest() != sha512_expected:
+            dest_path.unlink(missing_ok=True)
+            return {'success': False, 'error': 'SHA-512 integrity check failed — file deleted'}, 409
+
+        return {'success': True, 'filename': safe_filename}, 200
+    except requests.exceptions.Timeout:
+        dest_path.unlink(missing_ok=True)
+        return {'success': False, 'error': 'Download timed out'}, 504
+    except requests.exceptions.RequestException as e:
+        dest_path.unlink(missing_ok=True)
+        return {'success': False, 'error': f'Download failed: {str(e)}'}, 502
+    except Exception as e:
+        dest_path.unlink(missing_ok=True)
+        return {'success': False, 'error': str(e)}, 500
+
+
 @app.route('/api/servers/<server_id>/mods/modrinth/install', methods=['POST'])
 @limiter.limit("30 per 10 minutes")
 @server_access_required
 def modrinth_install(server_id):
-    """Download a mod/plugin version from Modrinth and save it to the server."""
+    """Download a mod/plugin version from Modrinth and save it to the server.
+
+    Subject to the modManagement policy like every other way of adding a mod:
+    this route used to skip check_action_policy(), so under require_approval a
+    user could not upload a mod but could install any mod from Modrinth
+    (issue #101). Unlike an upload, the request is fully described by its
+    payload, so an approved install is replayed by _execute_approved_action().
+    """
+    user_id, user = get_current_user()
     data       = request.get_json()
     url        = data.get('url', '').strip()
     filename   = data.get('filename', '').strip()
@@ -12615,36 +12678,21 @@ def modrinth_install(server_id):
     if not safe_filename:
         return api_error('Invalid filename', 400)
 
-    server_path = server_manager.get_server_path(server_id)
-    target_dir  = server_path / mod_type
-    target_dir.mkdir(parents=True, exist_ok=True)
-    dest_path   = target_dir / safe_filename
+    cfg = server_manager.get_server_config(server_id) or {}
+    server_name = cfg.get('name', server_id)
 
-    try:
-        resp = requests.get(url, headers={'User-Agent': MODRINTH_UA}, timeout=120, stream=True)
-        resp.raise_for_status()
+    def do_install():
+        body, status = _modrinth_download(server_id, url, safe_filename, mod_type, sha512_expected)
+        return jsonify(body), status
 
-        sha512_actual = hashlib.sha512()
-        with open(str(dest_path), 'wb') as f:
-            for chunk in resp.iter_content(65536):
-                f.write(chunk)
-                sha512_actual.update(chunk)
-
-        # Verify integrity if hash provided
-        if sha512_expected and sha512_actual.hexdigest() != sha512_expected:
-            dest_path.unlink(missing_ok=True)
-            return api_error('SHA-512 integrity check failed — file deleted', 409)
-
-        return jsonify({'success': True, 'filename': safe_filename})
-    except requests.exceptions.Timeout:
-        dest_path.unlink(missing_ok=True)
-        return api_error('Download timed out', 504)
-    except requests.exceptions.RequestException as e:
-        dest_path.unlink(missing_ok=True)
-        return api_error(f'Download failed: {str(e)}', 502)
-    except Exception as e:
-        dest_path.unlink(missing_ok=True)
-        return api_error(str(e), 500)
+    result, status = check_action_policy(
+        'modManagement', user,
+        {'serverId': server_id, 'filename': safe_filename, 'modType': mod_type,
+         'action': 'modrinth_install', 'url': url, 'sha512': sha512_expected,
+         'serverName': server_name},
+        target_id=server_id, execute_fn=do_install,
+        description=f'{user.get("username","Unknown")} installed {mod_type[:-1]} "{safe_filename}" from Modrinth on "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
 
 
 @app.route('/api/servers/<server_id>/mods/updates', methods=['GET'])

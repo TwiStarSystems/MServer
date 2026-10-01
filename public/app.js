@@ -5952,10 +5952,19 @@ async function installModrinthVersion(url, filename, sha512) {
   btn.disabled = true;
 
   try {
-    await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
       method: 'POST',
       body: JSON.stringify({ url, filename, modType: modType, sha512 }),
     });
+
+    // Held for admin approval (apiRequest already showed the notice): nothing
+    // was installed, so don't claim it was.
+    if (result && result.pending) {
+      btn.textContent = origText;
+      btn.disabled = false;
+      closeModrinthVersionModal();
+      return;
+    }
 
     showNotification(`${filename} installed to ${modType}/`, 'success');
     btn.textContent = '✅ Installed';
@@ -6041,10 +6050,18 @@ async function applyModUpdate(url, filename, sha512, folder, currentFilename, bt
 
   try {
     // Install new version
-    await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
+    const result = await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
       method: 'POST',
       body: JSON.stringify({ url, filename, modType: folder, sha512 }),
     });
+
+    // Held for admin approval: the new version is not installed yet, so the
+    // old file must stay.
+    if (result && result.pending) {
+      btn.textContent = origText;
+      btn.disabled = false;
+      return;
+    }
 
     // Delete old file if the filename is different
     if (filename !== currentFilename) {
