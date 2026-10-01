@@ -2650,7 +2650,10 @@ class GroupManager:
     def get_all_groups(self):
         """All groups as dicts, highest priority first (the UI's display order)."""
         self._ensure_cache()
-        return sorted(self._cache.values(), key=lambda g: -g['priority'])
+        # A non-integer priority (a row written before the route validated it,
+        # issue #96) sorts as 0 instead of raising for every caller.
+        return sorted(self._cache.values(),
+                      key=lambda g: -(g['priority'] if isinstance(g['priority'], int) else 0))
 
     def create_group(self, name, permissions, is_default=False):
         """
@@ -7805,6 +7808,35 @@ def api_get_permissions_catalog():
         'labels': group_manager.PERMISSION_LABELS,
     })
 
+def _group_grant_error(permissions):
+    """Error response if the caller may not store this permission list, else None.
+
+    panel.groups.manage is delegable, so a non-admin holding it must not be
+    able to hand out more than they have themselves: no wildcards ('*' or a
+    'panel.*' prefix, which has_permission() honours), and no permission their
+    own group lacks. Without this a group manager could grant their own group
+    everything short of '*' (issue #96).
+    """
+    if not isinstance(permissions, list) or not all(isinstance(p, str) for p in permissions):
+        return api_error('permissions must be a list of permission names', 400)
+    if _actor_is_admin():
+        return None
+    _, actor = get_current_user()
+    for perm in permissions:
+        if perm == '*' or perm.endswith('.*'):
+            return api_error('Only an administrator can grant wildcard permissions', 403)
+        if perm in group_manager.ALL_PERMISSIONS and not user_manager.user_has_permission(actor, perm):
+            return api_error(f'You cannot grant a permission you do not hold: {perm}', 403)
+    return None
+
+
+def _admin_group_denied(group_id):
+    """Error response if a non-admin caller is acting on an admin group, else None."""
+    if group_manager.is_admin_group(group_id) and not _actor_is_admin():
+        return api_error('Only an administrator can change an admin group', 403)
+    return None
+
+
 @app.route('/api/admin/groups', methods=['POST'])
 @permission_required('panel.groups.manage')
 def api_create_group():
@@ -7815,9 +7847,11 @@ def api_create_group():
         return api_error('Group name is required', 400)
     permissions = data.get('permissions', [])
     is_default = bool(data.get('isDefault', False))
-    # Only an admin may author an admin (wildcard) group.
-    if '*' in (permissions or []) and not _actor_is_admin():
-        return api_error('Only an administrator can create an admin group', 403)
+    # Only an admin may author an admin (wildcard) group, or grant anything
+    # the caller does not hold.
+    denied = _group_grant_error(permissions)
+    if denied:
+        return denied
     try:
         group_id = group_manager.create_group(name, permissions, is_default)
     except Exception as e:
@@ -7843,15 +7877,27 @@ def api_update_group(group_id):
     """Update a permission group."""
     data = request.get_json()
     permissions = data.get('permissions')
-    # Only an admin may grant a group admin (wildcard) permissions.
-    if permissions is not None and '*' in permissions and not _actor_is_admin():
-        return api_error('Only an administrator can grant admin permissions', 403)
+    denied = _admin_group_denied(group_id)
+    if not denied and permissions is not None:
+        denied = _group_grant_error(permissions)
+    if denied:
+        return denied
+    priority = data.get('priority')
+    if priority is not None:
+        # Stored as-is and sorted on by get_all_groups(); a non-number here
+        # used to break the groups list for everyone.
+        if isinstance(priority, bool) or not isinstance(priority, (int, float, str)):
+            return api_error('priority must be a whole number', 400)
+        try:
+            priority = int(priority)
+        except (ValueError, OverflowError):
+            return api_error('priority must be a whole number', 400)
     ok, msg = group_manager.update_group(
         group_id,
         name=data.get('name'),
         permissions=permissions,
         is_default=data.get('isDefault'),
-        priority=data.get('priority'),
+        priority=priority,
     )
     if not ok:
         return api_error(msg, 400)
@@ -7864,6 +7910,9 @@ def api_update_group(group_id):
 @permission_required('panel.groups.manage')
 def api_delete_group(group_id):
     """Delete a custom permission group."""
+    denied = _admin_group_denied(group_id)
+    if denied:
+        return denied
     ok, msg = group_manager.delete_group(group_id)
     if not ok:
         return api_error(msg, 400)
@@ -7875,6 +7924,12 @@ def api_delete_group(group_id):
 @permission_required('panel.groups.manage')
 def api_set_default_group(group_id):
     """Set a group as the default for new registrations."""
+    # New registrations land in the default group, and admin-group accounts
+    # skip the approval check in authenticate() — so making an admin group the
+    # default is itself an admin-level decision.
+    denied = _admin_group_denied(group_id)
+    if denied:
+        return denied
     if group_manager.set_default_group(group_id):
         return api_success()
     return api_error('Group not found', 404)
