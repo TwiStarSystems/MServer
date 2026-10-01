@@ -13962,6 +13962,25 @@ def backup_all_servers():
         return api_error(str(e), 500)
 
 
+def _stop_server_and_wait(server_id, timeout=60):
+    """Stop a running server and block until its process has actually exited.
+
+    stop_server() only sends `stop` and returns. Callers about to delete or
+    replace the server's directory need the process gone first — otherwise the
+    server keeps saving into files that are being removed underneath it. Kills
+    the process if it has not exited within `timeout` seconds.
+    """
+    inst = server_manager.servers.get(server_id)
+    if not inst or not inst.is_running():
+        return
+    server_manager.stop_server(server_id)
+    deadline = time.time() + timeout
+    while inst.is_running() and time.time() < deadline:
+        time.sleep(0.5)
+    if inst.is_running():
+        server_manager.kill_server(server_id)
+
+
 @app.route('/api/tools/servers/restore-all', methods=['POST'])
 @permission_required('panel.panel.backup')
 def restore_all_servers():
@@ -14018,20 +14037,23 @@ def restore_all_servers():
                 return api_error('No server directories found in archive (expected servers/<id>/...)', 400)
 
             if mode == 'replace':
-                # Stop all running servers and wipe SERVERS_DIR
+                # Stop all running servers — and wait for them to exit — then
+                # wipe SERVERS_DIR (issue #112)
                 for sid in list(server_manager.servers.keys()):
-                    inst = server_manager.servers.get(sid)
-                    if inst and inst.is_running():
-                        server_manager.stop_server(sid)
+                    _stop_server_and_wait(sid)
                 if SERVERS_DIR.exists():
                     shutil.rmtree(SERVERS_DIR)
                 SERVERS_DIR.mkdir(parents=True, exist_ok=True)
+                # Their directories are gone, so servers that are not coming
+                # back from the archive must lose their rows too; left behind
+                # they would be listed with nothing on disk behind them.
+                for sid in server_manager.get_all_server_ids():
+                    if sid not in server_ids_in_archive:
+                        server_manager.delete_server(sid)
             else:
                 # Merge: stop only the servers that will be overwritten
                 for sid in server_ids_in_archive:
-                    inst = server_manager.servers.get(sid)
-                    if inst and inst.is_running():
-                        server_manager.stop_server(sid)
+                    _stop_server_and_wait(sid)
                     target = SERVERS_DIR / sid
                     if target.exists():
                         shutil.rmtree(target)
@@ -14041,17 +14063,14 @@ def restore_all_servers():
                 parts = Path(name).parts
                 if (len(parts) >= 2 and parts[0] == 'servers'
                         and parts[1] in server_ids_in_archive):
-                    # Security: prevent path traversal
-                    safe_relative = Path(*parts)
-                    dest = SERVERS_DIR.parent / safe_relative
-                    try:
-                        resolved = dest.resolve()
-                        if not str(resolved).startswith(str(SERVERS_DIR.resolve())):
-                            skipped.append(name)
-                            continue
-                    except Exception:
+                    # Security: prevent path traversal. A real containment
+                    # check — the string-prefix test this replaced also passed
+                    # siblings such as "<SERVERS_DIR>-old".
+                    relative = Path(*parts[1:])
+                    if not is_safe_path(SERVERS_DIR, relative):
                         skipped.append(name)
                         continue
+                    dest = SERVERS_DIR / relative
 
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     if not name.endswith('/'):
