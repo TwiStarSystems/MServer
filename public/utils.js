@@ -146,6 +146,9 @@ async function apiRequest(url, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error((data && data.error) || 'Too many requests — please wait a moment and try again.');
+    }
     throw new Error(data.error || data.message || `HTTP ${response.status}`);
   }
 

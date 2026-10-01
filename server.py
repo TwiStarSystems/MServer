@@ -204,6 +204,22 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
+# The default limit above is counted per endpoint per client IP, and it is sized
+# for actions, not for reads the UI repeats on a timer: the dashboard alone
+# polls /api/servers every 10s — 90 of the default 100 per 15 minutes from one
+# tab — so a second tab or a second user behind the same NAT got 429s and the
+# server list silently stopped updating (issue #108). Routes the frontend polls
+# or re-reads on every socket event carry this limit instead; it still bounds
+# abuse, at a rate ordinary use cannot reach.
+POLLED_READ_LIMIT = _env_str('RATE_LIMIT_POLLED', '240 per minute')
+
+
+@app.errorhandler(429)
+def handle_rate_limited(e):
+    """JSON instead of Flask-Limiter's HTML page, so the frontend can show it."""
+    return api_error('Too many requests — please wait a moment and try again.', 429,
+                     code='RATE_LIMITED')
+
 # Flask-Limiter only wraps HTTP routes — it has no hook into SocketIO event
 # handlers, so 'command'/'subscribe' spam could bypass the HTTP-only limits.
 # This is a minimal, independent per-connection sliding-window counter keyed by
@@ -6969,6 +6985,11 @@ init_api_manager(app, server_manager, get_current_user, group_manager, read_vers
 
 # Exempt API v1 from CSRF protection (uses API key authentication)
 csrf.exempt(api_v1)
+# ...and give it its own per-IP ceiling in place of the default: each key
+# already carries a per-minute limit (require_api_key), which the
+# 100-per-15-minutes default undercut for every key regardless of what it was
+# configured with (issue #108). This one only bounds unauthenticated noise.
+limiter.limit(_env_str('RATE_LIMIT_API_V1', '600 per minute'))(api_v1)
 
 
 def is_safe_path(base_path, requested_path):
@@ -7132,6 +7153,7 @@ def api_error(message, status=400, **extra):
 
 @app.route('/api/csrf-token', methods=['GET'])
 @csrf.exempt
+@limiter.limit(POLLED_READ_LIMIT)
 def get_csrf_token():
     """Get CSRF token for authenticated sessions"""
     token = generate_csrf()
@@ -7362,6 +7384,7 @@ def api_register():
     return api_success(message=message)
 
 @app.route('/api/auth/me', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 def api_current_user():
     """Get current logged in user"""
     user_id, user = get_current_user()
@@ -8176,6 +8199,7 @@ def api_update_server_access(server_id):
 # ==================== Notification API ====================
 
 @app.route('/api/notifications', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 @login_required
 def api_get_notifications():
     """
@@ -8194,6 +8218,7 @@ def api_get_notifications():
     })
 
 @app.route('/api/notifications/unread-count', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 @login_required
 def api_notification_unread_count():
     user_id, _ = get_current_user()
@@ -8448,6 +8473,7 @@ def api_update_policies():
 # ==================== Public API (No Auth Required) ====================
 
 @app.route('/api/public/servers', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 def api_public_servers():
     """Get server status for public view — name, status, address, owner."""
     servers = server_manager.get_servers_list()
@@ -8492,6 +8518,7 @@ def get_default_server_path():
 # ==================== Server Management API ====================
 
 @app.route('/api/servers', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 @login_required
 def get_servers():
     """Get list of servers accessible to the current user"""
@@ -10531,6 +10558,7 @@ def _bedrock_kick_if_online(server_id, name, reason):
 
 
 @app.route('/api/servers/<server_id>/players/online', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 @server_access_required
 def get_online_players(server_id):
     """Get currently online players tracked from console output"""
@@ -13508,6 +13536,7 @@ def delete_server_task(server_id, task_id):
 # ==================== Settings API ====================
 
 @app.route('/api/settings/branding', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 def get_branding():
     """Get branding settings (public)"""
     return api_success(settings_manager.get_branding())
@@ -16092,6 +16121,7 @@ def can_access_job(job):
 
 
 @app.route('/api/jobs', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 @login_required
 def list_jobs_route():
     """List background jobs visible to the current user (admins see all)."""
@@ -16110,6 +16140,7 @@ def list_jobs_route():
 
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
+@limiter.limit(POLLED_READ_LIMIT)
 @login_required
 def get_job_route(job_id):
     """Poll a single job's status (Socket.IO is the primary push channel)."""
