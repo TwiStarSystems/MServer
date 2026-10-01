@@ -7562,6 +7562,10 @@ def api_create_user():
     if not group_manager.get_group(group_id):
         return api_error('Invalid group', 400)
 
+    # Same rule as api_update_user_group: only an admin may mint an admin.
+    if group_manager.is_admin_group(group_id) and not _actor_is_admin():
+        return api_error('Only an administrator can create a user in an admin group', 403)
+
     user_id, message = user_manager.create_user(username, password, group_id, email)
 
     if not user_id:
@@ -7573,6 +7577,9 @@ def api_create_user():
 @permission_required('panel.users.manage')
 def api_approve_user(user_id):
     """Approve a pending user"""
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
     if user_manager.approve_user(user_id):
         return api_success()
     return api_error('User not found', 404)
@@ -7581,6 +7588,20 @@ def _actor_is_admin():
     """True if the current session user belongs to an admin (wildcard) group."""
     _, actor = get_current_user()
     return bool(actor and group_manager.is_admin_group(actor.get('groupId')))
+
+def _admin_target_denied(user_id):
+    """Error response if a non-admin caller is acting on an admin account, else None.
+
+    panel.users.manage is a delegable permission, so on its own it must not be
+    enough to reset, edit or remove an administrator — that would make it a
+    path to full admin (issue #95). Only another admin may touch an admin.
+    """
+    if _actor_is_admin():
+        return None
+    target = user_manager.get_user(user_id)
+    if target and group_manager.is_admin_group(target.get('groupId')):
+        return api_error('Only an administrator can modify an administrator account', 403)
+    return None
 
 @app.route('/api/admin/users/<user_id>/group', methods=['PUT'])
 @permission_required('panel.users.manage')
@@ -7599,6 +7620,10 @@ def api_update_user_group(user_id):
     # user-manager can't mint new admins through another account.
     if group_manager.is_admin_group(group_id) and not _actor_is_admin():
         return api_error('Only an administrator can assign an admin group', 403)
+    # ...and only an admin may move an existing admin out of one.
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
 
     if user_manager.update_user_group(user_id, group_id):
         # Drop the target's live socket from any room the new group no longer covers.
@@ -7610,6 +7635,9 @@ def api_update_user_group(user_id):
 @permission_required('panel.users.manage')
 def api_reset_user_password(user_id):
     """Reset user password (admin only)"""
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
     data = request.get_json()
     new_password = data.get('password', '')
 
@@ -7628,6 +7656,9 @@ def api_clear_user_mfa(user_id):
     # Prevent clearing own MFA
     if user_id == session.get('user_id'):
         return api_error('Cannot clear your own MFA. Use the profile settings instead.', 400)
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
 
     success, message = user_manager.disable_mfa(user_id)
     if success:
@@ -7638,6 +7669,9 @@ def api_clear_user_mfa(user_id):
 @permission_required('panel.users.manage')
 def api_enable_user_account(user_id):
     """Enable a disabled user account (admin only)"""
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
     success, message = user_manager.enable_account(user_id)
     if success:
         return api_success(message=message)
@@ -7656,6 +7690,9 @@ def api_get_user(user_id):
 @permission_required('panel.users.manage')
 def api_admin_update_username(user_id):
     """Update a user's username (admin only)"""
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
     data = request.get_json()
     new_username = data.get('username', '').strip()
 
@@ -7671,6 +7708,9 @@ def api_admin_update_username(user_id):
 @permission_required('panel.users.manage')
 def api_admin_update_name(user_id):
     """Update a user's display name (admin only)"""
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
     data = request.get_json()
     name = data.get('name', '').strip()
 
@@ -7683,6 +7723,9 @@ def api_admin_update_name(user_id):
 @permission_required('panel.users.manage')
 def api_admin_update_email(user_id):
     """Update a user's email address (admin only)"""
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
     data = request.get_json()
     email = data.get('email', '').strip()
 
@@ -7698,6 +7741,9 @@ def api_delete_user(user_id):
     # Prevent deleting self
     if user_id == session.get('user_id'):
         return api_error('Cannot delete your own account', 400)
+    denied = _admin_target_denied(user_id)
+    if denied:
+        return denied
 
     if user_manager.delete_user(user_id):
         # Drop any live socket the deleted user still holds open from every room.
