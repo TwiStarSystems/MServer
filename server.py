@@ -10172,6 +10172,18 @@ def _provision_server(data, user_id, user):
     # single lock so two concurrent requests can't both pass the "port is free"
     # check and then each write the same port to a different server (issue #11).
     with server_manager.port_lock:
+        # A Java server.properties is about to be written without a port: the
+        # generator would fall back to 25565 unchecked, so every template
+        # deploy (templates never carry a port) and every portless create
+        # landed on the same one. Claim the first free port instead; it then
+        # goes through the same duplicate check as a requested one (issue #119).
+        if server_properties and category != 'bedrock' and 'server-port' not in server_properties:
+            used_ports = server_manager.get_all_used_ports()
+            free_port = next((p for p in range(25565, 65536) if str(p) not in used_ports), None)
+            if free_port is None:
+                return api_error('No free port is available for this server', 400)
+            server_properties = {**server_properties, 'server-port': str(free_port)}
+
         if 'server-port' in server_properties:
             new_port = str(server_properties['server-port'])
             existing_ports = server_manager.get_all_server_ports()
