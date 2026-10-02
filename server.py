@@ -350,8 +350,11 @@ MAX_RESOURCEPACK_SIZE_MB = _env_int('MAX_RESOURCEPACK_SIZE_MB', 100) # per-serve
 # server that crashes on every boot from restarting forever.
 CRASH_RESTART_DELAY_SECONDS = _env_int('CRASH_RESTART_DELAY_SECONDS', 10)
 CRASH_WINDOW_SECONDS = _env_int('CRASH_WINDOW_SECONDS', 3600)
-# A Java server stuck UNRESPONSIVE (process alive, port never opens) for this
-# long is a hang, not a slow start — auto-restart kills and relaunches it.
+# A Java server that was answering on its port and then stays UNRESPONSIVE
+# (process alive, port shut) for this long is hung — auto-restart kills and
+# relaunches it. A server that has not opened its port yet in this lifecycle is
+# never treated as hung: a large modpack can take longer than this to boot, and
+# killing it mid-start only guarantees it never finishes (issue #117).
 HANG_RESTART_SECONDS = _env_int('HANG_RESTART_SECONDS', 300)
 
 # --- Rollback points (issue #40) ---
@@ -6172,6 +6175,8 @@ class ServerInstance:
         self._breach_notified = False  # one breach alert per lifecycle
         self._unresponsive_since = None
         self._hang_handled = False
+        self._was_responsive = False   # port has answered at least once this lifecycle
+        self._probe_host = None        # address the readiness probe connects to
     
     def start(self):
         """Start the server process"""
@@ -6191,6 +6196,8 @@ class ServerInstance:
         self._breach_notified = False
         self._unresponsive_since = None
         self._hang_handled = False
+        self._was_responsive = False   # port has answered at least once this lifecycle
+        self._probe_host = None        # address the readiness probe connects to
 
         # Set environment
         env = os.environ.copy()
@@ -6614,6 +6621,10 @@ class ServerInstance:
     def _handle_hang(self):
         """Kill and relaunch a server that has been UNRESPONSIVE for too long.
 
+        Returns True if a kill-and-restart was started, False if nothing was
+        done (already handled, or the restart budget is spent) — the caller
+        keeps monitoring in that case.
+
         A live process whose port never opens is stuck, not slow — the status
         monitor has already waited out the startup grace period. The kill is
         flagged intentional so _handle_crash does not also fire and double-count
@@ -6621,11 +6632,11 @@ class ServerInstance:
         because a boot-loop that hangs is as damaging as one that crashes.
         """
         if self._hang_handled:
-            return
+            return False
         self._hang_handled = True
         name = self._server_name()
         detail = (f'unresponsive for over {HANG_RESTART_SECONDS // 60} minute(s) — the '
-                  f'process is alive but never opened its port')
+                  f'process is alive but stopped answering on its port')
         self._note(f'Hang detected — {detail}. Killing and restarting.')
 
         allowed, used = crash_supervisor.register(self.server_id, self.restart_attempts)
@@ -6635,7 +6646,7 @@ class ServerInstance:
             self._alert_owner_and_admins(
                 'Server hung', f'"{name}" is {detail}, and its automatic-restart budget '
                 f'is spent. Stop or kill it by hand.')
-            return
+            return False
 
         self._alert_owner_and_admins(
             'Server hung — restarting',
@@ -6651,6 +6662,7 @@ class ServerInstance:
                 return
             self._delayed_restart(CRASH_RESTART_DELAY_SECONDS)
         threading.Thread(target=_worker, daemon=True).start()
+        return True
 
     def _start_health_watch(self):
         """Watch a freshly-started server long enough to call it healthy.
@@ -6822,13 +6834,38 @@ class ServerInstance:
         if not port:
             return False
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            result = sock.connect_ex(('localhost', port))
-            sock.close()
-            return result == 0
+            # create_connection resolves the host itself, so an IPv6 server-ip
+            # works as well as an IPv4 one.
+            with socket.create_connection((self._get_probe_host(), port), timeout=timeout):
+                return True
         except Exception:
             return False
+
+    def _get_probe_host(self):
+        """Address the readiness probe should connect to.
+
+        'localhost' unless server.properties pins the server to one address
+        with server-ip: a server bound to a specific address does not answer on
+        localhost, and probing there made it look permanently unresponsive
+        (issue #117). Read once per lifecycle.
+        """
+        if self._probe_host:
+            return self._probe_host
+        host = 'localhost'
+        props_file = self.server_path / 'server.properties'
+        try:
+            with open(props_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('server-ip='):
+                        value = line.split('=', 1)[1].strip()
+                        if value and value not in ('0.0.0.0', '::'):
+                            host = value
+                        break
+        except OSError:
+            pass
+        self._probe_host = host
+        return host
     
     def _get_server_port(self):
         """Extract server port from server.properties"""
@@ -6949,15 +6986,22 @@ class ServerInstance:
 
                 # Hang watchdog: track how long the port has been shut and, with
                 # auto-restart on, recycle a process that is alive but stuck.
+                # Only a server that was reachable earlier in this lifecycle
+                # can be hung; one that never opened its port is still booting.
                 if tcp_responsive:
                     self._unresponsive_since = None
+                    self._was_responsive = True
                 else:
                     if self._unresponsive_since is None and elapsed >= 30:
                         self._unresponsive_since = time.time()
-                    if (self.auto_restart and self._unresponsive_since
+                    if (self.auto_restart and self._was_responsive and self._unresponsive_since
                             and time.time() - self._unresponsive_since >= HANG_RESTART_SECONDS):
-                        self._handle_hang()
-                        return
+                        # Returns True only when it is about to kill and
+                        # relaunch — then this instance is finished. With the
+                        # restart budget spent the process stays up, so the
+                        # loop has to keep watching it.
+                        if self._handle_hang():
+                            return
 
                 if new_status and new_status != self.status:
                     self.status = new_status
