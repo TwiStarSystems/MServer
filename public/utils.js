@@ -224,23 +224,6 @@ function formatDateTime(value, { fallback = '-', timeOnly = false } = {}) {
 }
 
 /**
- * Format a date with no time component. No timezone is appended — there is no
- * clock reading to disambiguate, and a bare "GMT+2" next to a date reads as
- * noise. Use formatDateTime() whenever a time is shown.
- *
- * @param {string|number|Date} value
- * @param {Object} [opts]
- * @param {string} [opts.fallback='-']
- * @returns {string}
- */
-function formatDate(value, { fallback = '-' } = {}) {
-  if (value === null || value === undefined || value === '') return fallback;
-  const d = value instanceof Date ? value : new Date(value);
-  if (isNaN(d.getTime())) return fallback;
-  return d.toLocaleDateString();
-}
-
-/**
  * Password policy — must stay in sync with the server (UserManager.register /
  * create_user / change_password / reset_password and the admin reset route in
  * server.py, which all enforce the same rule). The client check is only a

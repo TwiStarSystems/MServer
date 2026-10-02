@@ -623,7 +623,7 @@ MServer/
 ├── msc.db                    # SQLite database (users, servers, jobs, stats — generated)
 ├── settings.json             # App settings and branding (generated)
 ├── configs/
-│   └── jarurls.conf          # JAR download URL configuration
+│   └── jar_bucket_links.json # Per-type JAR download link overrides (generated)
 ├── public/                   # Frontend files
 │   ├── index.html            # Main dashboard page
 │   ├── login.html            # Login/registration page

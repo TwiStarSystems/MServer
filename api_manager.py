@@ -759,4 +759,4 @@ def init_api_manager(app, server_manager, get_current_user, group_manager, read_
 
     app.register_blueprint(api_v1)
     app.register_blueprint(api_v1_admin)
-    print(f"[API Manager] Public API v1 initialized at /api/v1/")
+    print("[API Manager] Public API v1 initialized at /api/v1/")

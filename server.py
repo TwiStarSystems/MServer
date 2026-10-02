@@ -28,7 +28,6 @@ import select
 import pyotp
 import qrcode
 import argparse
-import sys
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -283,7 +282,6 @@ JOBS_TMP_DIR = UPLOADS_DIR / 'jobs'   # prepared zip-download artifacts produced
 RESOURCEPACKS_DIR = BASE_DIR / 'public' / 'resourcepacks'
 SETTINGS_PATH = BASE_DIR / 'settings.json'
 DB_PATH = _env_path('DB_PATH', BASE_DIR / 'msc.db')
-JAR_URLS_PATH = BASE_DIR / 'configs' / 'jarurls.conf'
 TOOLS_DIR = BASE_DIR / 'tools'
 VERSION_FILE = BASE_DIR / 'version'
 
@@ -2551,35 +2549,6 @@ class MessageScheduler:
             result.append(m)
         return result
 
-    def get_message(self, server_id, msg_id):
-        """
-        Fetch one scheduled message.
-
-        Args:
-            server_id: Owning server — part of the lookup, so a message cannot be
-                read through another server's route.
-            msg_id: Message to fetch.
-
-        Returns:
-            The message dict, with 'nextRun' added for a live cron job (see
-            get_messages), or None if no such message exists for that server.
-        """
-        row = get_db().execute(
-            'SELECT * FROM scheduled_messages WHERE id=? AND server_id=?',
-            (msg_id, server_id)
-        ).fetchone()
-        if row is None:
-            return None
-        m = self._row_to_dict(row)
-        if m['trigger'] == 'cron':
-            try:
-                job = self.scheduler.get_job(f"msg_{server_id}_{msg_id}")
-                if job and job.next_run_time:
-                    m['nextRun'] = job.next_run_time.isoformat()
-            except Exception:
-                pass
-        return m
-
     def test_message(self, server_id, config):
         """Send a message immediately without saving it."""
         instance = self.server_manager.servers.get(server_id)
@@ -4234,35 +4203,12 @@ class PendingActionManager:
                ORDER BY created DESC''').fetchall()
         return [self._row_to_dict(r) for r in rows]
 
-    def get_all(self, limit=100):
-        """
-        Recent actions in every status (default 100), newest first — the audit
-        view, unlike get_pending() which shows only the open queue.
-        """
-        conn = get_db()
-        rows = conn.execute(
-            'SELECT * FROM pending_actions ORDER BY created DESC LIMIT ?',
-            (limit,)).fetchall()
-        return [self._row_to_dict(r) for r in rows]
-
     def get_by_id(self, action_id):
         """Fetch one pending action by id, in any status; None if unknown."""
         conn = get_db()
         row = conn.execute(
             'SELECT * FROM pending_actions WHERE id=?', (action_id,)).fetchone()
         return self._row_to_dict(row)
-
-    def get_pending_for_user(self, user_id):
-        """
-        One user's own still-pending requests — what the requester sees while
-        waiting, as opposed to the admin-wide get_pending().
-        """
-        conn = get_db()
-        rows = conn.execute(
-            '''SELECT * FROM pending_actions
-               WHERE user_id=? AND status='pending' ORDER BY created DESC''',
-            (user_id,)).fetchall()
-        return [self._row_to_dict(r) for r in rows]
 
     def approve(self, action_id, admin_id, note=None):
         """
@@ -4570,27 +4516,6 @@ class JarVersionManager:
     
     # Server executables directory
     EXECUTABLES_DIR = BASE_DIR / 'serverexecutables'
-    
-    def __init__(self):
-        self.jar_urls = self._load_jar_urls()
-    
-    def _load_jar_urls(self):
-        """Load JAR URLs from config file"""
-        urls = {}
-        if JAR_URLS_PATH.exists():
-            with open(JAR_URLS_PATH, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    if '=' in line:
-                        key, url = line.split('=', 1)
-                        if ':' in key:
-                            server_type, version = key.split(':', 1)
-                            if server_type not in urls:
-                                urls[server_type] = {}
-                            urls[server_type][version] = url
-        return urls
     
     def _scan_local_jars(self):
         """
@@ -9993,15 +9918,6 @@ def api_public_servers():
     return api_success(servers=public_servers)
 
 
-# ==================== JAR/Version API ====================
-
-@app.route('/api/default-server-path', methods=['GET'])
-@login_required
-def get_default_server_path():
-    """Get the default server installation path"""
-    return api_success(path=str(SERVERS_DIR))
-
-
 # ==================== Server Management API ====================
 
 @app.route('/api/servers', methods=['GET'])
@@ -10089,7 +10005,7 @@ def _generate_server_properties(custom_properties, server_name='A Minecraft Serv
     # Build the properties file content
     lines = [
         '# Minecraft server properties',
-        f'# Generated by MServer',
+        '# Generated by MServer',
         ''
     ]
     
@@ -14483,7 +14399,6 @@ def get_resourcepack_info(server_id):
     if server_config and server_config.get('category') == 'bedrock':
         return api_error('Resource packs are not supported for Bedrock servers', 400)
 
-    server_path = server_manager.get_server_path(server_id)
     resourcepack_path = RESOURCEPACKS_DIR / f"{server_id}.zip"
 
     if not resourcepack_path.exists():
@@ -16452,12 +16367,6 @@ class JarBucketManager:
             entry = self.download_progress.get(progress_id)
             return dict(entry) if entry is not None else None
 
-    def list_progress(self):
-        """Return {progress_id: entry-copy} for every tracked task (thread-safe)."""
-        with self._progress_lock:
-            self._prune_progress_locked()
-            return {pid: dict(entry) for pid, entry in self.download_progress.items()}
-
     def _prune_progress_locked(self):
         """Drop finished entries older than the retention window. Caller holds the lock."""
         cutoff = time.time() - self.PROGRESS_RETENTION_SECONDS
@@ -16832,7 +16741,7 @@ class JarBucketManager:
             loader_version = self._get_fabric_loader_version()
             installer_version = self._get_fabric_installer_version()
             if not loader_version or not installer_version:
-                print(f"[JarBucket] Could not resolve Fabric loader/installer versions from API")
+                print("[JarBucket] Could not resolve Fabric loader/installer versions from API")
                 return None, None
             download_url = self.get_link('fabric', 'downloadTemplate').format(
                 game_version=game_version,
@@ -17761,15 +17670,6 @@ def api_jar_bucket_restore_all():
         return jsonify(result)
     return jsonify(result), 400
 
-@app.route('/api/jar-bucket/info/<server_type>/<version>', methods=['GET'])
-@permission_required('panel.jars.manage')
-def api_jar_bucket_info(server_type, version):
-    """Get download info for a specific version (URL, hash, etc.)"""
-    info = jar_bucket.get_download_info(server_type, version)
-    if info:
-        return api_success(info)
-    return api_error('Version not found', 404)
-
 @app.route('/api/jar-bucket/links', methods=['GET'])
 @admin_required
 def api_jar_bucket_links_get():
@@ -17802,38 +17702,6 @@ def api_jar_bucket_links_test(server_type):
     result = jar_bucket.test_links(server_type)
     status = 200 if result.get('success') else 400
     return jsonify(result), status
-
-@app.route('/api/jar-bucket/refresh', methods=['POST'])
-@permission_required('panel.jars.manage')
-def api_jar_bucket_refresh():
-    """Force refresh the version cache for one or all server types"""
-    data = request.get_json() or {}
-    server_type = data.get('type')
-
-    if server_type:
-        jar_bucket.get_versions(server_type, force_refresh=True)
-        return api_success(message=f'Refreshed {server_type} versions')
-    else:
-        for st in jar_bucket.SERVER_TYPES.keys():
-            jar_bucket.get_versions(st, force_refresh=True)
-        return api_success(message='Refreshed all versions')
-
-@app.route('/api/jar-bucket/check/<server_type>/<version>', methods=['GET'])
-@login_required
-def api_jar_bucket_check(server_type, version):
-    """Check if a specific JAR version is downloaded locally"""
-    # Check in both the old jar_manager and new jar_bucket
-    local_jar = jar_manager.get_local_jar_info(server_type, version)
-    
-    if local_jar:
-        return api_success(
-            downloaded=True,
-            filename=local_jar.get('filename'),
-            size=local_jar.get('size'),
-            path=local_jar.get('path')
-        )
-
-    return api_success(downloaded=False)
 
 @app.route('/api/jar-bucket/all-types', methods=['GET'])
 @login_required
