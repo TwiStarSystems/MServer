@@ -3120,6 +3120,7 @@ class UserManager:
             'accountDisabled':      bool(row['account_disabled']),
             'disabledAt':           row['disabled_at'],
             'isAntiLockout':        bool(row['is_anti_lockout']),
+            'sessionVersion':       (row['session_version'] or 0) if 'session_version' in row.keys() else 0,
             'notificationPrefs':    prefs,
         }
 
@@ -4382,11 +4383,16 @@ def _session_stamp(user):
 
     Sessions are signed client-side cookies with no server-side record, so
     there is nothing to delete when a password is changed or reset. Instead the
-    session carries this digest of the user's current password hash and MFA
-    secret, and get_current_user() rejects a session whose digest no longer
-    matches — every cookie issued before the change dies with it (issue #104).
+    session carries this digest of the user's current password hash, MFA secret
+    and session_version, and get_current_user() rejects a session whose digest
+    no longer matches — every cookie issued before the change dies with it
+    (issue #104). session_version is the part logout bumps.
     """
     material = f"{user.get('password') or ''}|{user.get('mfaSecret') or ''}"
+    # Appended only once it is non-zero, so sessions issued before the column
+    # existed (version 0) keep the stamp they already carry.
+    if user.get('sessionVersion'):
+        material += f"|{user['sessionVersion']}"
     return hashlib.sha256(material.encode('utf-8')).hexdigest()[:16]
 
 
@@ -8745,7 +8751,18 @@ def api_login():
 @app.route('/api/auth/logout', methods=['POST'])
 @csrf.exempt
 def api_logout():
-    """Log out user"""
+    """Log out user.
+
+    Clearing the cookie only makes this browser forget it; a copy of the same
+    cookie would still be accepted. Bumping session_version changes the
+    session stamp, which revokes it server-side. The stamp is per user, not
+    per device, so this signs the account out everywhere (issue #104).
+    """
+    user_id, user = get_current_user()
+    if user:
+        conn = get_db()
+        conn.execute('UPDATE users SET session_version = session_version + 1 WHERE id=?', (user_id,))
+        conn.commit()
     session.clear()
     return api_success()
 

@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS users (
     disabled_at           TEXT,
     is_anti_lockout       INTEGER NOT NULL DEFAULT 0,
     notification_prefs    TEXT NOT NULL DEFAULT '{}',
+    -- Bumped on logout; part of the session stamp, so every cookie issued
+    -- before the bump stops working (see _session_stamp in server.py).
+    session_version       INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE SET NULL
 );
 
@@ -402,6 +405,9 @@ _COLUMN_MIGRATIONS = {
         ('limit_action',      "TEXT NOT NULL DEFAULT 'warn'"),
         ('auto_restart',      'INTEGER NOT NULL DEFAULT 0'),
         ('restart_attempts',  'INTEGER NOT NULL DEFAULT 3'),
+    ],
+    'users': [
+        ('session_version',   'INTEGER NOT NULL DEFAULT 0'),
     ],
 }
 
