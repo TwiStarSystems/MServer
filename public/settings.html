@@ -8,7 +8,12 @@
   <meta http-equiv="Expires" content="0">
   <title>Settings - MServer</title>
   <link rel="stylesheet" href="styles.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Pinned + SRI: an unversioned URL serves whatever the latest release is (issue #115).
+       To upgrade, change the version and regenerate the hash:
+       curl -s <url> | openssl dgst -sha384 -binary | openssl base64 -A -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+          integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+          crossorigin="anonymous"></script>
 </head>
 <body>
   <div class="settings-app-container">
@@ -1172,7 +1177,9 @@
     </div>
   </div>
 
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"
+          integrity="sha384-mZLF4UVrpi/QTWPA7BjNPEnkIfRFn4ZEO3Qt/HFklTJBj/gBOV8G3HcKn4NfQblz"
+          crossorigin="anonymous"></script>
   <script src="utils.js"></script>
   <script src="notifications.js"></script>
   <script src="settings.js"></script>
