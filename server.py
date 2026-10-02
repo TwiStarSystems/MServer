@@ -6,6 +6,7 @@ Python/Flask implementation with multi-server support and RBAC
 
 import os
 import io
+import copy
 import re
 import gzip
 import json
@@ -340,6 +341,7 @@ def upgrade_bedrock_launcher(launcher_path):
 DEFAULT_JAVA_ARGS = _env_str('DEFAULT_JAVA_ARGS', '-Xmx4G -Xms1G')  # default JVM args for new servers
 JAVA_BINARY = _env_str('JAVA_BINARY', 'java')                        # java executable (name on PATH or absolute path)
 MFA_TIMEOUT_SECONDS = _env_int('MFA_TIMEOUT_SECONDS', 300)           # pending-MFA login window
+SMTP_TIMEOUT_SECONDS = _env_int('SMTP_TIMEOUT_SECONDS', 20)          # connect/read timeout for outgoing mail
 MAX_RESOURCEPACK_SIZE_MB = _env_int('MAX_RESOURCEPACK_SIZE_MB', 100) # per-server resource pack upload cap
 
 # --- Crash detection / automatic restart (issue #40) ---
@@ -562,31 +564,64 @@ class SettingsManager:
     }
     
     def __init__(self):
+        self._save_lock = threading.Lock()
         self.settings = self._load_settings()
     
     def _load_settings(self):
-        """Load settings from file"""
+        """Load settings from file, filling in any key the file lacks.
+
+        Defaults are deep-copied on the way in: handing out the class-level
+        DEFAULT_SETTINGS dicts themselves meant the first update on a fresh
+        install rewrote the defaults for the rest of the process.
+
+        A file that exists but cannot be parsed is NOT silently replaced by
+        defaults — that dropped the SMTP/webhook/backup credentials and reset
+        the policies and MFA requirement without a word. It is copied aside as
+        settings.json.corrupt-<timestamp> and reported, and the panel then runs
+        on defaults until the operator restores it (issue #113).
+        """
+        defaults = copy.deepcopy(self.DEFAULT_SETTINGS)
         if SETTINGS_PATH.exists():
             try:
                 with open(SETTINGS_PATH, 'r') as f:
                     settings = json.load(f)
-                    # Merge with defaults to ensure all keys exist
-                    for key, value in self.DEFAULT_SETTINGS.items():
-                        if key not in settings:
-                            settings[key] = value
-                        elif isinstance(value, dict):
-                            for k, v in value.items():
-                                if k not in settings[key]:
-                                    settings[key][k] = v
-                    return settings
-            except Exception:
-                pass
-        return self.DEFAULT_SETTINGS.copy()
+                if not isinstance(settings, dict):
+                    raise ValueError('settings.json does not contain a JSON object')
+                # Merge with defaults to ensure all keys exist
+                for key, value in defaults.items():
+                    if key not in settings:
+                        settings[key] = value
+                    elif isinstance(value, dict) and isinstance(settings[key], dict):
+                        for k, v in value.items():
+                            if k not in settings[key]:
+                                settings[key][k] = v
+                return settings
+            except Exception as e:
+                saved_as = SETTINGS_PATH.with_name(
+                    f"{SETTINGS_PATH.name}.corrupt-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+                try:
+                    shutil.copy2(SETTINGS_PATH, saved_as)
+                except OSError:
+                    saved_as = None
+                print(f"[Settings] ⚠️  {SETTINGS_PATH} could not be read ({e}). "
+                      f"Starting with DEFAULT settings"
+                      + (f"; the unreadable file was kept as {saved_as.name}." if saved_as else "."),
+                      flush=True)
+        return defaults
     
     def _save_settings(self):
-        """Save settings to file"""
-        with open(SETTINGS_PATH, 'w') as f:
-            json.dump(self.settings, f, indent=2)
+        """Save settings to file.
+
+        Written to a temp file and moved into place, under a lock, so neither a
+        crash mid-write nor two concurrent saves can leave a truncated file.
+        """
+        with self._save_lock:
+            tmp_path = SETTINGS_PATH.with_name(SETTINGS_PATH.name + '.tmp')
+            with open(tmp_path, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, SETTINGS_PATH)
     
     def get_settings(self):
         """Get all settings"""
@@ -617,9 +652,16 @@ class SettingsManager:
         if 'app' not in self.settings:
             self.settings['app'] = {}
 
-        for key in ['enableRegistration', 'globalMaxBackups', 'autoDeleteExpiredBackups']:
+        for key in ['enableRegistration', 'autoDeleteExpiredBackups']:
             if key in app_data:
-                self.settings['app'][key] = app_data[key]
+                self.settings['app'][key] = bool(app_data[key])
+        if 'globalMaxBackups' in app_data:
+            # Compared numerically by the retention code; a non-number stored
+            # here made every cleanup raise. An unusable value is ignored.
+            try:
+                self.settings['app']['globalMaxBackups'] = max(0, int(app_data['globalMaxBackups']))
+            except (TypeError, ValueError):
+                pass
 
         if 'policies' in app_data and isinstance(app_data['policies'], dict):
             self.update_policies(app_data['policies'])
@@ -982,12 +1024,19 @@ class EmailService:
             # Add HTML part
             msg.attach(MIMEText(html_content, 'html'))
             
-            # Connect to SMTP server
-            if smtp_settings.get('secure', True):
-                server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'])
+            # Connect to SMTP server. Always with a timeout: without one an
+            # unresponsive host blocked the calling thread forever. Port 465
+            # speaks TLS from the first byte (implicit TLS), so STARTTLS on a
+            # plain connection can never work there.
+            host = smtp_settings['host']
+            port = int(smtp_settings.get('port') or 587)
+            if smtp_settings.get('secure', True) and port == 465:
+                server = smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT_SECONDS)
+            elif smtp_settings.get('secure', True):
+                server = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS)
                 server.starttls()
             else:
-                server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'])
+                server = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS)
             
             # Login if credentials provided
             if smtp_settings.get('username') and smtp_settings.get('password'):
@@ -9643,7 +9692,7 @@ def api_get_notifications():
     """
     user_id, _ = get_current_user()
     include_dismissed = request.args.get('includeDismissed', 'false').lower() == 'true'
-    limit = min(int(request.args.get('limit', 50)), 200)
+    limit = max(1, min(request.args.get('limit', 50, type=int) or 50, 200))
     return api_success({
         'notifications': notification_manager.get_for_user(user_id, include_dismissed, limit),
         'unreadCount': notification_manager.unread_count(user_id)
@@ -10736,7 +10785,9 @@ def import_server():
 
     # Save uploaded file temporarily
     filename = secure_filename(file.filename)
-    temp_path = UPLOADS_DIR / filename
+    # Unique per request: two uploads of e.g. "world.zip" used to share one
+    # temp file and overwrite — or delete — each other's.
+    temp_path = UPLOADS_DIR / f'{uuid.uuid4().hex}-{filename}'
     
     try:
         file.save(str(temp_path))
@@ -10815,7 +10866,9 @@ def import_world(server_id):
 
     server_path = Path(server_config['serverPath']).resolve()
     filename = secure_filename(file.filename)
-    temp_path = UPLOADS_DIR / filename
+    # Unique per request: two uploads of e.g. "world.zip" used to share one
+    # temp file and overwrite — or delete — each other's.
+    temp_path = UPLOADS_DIR / f'{uuid.uuid4().hex}-{filename}'
 
     try:
         file.save(str(temp_path))
@@ -11541,8 +11594,27 @@ def read_server_logs(server_id):
 
 # ==================== NBT File Endpoints ====================
 
+# nbt_editor is one shared NBTEditor, and it carries per-file state between
+# calls: read_file() records the file's compression on the instance and
+# write_file() reads it back. Two NBT requests interleaving on different
+# threads could therefore write a file with the other one's compression
+# (issue #113). The files are small and edits are rare, so the routes simply
+# take turns.
+_nbt_lock = threading.Lock()
+
+
+def _nbt_serialized(f):
+    """Run an NBT route while holding _nbt_lock."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        with _nbt_lock:
+            return f(*args, **kwargs)
+    return decorated_function
+
+
 @app.route('/api/servers/<server_id>/nbt/read', methods=['GET'])
 @server_access_required
+@_nbt_serialized
 def read_nbt_file(server_id):
     """Read and parse an NBT file (.dat)"""
     requested_path = request.args.get('path', '')
@@ -11568,6 +11640,7 @@ def read_nbt_file(server_id):
 
 @app.route('/api/servers/<server_id>/nbt/write', methods=['POST'])
 @server_access_required
+@_nbt_serialized
 def write_nbt_file(server_id):
     """Write modified NBT data back to file"""
     data = request.get_json()
@@ -11590,6 +11663,7 @@ def write_nbt_file(server_id):
 
 @app.route('/api/servers/<server_id>/nbt/update', methods=['POST'])
 @server_access_required
+@_nbt_serialized
 def update_nbt_value(server_id):
     """Update a single value in an NBT file"""
     data = request.get_json()
@@ -11613,6 +11687,7 @@ def update_nbt_value(server_id):
 
 @app.route('/api/servers/<server_id>/nbt/add', methods=['POST'])
 @server_access_required
+@_nbt_serialized
 def add_nbt_tag(server_id):
     """Add a new tag to an NBT file"""
     data = request.get_json()
@@ -11636,6 +11711,7 @@ def add_nbt_tag(server_id):
 
 @app.route('/api/servers/<server_id>/nbt/delete', methods=['POST'])
 @server_access_required
+@_nbt_serialized
 def delete_nbt_tag(server_id):
     """Delete a tag from an NBT file"""
     data = request.get_json()
@@ -15021,6 +15097,10 @@ def create_rollback_point(server_id):
     server_name = config.get('name', server_id)
 
     label = str(data.get('label') or 'Manual restore point').strip()[:120]
+    try:
+        compression_level = max(0, min(9, int(data.get('compressionLevel', 6))))
+    except (TypeError, ValueError):
+        return api_error('compressionLevel must be a number from 0 to 9', 400)
     timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
 
     # The policy payload is the job's params verbatim (plus serverName, which
@@ -15029,7 +15109,7 @@ def create_rollback_point(server_id):
     # come back as a plain backup with no rollback point attached.
     job_params = {
         'serverId': server_id,
-        'compressionLevel': max(0, min(9, int(data.get('compressionLevel', 6)))),
+        'compressionLevel': compression_level,
         'backupType': 'restore-point',
         'customName': f'restore-point-{timestamp}.zip',
         'rollbackPoint': True,
@@ -17945,7 +18025,10 @@ def run_tool(tool_name):
     # Get optional arguments from request body
     data = request.get_json() or {}
     args_string = data.get('args', '').strip()
-    timeout_seconds = min(data.get('timeout', 300), 600)  # Max 10 minutes
+    try:
+        timeout_seconds = max(1, min(int(data.get('timeout', 300)), 600))  # Max 10 minutes
+    except (TypeError, ValueError):
+        return api_error('timeout must be a number of seconds', 400)
 
     # Parse arguments (split by whitespace, respecting quotes)
     import shlex
