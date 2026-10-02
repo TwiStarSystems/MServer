@@ -130,7 +130,14 @@ CREATE TABLE IF NOT EXISTS servers (
     auto_start  INTEGER NOT NULL DEFAULT 0,
     approved    INTEGER NOT NULL DEFAULT 1,
     category    TEXT NOT NULL DEFAULT 'unmodded',
-    created     TEXT NOT NULL
+    created     TEXT NOT NULL,
+    -- Per-server resource limits (0 = unlimited). See ResourceLimits in server.py.
+    memory_limit_mb   INTEGER NOT NULL DEFAULT 0,
+    cpu_limit_percent INTEGER NOT NULL DEFAULT 0,
+    limit_action      TEXT NOT NULL DEFAULT 'warn',   -- warn|stop, applied when a cap is exceeded
+    -- Automatic restart on crash detection
+    auto_restart      INTEGER NOT NULL DEFAULT 0,
+    restart_attempts  INTEGER NOT NULL DEFAULT 3      -- max auto-restarts per CRASH_WINDOW_SECONDS
 );
 
 -- ── Backup Schedules ──────────────────────────────────────────────────────────
@@ -320,7 +327,104 @@ CREATE TABLE IF NOT EXISTS server_group_access (
     FOREIGN KEY (group_id)  REFERENCES groups(id)  ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_sga_group ON server_group_access(group_id);
+
+-- ── Rollback Points ──────────────────────────────────────────────────────────
+-- One row per safety backup taken before a risky change (version change, mod
+-- install, or an explicit restore point). backup_name is a file inside
+-- backups/<server_id>/; the row is the panel's record of what that archive was
+-- taken *for*, so a failed change can be undone in one click.
+CREATE TABLE IF NOT EXISTS rollback_points (
+    id           TEXT PRIMARY KEY,
+    server_id    TEXT NOT NULL,
+    kind         TEXT NOT NULL DEFAULT 'version_change',  -- version_change|manual|mod_install
+    backup_name  TEXT NOT NULL,          -- file in backups/<server_id>/
+    label        TEXT NOT NULL DEFAULT '',
+    from_version TEXT,
+    to_version   TEXT,
+    engine       TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
+                 -- pending: change applied, server not yet proven healthy
+                 -- verified: server started and stayed up past the health window
+                 -- failed: server crashed/never came up after the change
+                 -- rolled_back: the archive was restored over the server
+                 -- dismissed: operator cleared it by hand
+    detail       TEXT,                   -- failure reason / notes
+    created      TEXT NOT NULL,
+    resolved     TEXT,
+    created_by   TEXT,
+    FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_rollback_points_server
+    ON rollback_points(server_id, created DESC);
+CREATE INDEX IF NOT EXISTS idx_rollback_points_status
+    ON rollback_points(server_id, status);
+
+-- ── Server Templates ─────────────────────────────────────────────────────────
+-- A reusable server recipe: engine/version/JVM args/limits plus a snapshot of
+-- server.properties. Templates hold configuration only — never world data or
+-- JARs — so they stay small and safe to export and share.
+CREATE TABLE IF NOT EXISTS server_templates (
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    description       TEXT NOT NULL DEFAULT '',
+    category          TEXT NOT NULL DEFAULT 'unmodded',   -- unmodded|modded|bedrock
+    server_type       TEXT,                               -- engine: vanilla|paper|folia|...
+    version           TEXT,
+    java_args         TEXT NOT NULL DEFAULT '',
+    properties        TEXT NOT NULL DEFAULT '{}',         -- JSON: server.properties overrides
+    memory_limit_mb   INTEGER NOT NULL DEFAULT 0,
+    cpu_limit_percent INTEGER NOT NULL DEFAULT 0,
+    limit_action      TEXT NOT NULL DEFAULT 'warn',
+    auto_restart      INTEGER NOT NULL DEFAULT 0,
+    restart_attempts  INTEGER NOT NULL DEFAULT 3,
+    owner             TEXT,                               -- user_id of the creator
+    shared            INTEGER NOT NULL DEFAULT 0,         -- visible to every user
+    use_count         INTEGER NOT NULL DEFAULT 0,
+    created           TEXT NOT NULL,
+    updated           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_server_templates_owner
+    ON server_templates(owner, created DESC);
 """
+
+
+# ── Additive column migrations ────────────────────────────────────────────────
+# CREATE TABLE IF NOT EXISTS never touches a table that already exists, so a
+# column added to _SCHEMA only ever reaches a brand-new database. Any column
+# added to an existing table after a release therefore needs an entry here too —
+# _apply_column_migrations() adds the missing ones on the next boot. SQLite's
+# ALTER TABLE ADD COLUMN requires a non-NULL default for a NOT NULL column,
+# which is also what gives existing rows a sane value.
+_COLUMN_MIGRATIONS = {
+    'servers': [
+        ('memory_limit_mb',   'INTEGER NOT NULL DEFAULT 0'),
+        ('cpu_limit_percent', 'INTEGER NOT NULL DEFAULT 0'),
+        ('limit_action',      "TEXT NOT NULL DEFAULT 'warn'"),
+        ('auto_restart',      'INTEGER NOT NULL DEFAULT 0'),
+        ('restart_attempts',  'INTEGER NOT NULL DEFAULT 3'),
+    ],
+}
+
+
+def _apply_column_migrations():
+    """Add any _COLUMN_MIGRATIONS column that an existing table is missing.
+
+    Idempotent: each column is added only when PRAGMA table_info says it is
+    absent, so this is safe on every boot. Table and column names come from the
+    literal dict above, never from user input — DDL cannot be parameterised.
+    """
+    conn = get_db()
+    changed = False
+    for table, columns in _COLUMN_MIGRATIONS.items():
+        existing = {r['name'] for r in conn.execute(f'PRAGMA table_info({table})')}
+        if not existing:
+            continue  # table does not exist yet; _SCHEMA already created it with these
+        for name, ddl in columns:
+            if name not in existing:
+                conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+                changed = True
+    if changed:
+        conn.commit()
 
 
 # Keep in sync with GroupManager.ALL_PERMISSIONS in server.py — only permissions
@@ -364,13 +468,16 @@ def _seed_default_groups():
 
 def init_db():
     """
-    Create all tables and indexes if they do not already exist.
+    Create all tables and indexes if they do not already exist, then apply any
+    additive column migrations an older database is missing.
     Safe to call on every application startup — all statements use
-    CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE.
+    CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE, and the column migrations
+    only fire for columns PRAGMA table_info reports as absent.
     """
     conn = get_db()
     conn.executescript(_SCHEMA)
     conn.commit()
+    _apply_column_migrations()
     _seed_default_groups()
     recover_interrupted_jobs()
 

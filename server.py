@@ -342,6 +342,37 @@ JAVA_BINARY = _env_str('JAVA_BINARY', 'java')                        # java exec
 MFA_TIMEOUT_SECONDS = _env_int('MFA_TIMEOUT_SECONDS', 300)           # pending-MFA login window
 MAX_RESOURCEPACK_SIZE_MB = _env_int('MAX_RESOURCEPACK_SIZE_MB', 100) # per-server resource pack upload cap
 
+# --- Crash detection / automatic restart (issue #40) ---
+# A server process that exits without the panel asking it to is treated as a
+# crash. CRASH_RESTART_DELAY_SECONDS is the pause before the auto-restart so a
+# port or lock file has time to clear; CRASH_WINDOW_SECONDS is the sliding
+# window the per-server attempt budget is counted over, which is what stops a
+# server that crashes on every boot from restarting forever.
+CRASH_RESTART_DELAY_SECONDS = _env_int('CRASH_RESTART_DELAY_SECONDS', 10)
+CRASH_WINDOW_SECONDS = _env_int('CRASH_WINDOW_SECONDS', 3600)
+# A Java server stuck UNRESPONSIVE (process alive, port never opens) for this
+# long is a hang, not a slow start — auto-restart kills and relaunches it.
+HANG_RESTART_SECONDS = _env_int('HANG_RESTART_SECONDS', 300)
+
+# --- Rollback points (issue #40) ---
+# How long a server must stay up after a risky change before the rollback point
+# taken for it is marked 'verified'. Shorter than this and a crash is assumed to
+# be caused by the change.
+ROLLBACK_HEALTH_WINDOW_SECONDS = _env_int('ROLLBACK_HEALTH_WINDOW_SECONDS', 180)
+
+# --- Per-server resource limits (issue #40) ---
+# How often a running instance samples its own process tree's CPU/RAM, and how
+# many consecutive over-limit samples are needed before the limit_action fires.
+# Requiring several in a row keeps a momentary chunk-generation spike from
+# tripping the cap.
+RESOURCE_SAMPLE_SECONDS = _env_int('RESOURCE_SAMPLE_SECONDS', 10)
+RESOURCE_BREACH_SAMPLES = _env_int('RESOURCE_BREACH_SAMPLES', 3)
+# Headroom the sampler allows above the configured memory cap before it calls a
+# breach. A JVM's resident set legitimately exceeds its -Xmx heap by metaspace,
+# thread stacks, the code cache and direct buffers, so alarming at exactly the
+# cap would fire on every healthy Java server the moment the limit is set.
+RESOURCE_MEMORY_GRACE_PERCENT = _env_int('RESOURCE_MEMORY_GRACE_PERCENT', 25)
+
 # Ensure directories exist
 for directory in [SERVERS_DIR, BACKUPS_DIR, UPLOADS_DIR, JOBS_TMP_DIR, TOOLS_DIR, RESOURCEPACKS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
@@ -836,6 +867,23 @@ class EmailService:
                 '</div></body></html>'
             ),
             'text': 'Server Stopped\nServer: {{ serverName }}\nTime: {{ timestamp }}'
+        },
+        'server_crash': {
+            'subject': '[{{ siteTitle }}] Server Crashed: {{ serverName }}',
+            'html': (
+                '<html><body style="font-family:Arial,sans-serif;background-color:#1a1a2e;color:#e0e0e0;padding:20px;">'
+                '<div style="max-width:600px;margin:0 auto;background-color:#16213e;border-radius:8px;padding:30px;">'
+                '<h2 style="color:#ef4444;margin-top:0;">💥 Server Crashed</h2>'
+                '<p style="margin:10px 0;"><strong>Server:</strong> {{ serverName }}</p>'
+                '<p style="margin:10px 0;"><strong>Exit code:</strong> {{ exitCode }}</p>'
+                '<p style="margin:10px 0;"><strong>Uptime before the crash:</strong> {{ uptime }}s</p>'
+                '<p style="margin:10px 0;"><strong>Time:</strong> {{ timestamp }}</p>'
+                '<hr style="border:1px solid #333;margin:20px 0;">'
+                '<p style="color:#888;font-size:12px;">This is an automated notification from {{ siteTitle }}.</p>'
+                '</div></body></html>'
+            ),
+            'text': ('Server Crashed\nServer: {{ serverName }}\nExit code: {{ exitCode }}\n'
+                     'Uptime: {{ uptime }}s\nTime: {{ timestamp }}')
         },
         'player_join': {
             'subject': '[{{ siteTitle }}] Player Joined: {{ player }} on {{ serverName }}',
@@ -3837,6 +3885,9 @@ def dispatch_notification(event_type, context):
         'backup_failure': 'backupFailure',
         'server_start':   'serverStart',
         'server_stop':    'serverStop',
+        # A crash is exactly what the critical-alerts preference is for, so it
+        # reuses that opt-in rather than adding a checkbox nobody asked for.
+        'server_crash':   'criticalAlerts',
         'player_join':    'playerJoin',
         'player_leave':   'playerLeave',
         'critical_alert': 'criticalAlerts',
@@ -4973,6 +5024,139 @@ _CMD_NAMESPACE = r'(?:[a-z0-9_.-]+:)?'
 BLOCKED_CONSOLE_COMMANDS = re.compile(
     rf'^\s*/?\s*{_CMD_NAMESPACE}(?:execute\b.*\brun\s*/?\s*{_CMD_NAMESPACE})?(op|deop)\b', re.IGNORECASE)
 
+# A shutdown typed at the panel console. Matched by ServerInstance.send_command
+# so crash detection (issue #40) can tell the operator's own `stop` from a
+# server that died on its own — otherwise auto-restart would immediately undo a
+# deliberate shutdown.
+SELF_STOP_COMMAND = re.compile(r'^\s*/?\s*(stop|shutdown)\s*$', re.IGNORECASE)
+
+
+# ── Per-server resource-limit helpers (issue #40) ─────────────────────────────
+# Semantics, fixed here so every reader agrees:
+#   memory_limit_mb    0 = unlimited. Otherwise the cap on the server process
+#                      tree's resident memory, in MiB. For Java it is also
+#                      applied as the JVM's -Xmx, which is the only *hard* cap
+#                      the panel can impose without root; the sampler is what
+#                      catches native/off-heap overrun and covers Bedrock,
+#                      which has no equivalent knob.
+#   cpu_limit_percent  0 = unlimited. Otherwise a percentage of the *whole
+#                      host's* CPU capacity, not of one core: 25% on an 8-core
+#                      box is two cores' worth. Enforced by pinning the process
+#                      to that many cores (CPU affinity), and measured by
+#                      dividing psutil's core-summed percentage by the core
+#                      count so both sides speak the same units.
+MIN_MEMORY_LIMIT_MB = 256          # below this a JVM cannot start at all
+MAX_MEMORY_LIMIT_MB = 1024 * 1024  # 1 TiB — a sanity ceiling, not a real target
+LIMIT_ACTIONS = ('warn', 'stop')
+
+
+def _clamp_memory_limit(value):
+    """Coerce a memory cap to a whole number of MiB, or 0 for unlimited."""
+    try:
+        mb = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if mb <= 0:
+        return 0
+    return max(MIN_MEMORY_LIMIT_MB, min(MAX_MEMORY_LIMIT_MB, mb))
+
+
+def _clamp_cpu_limit(value):
+    """Coerce a CPU cap to a whole percentage of host capacity, or 0 for unlimited."""
+    try:
+        pct = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if pct <= 0:
+        return 0
+    return min(100, pct)
+
+
+def _clamp_limit_action(value):
+    """Coerce the over-limit action to a supported one, defaulting to 'warn'."""
+    action = str(value or '').strip().lower()
+    return action if action in LIMIT_ACTIONS else 'warn'
+
+
+def _clamp_restart_attempts(value):
+    """Coerce the auto-restart budget to 1-20 attempts per CRASH_WINDOW_SECONDS."""
+    try:
+        attempts = int(value)
+    except (TypeError, ValueError):
+        return 3
+    return max(1, min(20, attempts))
+
+
+def _apply_memory_limit_to_java_args(java_args, memory_limit_mb):
+    """Return java_args with -Xmx (and, if larger, -Xms) forced down to the cap.
+
+    The JVM heap flag is the one hard memory cap the panel can set without root,
+    so a configured limit overrides whatever -Xmx the operator typed rather than
+    merely warning about it. -Xms is lowered only when it would exceed the new
+    -Xmx, since a JVM refuses to start with an initial heap above its maximum.
+    A limit of 0 (unlimited) returns the arguments untouched.
+    """
+    if not memory_limit_mb or memory_limit_mb <= 0:
+        return java_args
+
+    def _to_mb(token):
+        match = re.fullmatch(r'(\d+)([kKmMgGtT]?)', token)
+        if not match:
+            return None
+        size = int(match.group(1))
+        return size * {'': 1 / (1024 * 1024), 'k': 1 / 1024, 'm': 1,
+                       'g': 1024, 't': 1024 * 1024}[match.group(2).lower()]
+
+    kept = []
+    xms_mb = None
+    for token in (java_args or '').split():
+        lowered = token.lower()
+        if lowered.startswith('-xmx'):
+            continue  # replaced below
+        if lowered.startswith('-xms'):
+            xms_mb = _to_mb(token[4:])
+            continue  # re-emitted below, possibly lowered
+        kept.append(token)
+
+    args = [f'-Xmx{memory_limit_mb}M']
+    if xms_mb is not None:
+        # Floored at 1 MiB: rounding a sub-MiB -Xms (a bare-byte value like
+        # "-Xms2048") down to 0 would produce a flag the JVM rejects outright.
+        args.append(f'-Xms{max(1, int(min(xms_mb, memory_limit_mb)))}M')
+    return ' '.join(args + kept)
+
+
+def _cpu_cores_for_limit(cpu_limit_percent):
+    """Translate a host-capacity percentage into a whole number of cores.
+
+    Always at least one core: a server pinned to zero cores would never run.
+    Returns None when there is no limit or the core count is unknown, meaning
+    "do not touch affinity".
+    """
+    if not cpu_limit_percent or cpu_limit_percent <= 0:
+        return None
+    total = os.cpu_count() or 0
+    if total <= 0:
+        return None
+    cores = int(round(total * cpu_limit_percent / 100.0))
+    return max(1, min(total, cores))
+
+
+def _row_get(row, key, default=None):
+    """Read a column from a sqlite3.Row, returning `default` when it is absent.
+
+    sqlite3.Row raises IndexError for a column the query did not return, and a
+    NULL column reads as None. Both mean "no value" for the callers here, which
+    read columns added by db._apply_column_migrations() — a connection that was
+    already open when the migration ran still has the old columns cached in its
+    statement for `SELECT *`.
+    """
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
 
 class ServerManager:
     """Manages multiple Minecraft server instances — backed by SQLite."""
@@ -5003,6 +5187,14 @@ class ServerManager:
             'approved':   bool(row['approved']),
             'category':   row['category'],
             'created':    row['created'],
+            # Per-server resource limits and crash handling (issue #40). Read
+            # with a fallback so a row from a connection opened before the
+            # additive migration ran still yields a complete config.
+            'memoryLimitMb':   _row_get(row, 'memory_limit_mb', 0),
+            'cpuLimitPercent': _row_get(row, 'cpu_limit_percent', 0),
+            'limitAction':     _row_get(row, 'limit_action', 'warn'),
+            'autoRestart':     bool(_row_get(row, 'auto_restart', 0)),
+            'restartAttempts': _row_get(row, 'restart_attempts', 3),
         }
 
     # ── CRUD ──────────────────────────────────────────────────────────────────
@@ -5061,6 +5253,11 @@ class ServerManager:
                 'status':     status,
                 'port':       port,
                 'category':   server_config.get('category', 'unmodded'),
+                'memoryLimitMb':   server_config.get('memoryLimitMb', 0),
+                'cpuLimitPercent': server_config.get('cpuLimitPercent', 0),
+                'limitAction':     server_config.get('limitAction', 'warn'),
+                'autoRestart':     server_config.get('autoRestart', False),
+                'restartAttempts': server_config.get('restartAttempts', 3),
             })
         return servers
 
@@ -5093,8 +5290,15 @@ class ServerManager:
 
     def create_server(self, name, server_path='', executable='server.jar',
                       java_args=DEFAULT_JAVA_ARGS, server_type=None, version=None,
-                      owner=None, approved=True, category='unmodded', port=None):
-        """Create a new server configuration."""
+                      owner=None, approved=True, category='unmodded', port=None,
+                      memory_limit_mb=0, cpu_limit_percent=0, limit_action='warn',
+                      auto_restart=False, restart_attempts=3):
+        """Create a new server configuration.
+
+        The resource-limit and auto-restart arguments (issue #40) all default to
+        the panel-wide "off" values, so an existing caller that does not pass
+        them creates an unrestricted server exactly as before.
+        """
         server_id = str(uuid.uuid4())[:8]
 
         server_dir = Path(server_path) if server_path else SERVERS_DIR / server_id
@@ -5116,11 +5320,16 @@ class ServerManager:
         conn.execute(
             '''INSERT INTO servers
                (id, name, server_path, executable, java_args, server_type, version,
-                owner, auto_start, approved, category, created)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)''',
+                owner, auto_start, approved, category, created,
+                memory_limit_mb, cpu_limit_percent, limit_action,
+                auto_restart, restart_attempts)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (server_id, name, str(server_dir), executable, java_args,
              server_type, version, owner, 1 if approved else 0,
-             category, datetime.now().isoformat())
+             category, datetime.now().isoformat(),
+             _clamp_memory_limit(memory_limit_mb), _clamp_cpu_limit(cpu_limit_percent),
+             _clamp_limit_action(limit_action),
+             1 if auto_restart else 0, _clamp_restart_attempts(restart_attempts))
         )
         conn.commit()
         return server_id
@@ -5140,11 +5349,24 @@ class ServerManager:
             'javaArgs': 'java_args', 'serverType': 'server_type', 'version': 'version',
             'owner': 'owner', 'autoStart': 'auto_start', 'approved': 'approved',
             'category': 'category',
+            'memoryLimitMb': 'memory_limit_mb', 'cpuLimitPercent': 'cpu_limit_percent',
+            'limitAction': 'limit_action', 'autoRestart': 'auto_restart',
+            'restartAttempts': 'restart_attempts',
+        }
+        # Anything the client can PUT is clamped here rather than at the route,
+        # so every writer (routes, template deploy, API) gets the same bounds.
+        sanitizers = {
+            'memoryLimitMb': _clamp_memory_limit,
+            'cpuLimitPercent': _clamp_cpu_limit,
+            'limitAction': _clamp_limit_action,
+            'restartAttempts': _clamp_restart_attempts,
         }
         sets, values = [], []
         for k, v in kwargs.items():
             col = col_map.get(k)
             if col:
+                if k in sanitizers:
+                    v = sanitizers[k](v)
                 sets.append(f'{col}=?')
                 values.append(1 if v is True else (0 if v is False else v))
         if not sets:
@@ -5540,7 +5762,75 @@ class ServerManager:
             if server_dir.exists():
                 shutil.rmtree(server_dir)
             return False, str(e)
-    
+
+    def register_restored_server(self, server_id, owner=None):
+        """
+        Give a server directory restored under SERVERS_DIR its servers row.
+
+        The all-servers backup archive holds only the server directories, so
+        a server restored onto a panel that has never seen it (a fresh
+        install, or one deleted since the backup) has files but no row — and
+        the row is what the server list is built from. The row is rebuilt
+        from the directory's own managed.conf, the same record the list
+        already prefers for Engine/Version.
+
+        Args:
+            server_id: Directory name under SERVERS_DIR; kept as the row id so
+                the restored managed.conf's ServerId still matches.
+            owner: Fallback owner (the restoring user) when managed.conf names
+                a user this panel does not have.
+
+        Returns:
+            True if a row was inserted, False if the server already had one
+            (left untouched) or its directory is missing.
+
+        Side effects:
+            Inserts and commits the servers row. Writes a managed.conf when
+            the directory has none. javaArgs and the resource limits are not
+            in managed.conf, so they come back as the panel defaults.
+        """
+        server_dir = SERVERS_DIR / server_id
+        if not server_dir.is_dir():
+            return False
+        conn = get_db()
+        if conn.execute('SELECT 1 FROM servers WHERE id=?', (server_id,)).fetchone():
+            return False
+
+        managed = self._read_managed_conf(server_dir)
+        engine = managed.get('Engine', '').strip()
+        has_jar = (server_dir / 'server.jar').exists()
+        if engine.lower() == 'bedrock' or (not has_jar and (server_dir / 'server.sh').exists()):
+            category = 'bedrock'
+        elif engine.lower() in ('', 'vanilla'):
+            category = 'unmodded'
+        else:
+            category = 'modded'
+
+        conf_owner = managed.get('Owner')
+        if not (conf_owner and user_manager.get_user(conf_owner)):
+            conf_owner = owner
+
+        name = managed.get('ServerName') or server_id
+        if not managed:
+            self._create_managed_conf(
+                server_dir, server_id, name, owner=conf_owner,
+                engine='Bedrock' if category == 'bedrock' else 'Vanilla')
+
+        conn.execute(
+            '''INSERT INTO servers
+               (id, name, server_path, executable, java_args, server_type, version,
+                owner, auto_start, approved, category, created)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)''',
+            (server_id, name, str(server_dir),
+             'server.sh' if category == 'bedrock' else 'server.jar',
+             DEFAULT_JAVA_ARGS, engine.lower() or None,
+             managed.get('Version') or 'Unknown', conf_owner,
+             1 if managed.get('AutoStart', '').lower() == 'true' else 0,
+             category, managed.get('CreatedAt') or datetime.now().isoformat())
+        )
+        conn.commit()
+        return True
+
     def start_server(self, server_id):
         """Start a Minecraft server"""
         with self.lock:
@@ -5580,7 +5870,16 @@ class ServerManager:
             self._ensure_canned_commands_conf(server_path)
 
             try:
-                instance = ServerInstance(server_id, server_path, executable, java_args, is_bedrock=is_bedrock)
+                # Resource limits and crash handling are read fresh on every
+                # start, so editing them takes effect on the next launch without
+                # the panel having to touch a live process.
+                instance = ServerInstance(
+                    server_id, server_path, executable, java_args, is_bedrock=is_bedrock,
+                    memory_limit_mb=server_config.get('memoryLimitMb', 0),
+                    cpu_limit_percent=server_config.get('cpuLimitPercent', 0),
+                    limit_action=server_config.get('limitAction', 'warn'),
+                    auto_restart=server_config.get('autoRestart', False),
+                    restart_attempts=server_config.get('restartAttempts', 3))
                 instance.start()
                 self.servers[server_id] = instance
                 
@@ -5754,10 +6053,68 @@ class ServerManager:
         return Path(server_config['serverPath'])
 
 
+class CrashSupervisor:
+    """Per-server budget for automatic restarts, over a sliding time window.
+
+    Crash-restarting is only safe while the crash is transient. A server that
+    fails on every boot — a broken mod, a corrupt world, a port already taken —
+    would otherwise be relaunched forever, burning CPU and filling the log with
+    the same failure. So each restart is stamped, stamps older than
+    CRASH_WINDOW_SECONDS are forgotten, and once a server has spent its budget
+    inside the window the panel stops trying and says so.
+
+    State is deliberately in-memory and keyed by server id rather than held on
+    the instance: ServerManager builds a *new* ServerInstance on every start, so
+    anything stored on the instance would reset with each restart and the budget
+    would never actually run out. It resets on a panel restart, which is the
+    right behaviour — that is a new attempt by the operator.
+    """
+
+    def __init__(self):
+        self._attempts = defaultdict(list)  # server_id -> [epoch seconds]
+        self._lock = threading.Lock()
+
+    def register(self, server_id, max_attempts):
+        """Charge one restart attempt against a server's budget.
+
+        Returns:
+            (allowed, used) — allowed is False when the budget for the current
+            window is already spent, in which case the attempt is not recorded.
+            used is the number of attempts inside the window including this one.
+        """
+        now = time.time()
+        with self._lock:
+            recent = [t for t in self._attempts[server_id] if now - t < CRASH_WINDOW_SECONDS]
+            if len(recent) >= max(1, int(max_attempts)):
+                self._attempts[server_id] = recent
+                return False, len(recent)
+            recent.append(now)
+            self._attempts[server_id] = recent
+            return True, len(recent)
+
+    def reset(self, server_id):
+        """Clear a server's history — called once it has proven it stays up."""
+        with self._lock:
+            self._attempts.pop(server_id, None)
+
+    def used(self, server_id):
+        """How many restarts a server has used inside the current window."""
+        now = time.time()
+        with self._lock:
+            recent = [t for t in self._attempts[server_id] if now - t < CRASH_WINDOW_SECONDS]
+            self._attempts[server_id] = recent
+            return len(recent)
+
+
+crash_supervisor = CrashSupervisor()
+
+
 class ServerInstance:
     """Represents a running Minecraft server instance"""
     
-    def __init__(self, server_id, server_path, executable, java_args, is_bedrock=False):
+    def __init__(self, server_id, server_path, executable, java_args, is_bedrock=False,
+                 memory_limit_mb=0, cpu_limit_percent=0, limit_action='warn',
+                 auto_restart=False, restart_attempts=3):
         """
         Build the wrapper for one Minecraft server process.
 
@@ -5767,6 +6124,14 @@ class ServerInstance:
             executable: 'server.jar' for Java, 'server.sh' for Bedrock.
             java_args: JVM arguments; ignored for Bedrock.
             is_bedrock: Selects the Bedrock launch and status-detection paths.
+            memory_limit_mb: Resident-memory cap in MiB, 0 for unlimited. For
+                Java it is also forced into the launch arguments as -Xmx.
+            cpu_limit_percent: Share of total host CPU capacity, 0 for
+                unlimited; applied as a CPU affinity mask at start().
+            limit_action: 'warn' or 'stop' — what a sustained breach does.
+            auto_restart: Relaunch the server when it exits without the panel
+                asking, or hangs past HANG_RESTART_SECONDS.
+            restart_attempts: Auto-restart budget per CRASH_WINDOW_SECONDS.
 
         No process is started here — construction only sets up state. start()
         spawns the subprocess and the reader/monitor threads. The console ring
@@ -5788,6 +6153,25 @@ class ServerInstance:
         self._stop_status_monitor = False
         self.online_players = {}  # name -> join_time (epoch float)
         self._start_notified = False  # ensure server-start notification fires once per start
+
+        # --- Resource limits and crash handling (issue #40) ---
+        self.memory_limit_mb = _clamp_memory_limit(memory_limit_mb)
+        self.cpu_limit_percent = _clamp_cpu_limit(cpu_limit_percent)
+        self.limit_action = _clamp_limit_action(limit_action)
+        self.auto_restart = bool(auto_restart)
+        self.restart_attempts = _clamp_restart_attempts(restart_attempts)
+        # True once the panel itself asked the process to end. _monitor_process
+        # reads it to tell "the operator pressed Stop" from "the server died",
+        # which is the whole basis of crash detection — without it every normal
+        # shutdown would look like a crash and trigger an auto-restart.
+        self._intentional_stop = False
+        self._cpu_affinity = None      # cores actually pinned, or None
+        self._ps_procs = {}            # pid -> psutil.Process, kept across samples
+        self._resource_usage = {}      # last sample, served by get_resource_usage()
+        self._breach_samples = 0       # consecutive over-limit samples
+        self._breach_notified = False  # one breach alert per lifecycle
+        self._unresponsive_since = None
+        self._hang_handled = False
     
     def start(self):
         """Start the server process"""
@@ -5798,7 +6182,16 @@ class ServerInstance:
         self.status = ServerStatus.STARTING
         self.start_time = time.time()
         self.server_port = None  # Will be read from properties
-        
+        # Per-lifecycle limit/crash state, reset so a relaunched instance does
+        # not inherit the previous run's breach counters.
+        self._intentional_stop = False
+        self._ps_procs = {}
+        self._resource_usage = {}
+        self._breach_samples = 0
+        self._breach_notified = False
+        self._unresponsive_since = None
+        self._hang_handled = False
+
         # Set environment
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
@@ -5809,8 +6202,11 @@ class ServerInstance:
             upgrade_bedrock_launcher(executable_path)
             args = ['bash', str(executable_path)]
         else:
-            # Java server: run java -jar
-            args = [JAVA_BINARY] + self.java_args.split() + ['-jar', self.executable, 'nogui']
+            # Java server: run java -jar. A configured memory cap is folded into
+            # the JVM heap flags here — -Xmx is the only hard memory limit the
+            # panel can impose without root, so it wins over the operator's args.
+            launch_args = _apply_memory_limit_to_java_args(self.java_args, self.memory_limit_mb)
+            args = [JAVA_BINARY] + launch_args.split() + ['-jar', self.executable, 'nogui']
         
         self.process = subprocess.Popen(
             args,
@@ -5822,7 +6218,9 @@ class ServerInstance:
             bufsize=0,  # Unbuffered
             env=env
         )
-        
+
+        self._apply_cpu_affinity()
+
         # Start threads
         threading.Thread(target=self._read_output_unbuffered, daemon=True).start()
         threading.Thread(target=self._monitor_process, daemon=True).start()
@@ -5920,10 +6318,17 @@ class ServerInstance:
             self._broadcast({'type': 'error', 'data': f'Stream error: {str(e)}\n', 'serverId': self.server_id})
     
     def _monitor_process(self):
-        """Monitor the process and notify when it exits"""
+        """Monitor the process and notify when it exits.
+
+        Thread body; returns when the process does. An exit the panel did not
+        ask for is a crash: _intentional_stop is set by stop()/kill() and by the
+        limit and hang handlers, so anything reaching here with it still False
+        ended on its own — a JVM failure, an OOM kill, or an in-game /stop.
+        """
         if self.process:
             self.process.wait()
             code = self.process.returncode
+            crashed = not self._intentional_stop
             self._stop_status_monitor = True
             self.status = ServerStatus.STOPPED
             self.online_players = {}
@@ -5941,6 +6346,335 @@ class ServerInstance:
                 ).start()
             except Exception:
                 pass
+            if crashed:
+                self._handle_crash(code)
+
+    # ── Resource limits (issue #40) ──────────────────────────────────────────
+
+    def _apply_cpu_affinity(self):
+        """Pin the freshly-spawned process to a slice of the host's cores.
+
+        A CPU cap is expressed as a share of total host capacity, which maps
+        directly onto a core count — pinning is the one CPU restriction
+        available to an unprivileged panel (cgroup quotas need root).
+
+        The slice starts at an offset derived from the server id rather than at
+        core 0, so several capped servers spread across the machine instead of
+        all contending for the same low-numbered cores, and a given server lands
+        on the same cores every launch. Best-effort: sched_setaffinity is
+        Linux-only and can be refused, in which case the server still runs
+        uncapped and the console says so.
+        """
+        cores = _cpu_cores_for_limit(self.cpu_limit_percent)
+        if not cores or not self.process:
+            return
+        if not hasattr(os, 'sched_setaffinity'):
+            self._note('CPU limit ignored: this platform has no CPU affinity support.')
+            return
+        total = os.cpu_count() or cores
+        offset = int(hashlib.sha256(self.server_id.encode()).hexdigest()[:8], 16) % total
+        cpu_set = sorted({(offset + i) % total for i in range(cores)})
+        try:
+            os.sched_setaffinity(self.process.pid, cpu_set)
+            self._cpu_affinity = cpu_set
+            self._note(f'CPU limit {self.cpu_limit_percent}% — pinned to '
+                       f'{len(cpu_set)}/{total} core(s): {cpu_set}')
+        except OSError as e:
+            self._note(f'CPU limit could not be applied: {e}')
+
+    def _sample_resources(self):
+        """Measure this server's whole process tree and enforce the memory cap.
+
+        Called from the status monitor every RESOURCE_SAMPLE_SECONDS. Sums RSS
+        and CPU across the launcher and its children, because a Bedrock server
+        runs under a bash wrapper and a Java server may fork helpers — charging
+        only the direct child would under-report both.
+
+        psutil.Process objects are cached in self._ps_procs across samples on
+        purpose: cpu_percent(interval=None) reports usage *since the previous
+        call on that same object*, so a freshly-constructed object always reads
+        0.0 and the CPU column would never leave zero.
+
+        Side effects:
+            Updates self._resource_usage (what get_resource_usage() serves) and,
+            after RESOURCE_BREACH_SAMPLES consecutive readings above the cap
+            plus its grace margin, calls _handle_limit_breach().
+        """
+        try:
+            import psutil
+        except ImportError:
+            return
+        if not self.is_running():
+            return
+        try:
+            root = self._ps_procs.get(self.process.pid) or psutil.Process(self.process.pid)
+            live = {self.process.pid: root}
+            for child in root.children(recursive=True):
+                live[child.pid] = self._ps_procs.get(child.pid) or child
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return
+        self._ps_procs = live
+
+        rss = 0
+        cpu = 0.0
+        for proc in live.values():
+            try:
+                rss += proc.memory_info().rss
+                cpu += proc.cpu_percent(interval=None)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        total_cores = os.cpu_count() or 1
+        self._resource_usage = {
+            'memoryBytes': rss,
+            'memoryMb': round(rss / (1024 * 1024), 1),
+            # Host share, to match how cpu_limit_percent is defined. psutil sums
+            # across cores, so a process using two full cores on an 8-core box
+            # reads 200% here and 25% after the divide.
+            'cpuPercent': round(cpu / total_cores, 1),
+            'cpuPercentOfCores': round(cpu, 1),
+            'processes': len(live),
+            'sampled': datetime.now().isoformat(),
+        }
+
+        if not self.memory_limit_mb:
+            return
+        threshold = self.memory_limit_mb * (1024 * 1024) * (1 + RESOURCE_MEMORY_GRACE_PERCENT / 100.0)
+        if rss > threshold:
+            self._breach_samples += 1
+            if self._breach_samples >= RESOURCE_BREACH_SAMPLES:
+                self._breach_samples = 0
+                self._handle_limit_breach(rss)
+        else:
+            self._breach_samples = 0
+
+    def _handle_limit_breach(self, rss_bytes):
+        """React to a sustained memory overrun: always warn, optionally stop.
+
+        'stop' marks the shutdown as intentional first, so the crash detector
+        does not then treat the panel's own enforcement as a crash and restart
+        straight back into the same overrun.
+        """
+        used_mb = round(rss_bytes / (1024 * 1024))
+        message = (f'Memory limit exceeded: using {used_mb} MB against a '
+                   f'{self.memory_limit_mb} MB cap '
+                   f'(+{RESOURCE_MEMORY_GRACE_PERCENT}% grace).')
+        self._note(message)
+        if not self._breach_notified:
+            self._breach_notified = True
+            self._alert_owner_and_admins('Server over its memory limit', message)
+        if self.limit_action == 'stop':
+            self._note('Limit action is "stop" — stopping the server.')
+            self._intentional_stop = True
+            try:
+                server_manager.stop_server(self.server_id)
+            except Exception as e:
+                self._note(f'Failed to stop server after limit breach: {e}')
+
+    def get_resource_usage(self):
+        """Return the last resource sample alongside this server's configured caps."""
+        return {
+            'usage': dict(self._resource_usage),
+            'limits': {
+                'memoryLimitMb': self.memory_limit_mb,
+                'cpuLimitPercent': self.cpu_limit_percent,
+                'limitAction': self.limit_action,
+                'cpuAffinity': self._cpu_affinity,
+                'hostCores': os.cpu_count() or 0,
+            },
+            'autoRestart': self.auto_restart,
+            'restartAttempts': self.restart_attempts,
+        }
+
+    # ── Crash detection and automatic restart (issue #40) ────────────────────
+
+    def _note(self, text):
+        """Write a [MServer] line to this server's console stream and buffer."""
+        line = f'[MServer] {text}\n'
+        try:
+            self._broadcast({'type': 'info', 'data': line, 'serverId': self.server_id})
+            self._add_to_buffer(line)
+        except Exception:
+            pass
+
+    def _server_name(self):
+        """Best-effort display name for notifications; falls back to the id."""
+        try:
+            cfg = server_manager.get_server_config(self.server_id)
+            return cfg.get('name', self.server_id) if cfg else self.server_id
+        except Exception:
+            return self.server_id
+
+    def _alert_owner_and_admins(self, title, message):
+        """Raise an in-app notification for this server's owner and for admins.
+
+        Fully guarded and fire-and-forget: this runs on monitor threads where an
+        exception would kill crash detection for the server.
+        """
+        def _send():
+            try:
+                name = self._server_name()
+                full_title = f'{title} — {name}'
+                notification_manager.notify_admins(
+                    'system', full_title, message,
+                    ref_type='server', ref_id=self.server_id)
+                cfg = server_manager.get_server_config(self.server_id)
+                owner = cfg.get('owner') if cfg else None
+                if owner:
+                    # notify_admins already covered the owner if they are one.
+                    user = user_manager.get_user_by_id(owner)
+                    if user and not group_manager.is_admin_group(user.get('groupId')):
+                        notification_manager.create(
+                            owner, 'system', full_title, message,
+                            ref_type='server', ref_id=self.server_id)
+            except Exception as e:
+                app.logger.error(f'[Crash] Alert dispatch failed for {self.server_id}: {e}')
+        threading.Thread(target=_send, daemon=True).start()
+
+    def _handle_crash(self, exit_code):
+        """Record an unrequested exit and, when configured, restart the server.
+
+        Called from _monitor_process once the process has gone. Note what counts
+        as a crash: any exit the panel did not initiate, including a `/stop`
+        typed in-game. The panel is the lifecycle authority here, and a server
+        with auto-restart on is one the operator has asked to stay up.
+
+        Side effects:
+            Writes a console line, fires the 'server_crash' notification event
+            (email/webhook/in-game message triggers), alerts the owner and
+            admins, fails any rollback point still waiting on this server to
+            prove healthy, and — if auto-restart is on and the crash budget is
+            not spent — relaunches after CRASH_RESTART_DELAY_SECONDS.
+        """
+        uptime = int(time.time() - self.start_time) if self.start_time else 0
+        detail = f'exited unexpectedly with code {exit_code} after {uptime}s'
+        self._note(f'Crash detected — {detail}.')
+
+        name = self._server_name()
+        threading.Thread(
+            target=dispatch_notification,
+            args=('server_crash', {'serverName': name, 'serverId': self.server_id,
+                                   'exitCode': exit_code, 'uptime': uptime}),
+            daemon=True
+        ).start()
+
+        # A change guarded by a rollback point is the prime suspect for a server
+        # that will not stay up; flag it so the operator is offered the undo.
+        try:
+            rollback_manager.mark_crashed(self.server_id, detail)
+        except Exception as e:
+            app.logger.error(f'[Crash] Rollback bookkeeping failed for {self.server_id}: {e}')
+
+        if not self.auto_restart:
+            self._alert_owner_and_admins(
+                'Server crashed', f'"{name}" {detail}. Automatic restart is off.')
+            return
+
+        allowed, used = crash_supervisor.register(self.server_id, self.restart_attempts)
+        if not allowed:
+            self._note(f'Automatic restart giving up: {used} restarts already used in the '
+                       f'last {CRASH_WINDOW_SECONDS // 60} minutes.')
+            self._alert_owner_and_admins(
+                'Server crash loop',
+                f'"{name}" {detail}. It has been restarted {used} time(s) in the last '
+                f'{CRASH_WINDOW_SECONDS // 60} minutes, which is its whole budget, so '
+                f'automatic restart has stopped. Start it by hand once the cause is fixed.')
+            return
+
+        self._note(f'Automatic restart in {CRASH_RESTART_DELAY_SECONDS}s '
+                   f'(attempt {used} of {self.restart_attempts}).')
+        self._alert_owner_and_admins(
+            'Server crashed — restarting',
+            f'"{name}" {detail}. Restarting automatically (attempt {used} of '
+            f'{self.restart_attempts}).')
+        threading.Thread(target=self._delayed_restart, args=(CRASH_RESTART_DELAY_SECONDS,),
+                         daemon=True).start()
+
+    def _delayed_restart(self, delay):
+        """Sleep out the cool-down, then ask the manager to start this server again.
+
+        The delay lets the listening port and any world lock file clear before
+        the next launch. Skips the restart if something else already started the
+        server in the meantime.
+        """
+        time.sleep(delay)
+        try:
+            current = server_manager.servers.get(self.server_id)
+            if current is not None and current is not self and current.is_running():
+                return
+            ok, msg = server_manager.start_server(self.server_id)
+            if not ok:
+                self._note(f'Automatic restart failed: {msg}')
+                self._alert_owner_and_admins(
+                    'Automatic restart failed',
+                    f'"{self._server_name()}" could not be restarted: {msg}')
+        except Exception as e:
+            app.logger.error(f'[Crash] Restart failed for {self.server_id}: {e}')
+
+    def _handle_hang(self):
+        """Kill and relaunch a server that has been UNRESPONSIVE for too long.
+
+        A live process whose port never opens is stuck, not slow — the status
+        monitor has already waited out the startup grace period. The kill is
+        flagged intentional so _handle_crash does not also fire and double-count
+        the restart, but the attempt is still charged to the same crash budget,
+        because a boot-loop that hangs is as damaging as one that crashes.
+        """
+        if self._hang_handled:
+            return
+        self._hang_handled = True
+        name = self._server_name()
+        detail = (f'unresponsive for over {HANG_RESTART_SECONDS // 60} minute(s) — the '
+                  f'process is alive but never opened its port')
+        self._note(f'Hang detected — {detail}. Killing and restarting.')
+
+        allowed, used = crash_supervisor.register(self.server_id, self.restart_attempts)
+        if not allowed:
+            self._note(f'Automatic restart giving up: {used} restarts already used in the '
+                       f'last {CRASH_WINDOW_SECONDS // 60} minutes.')
+            self._alert_owner_and_admins(
+                'Server hung', f'"{name}" is {detail}, and its automatic-restart budget '
+                f'is spent. Stop or kill it by hand.')
+            return
+
+        self._alert_owner_and_admins(
+            'Server hung — restarting',
+            f'"{name}" is {detail}. Restarting automatically (attempt {used} of '
+            f'{self.restart_attempts}).')
+
+        def _worker():
+            self._intentional_stop = True
+            try:
+                server_manager.kill_server(self.server_id)
+            except Exception as e:
+                self._note(f'Failed to kill hung server: {e}')
+                return
+            self._delayed_restart(CRASH_RESTART_DELAY_SECONDS)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_health_watch(self):
+        """Watch a freshly-started server long enough to call it healthy.
+
+        Started once per lifecycle, on the first transition into RUNNING. If the
+        server is still up ROLLBACK_HEALTH_WINDOW_SECONDS later it has survived
+        long enough to clear two pieces of bookkeeping: any rollback point still
+        waiting on this server is marked verified, and the crash budget is
+        reset so an old burst of failures cannot count against a future one.
+        A server that dies inside the window leaves both alone — the crash path
+        owns that case.
+        """
+        def _watch():
+            deadline = time.time() + ROLLBACK_HEALTH_WINDOW_SECONDS
+            while time.time() < deadline:
+                time.sleep(2)
+                if not self.is_running():
+                    return
+            try:
+                crash_supervisor.reset(self.server_id)
+                rollback_manager.mark_healthy(self.server_id)
+            except Exception as e:
+                app.logger.error(f'[Health] Post-start check failed for {self.server_id}: {e}')
+        threading.Thread(target=_watch, daemon=True).start()
 
     def _parse_player_events(self, line):
         """Parse console output for player join/leave events and update online_players"""
@@ -6034,10 +6768,15 @@ class ServerInstance:
             pass
 
     def _dispatch_start_notification(self):
-        """Fire the server-start notification once per start, in a background thread."""
+        """Fire the server-start notification once per start, in a background thread.
+
+        Also the once-per-lifecycle hook for _start_health_watch(), which is what
+        eventually marks a rollback point verified and clears the crash budget.
+        """
         if self._start_notified:
             return
         self._start_notified = True
+        self._start_health_watch()
         try:
             cfg = server_manager.get_server_config(self.server_id)
             sname = cfg.get('name', self.server_id) if cfg else self.server_id
@@ -6134,7 +6873,17 @@ class ServerInstance:
             calls _dispatch_start_notification() on the first transition into
             RUNNING, so a start notification goes out once per lifecycle
             rather than once per poll.
+
+            This loop is also where the two per-server watchdogs run (issue
+            #40): every RESOURCE_SAMPLE_SECONDS it calls _sample_resources(),
+            which measures the process tree and enforces the memory cap, and on
+            Java it tracks how long the port has stayed shut — with
+            auto-restart on, a process still unresponsive after
+            HANG_RESTART_SECONDS is handed to _handle_hang() and this thread
+            returns.
         """
+        ticks = 0
+        sample_every = max(1, RESOURCE_SAMPLE_SECONDS // 2)  # loop period is 2s
         while not self._stop_status_monitor:
             if self.process is None or self.process.poll() is not None:
                 # Process not running
@@ -6143,9 +6892,16 @@ class ServerInstance:
                     self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value})
                 time.sleep(2)
                 continue
-            
+
             # Process is running, check state
             elapsed = time.time() - self.start_time if self.start_time else 0
+
+            ticks += 1
+            if ticks % sample_every == 0:
+                try:
+                    self._sample_resources()
+                except Exception as e:
+                    app.logger.error(f'[Limits] Sampling failed for {self.server_id}: {e}')
             
             # Bedrock servers: simplified status detection (process-based only)
             # Bedrock uses UDP for queries which is more complex, so we just check if process is running
@@ -6190,7 +6946,19 @@ class ServerInstance:
                     # Process running but not responding after 30s
                     if self.status != ServerStatus.UNRESPONSIVE:
                         new_status = ServerStatus.UNRESPONSIVE
-                
+
+                # Hang watchdog: track how long the port has been shut and, with
+                # auto-restart on, recycle a process that is alive but stuck.
+                if tcp_responsive:
+                    self._unresponsive_since = None
+                else:
+                    if self._unresponsive_since is None and elapsed >= 30:
+                        self._unresponsive_since = time.time()
+                    if (self.auto_restart and self._unresponsive_since
+                            and time.time() - self._unresponsive_since >= HANG_RESTART_SECONDS):
+                        self._handle_hang()
+                        return
+
                 if new_status and new_status != self.status:
                     self.status = new_status
                     self._broadcast({
@@ -6214,8 +6982,17 @@ class ServerInstance:
         return self.process is not None and self.process.poll() is None
     
     def send_command(self, command):
-        """Send a command to the server"""
+        """Send a command to the server.
+
+        A `stop` typed at the panel console counts as the panel asking the
+        server to end, so it is flagged intentional here — otherwise crash
+        detection would see the exit as a crash and auto-restart would undo the
+        operator's own shutdown. An in-game `/stop` by an op still reads as a
+        crash: nothing tells the panel it was deliberate.
+        """
         if self.is_running():
+            if SELF_STOP_COMMAND.match(command or ''):
+                self._intentional_stop = True
             # Write as bytes since we're using binary mode
             self.process.stdin.write((command + '\n').encode('utf-8'))
             self.process.stdin.flush()
@@ -6223,6 +7000,10 @@ class ServerInstance:
     def stop(self):
         """Stop the server gracefully by sending 'stop' command"""
         if self.is_running():
+            # Flagged before the command goes out: _monitor_process may see the
+            # exit the instant the server obeys, and an exit observed with this
+            # still False is what crash detection treats as a crash.
+            self._intentional_stop = True
             self.status = ServerStatus.STOPPING
             self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value, 'running': True})
             self.send_command('stop')
@@ -6237,6 +7018,7 @@ class ServerInstance:
     def kill(self):
         """Forcefully kill the server process immediately"""
         if self.is_running():
+            self._intentional_stop = True
             self.status = ServerStatus.STOPPING
             self._broadcast({'type': 'status', 'serverId': self.server_id, 'status': self.status.value})
             self.process.kill()
@@ -6291,6 +7073,488 @@ task_scheduler = TaskScheduler(server_manager, socketio)
 
 # Initialize message scheduler
 message_scheduler = MessageScheduler(server_manager)
+
+# ==================== Rollback Points (issue #40) ====================
+
+class RollbackManager:
+    """Tracks the safety backups the panel takes before a risky change.
+
+    A backup on its own is just a ZIP among other ZIPs. A rollback point is the
+    record of what a particular archive was taken *for* — which version the
+    server was on, which one it moved to, and whether the server has since
+    proven it still works. That record is what turns "restore a backup" into
+    one-click undo of a specific change.
+
+    Lifecycle of a point's status:
+        pending      the change is applied; the server has not yet run long
+                     enough to prove it is fine.
+        verified     the server started and stayed up past
+                     ROLLBACK_HEALTH_WINDOW_SECONDS (set by
+                     ServerInstance._start_health_watch).
+        failed       the server crashed before clearing that window (set by
+                     ServerInstance._handle_crash). This is the state that
+                     offers the operator the undo.
+        rolled_back  the archive was restored over the server.
+        dismissed    the operator cleared it by hand.
+
+    Points are per-server and never delete the archive they name; removing a
+    point only forgets the association.
+    """
+
+    OPEN_STATUS = 'pending'
+
+    def create(self, server_id, backup_name, kind='version_change', label='',
+               from_version=None, to_version=None, engine=None, created_by=None):
+        """Record a new rollback point and return it.
+
+        Any point already 'pending' for this server is superseded — marked
+        'verified' with a note — because the newer change is now the thing under
+        test, and leaving two open points would make a later crash ambiguous
+        about which change to undo.
+        """
+        conn = get_db()
+        conn.execute(
+            """UPDATE rollback_points
+               SET status='verified', detail='Superseded by a newer change', resolved=?
+               WHERE server_id=? AND status=?""",
+            (datetime.now().isoformat(), server_id, self.OPEN_STATUS))
+        point_id = str(uuid.uuid4())
+        conn.execute(
+            '''INSERT INTO rollback_points
+               (id, server_id, kind, backup_name, label, from_version, to_version,
+                engine, status, created, created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+            (point_id, server_id, kind, backup_name, label or '', from_version,
+             to_version, engine, self.OPEN_STATUS, datetime.now().isoformat(), created_by))
+        conn.commit()
+        return self.get(point_id)
+
+    def get(self, point_id):
+        """Return one rollback point as a dict, or None."""
+        row = get_db().execute(
+            'SELECT * FROM rollback_points WHERE id=?', (point_id,)).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def list_for_server(self, server_id, limit=25):
+        """Return a server's rollback points, newest first."""
+        rows = get_db().execute(
+            'SELECT * FROM rollback_points WHERE server_id=? ORDER BY created DESC LIMIT ?',
+            (server_id, limit)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def open_point(self, server_id):
+        """Return the server's one still-unproven point, or None."""
+        row = get_db().execute(
+            'SELECT * FROM rollback_points WHERE server_id=? AND status=? '
+            'ORDER BY created DESC LIMIT 1', (server_id, self.OPEN_STATUS)).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def set_status(self, point_id, status, detail=None):
+        """Move a point to a new status, stamping the time it was resolved."""
+        conn = get_db()
+        conn.execute(
+            'UPDATE rollback_points SET status=?, detail=?, resolved=? WHERE id=?',
+            (status, detail, datetime.now().isoformat(), point_id))
+        conn.commit()
+        return self.get(point_id)
+
+    def mark_healthy(self, server_id):
+        """Promote a still-pending point to 'verified' — the change held up.
+
+        Called from the post-start health watch, so the common case (the update
+        worked) resolves itself and the operator is never asked about it.
+        """
+        conn = get_db()
+        cur = conn.execute(
+            """UPDATE rollback_points
+               SET status='verified', detail=?, resolved=?
+               WHERE server_id=? AND status=?""",
+            (f'Server ran for {ROLLBACK_HEALTH_WINDOW_SECONDS}s after the change',
+             datetime.now().isoformat(), server_id, self.OPEN_STATUS))
+        conn.commit()
+        return cur.rowcount
+
+    def mark_crashed(self, server_id, detail):
+        """Fail a still-pending point — the server died before proving itself.
+
+        Returns the failed point, or None when the server had no point open (an
+        ordinary crash unrelated to any tracked change).
+
+        Side effects:
+            Alerts admins and the server's owner that a one-click rollback is
+            available, since a crash right after a version change is exactly the
+            case the rollback point exists for.
+        """
+        point = self.open_point(server_id)
+        if not point:
+            return None
+        failed = self.set_status(point['id'], 'failed', detail)
+        try:
+            config = server_manager.get_server_config(server_id)
+            name = config.get('name', server_id) if config else server_id
+            change = point.get('label') or (
+                f"version change {point.get('fromVersion') or '?'} → "
+                f"{point.get('toVersion') or '?'}")
+            notification_manager.notify_admins(
+                'system', f'Update may have failed — {name}',
+                f'"{name}" {detail} after {change}. A rollback point from before the '
+                f'change is available: restore it from the server\'s Backups tab to undo it.',
+                ref_type='server', ref_id=server_id)
+            owner = config.get('owner') if config else None
+            if owner:
+                user = user_manager.get_user_by_id(owner)
+                if user and not group_manager.is_admin_group(user.get('groupId')):
+                    notification_manager.create(
+                        owner, 'system', f'Update may have failed — {name}',
+                        f'"{name}" {detail} after {change}. A rollback point from before '
+                        f'the change is available in the server\'s Backups tab.',
+                        ref_type='server', ref_id=server_id)
+        except Exception as e:
+            app.logger.error(f'[Rollback] Failure alert error for {server_id}: {e}')
+        return failed
+
+    def delete(self, point_id):
+        """Forget a rollback point. The archive it names is left on disk."""
+        conn = get_db()
+        cur = conn.execute('DELETE FROM rollback_points WHERE id=?', (point_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+    @staticmethod
+    def _row_to_dict(row):
+        """Convert a rollback_points row to its API shape.
+
+        backupExists is resolved here rather than stored, because backup
+        retention can prune the archive out from under a point at any time and a
+        point whose archive is gone must not offer a Roll Back button.
+        """
+        backup_path = BACKUPS_DIR / row['server_id'] / row['backup_name']
+        exists = backup_path.is_file()
+        return {
+            'id': row['id'],
+            'serverId': row['server_id'],
+            'kind': row['kind'],
+            'backupName': row['backup_name'],
+            'label': row['label'],
+            'fromVersion': row['from_version'],
+            'toVersion': row['to_version'],
+            'engine': row['engine'],
+            'status': row['status'],
+            'detail': row['detail'],
+            'created': row['created'],
+            'resolved': row['resolved'],
+            'createdBy': row['created_by'],
+            'backupExists': exists,
+            'backupSize': backup_path.stat().st_size if exists else 0,
+        }
+
+
+rollback_manager = RollbackManager()
+
+
+# ==================== Server Templates (issue #40) ====================
+
+# server.properties keys never captured into a template. Ports and bind
+# addresses must stay unique per server — copying them in would hand every
+# deployed server the same port and guarantee a start-up conflict — and the RCON
+# password is a secret that has no business travelling inside an exportable,
+# shareable file.
+TEMPLATE_EXCLUDED_PROPERTIES = {
+    'server-port', 'server-portv6', 'query.port', 'rcon.port',
+    'rcon.password', 'server-ip',
+}
+
+
+def _real_version(value):
+    """Return a usable Minecraft version string, or None for a placeholder."""
+    text = str(value or '').strip()
+    return None if text.lower() in ('', 'unknown', 'none', 'imported') else text
+
+
+class TemplateManager:
+    """CRUD for server templates: reusable recipes for creating servers.
+
+    A template holds configuration only — category, engine, version, JVM args,
+    resource limits and a snapshot of server.properties. Deliberately no world
+    data, no JARs and no mods: that keeps a template a few kilobytes of JSON
+    that is safe to export, e-mail and import somewhere else, and it means
+    deploying one goes through exactly the same provisioning path as the create
+    wizard rather than a second, divergent one.
+
+    Visibility is owner-plus-shared: a user sees their own templates and any
+    marked shared; admins see all. Editing and deleting are owner-or-admin.
+    """
+
+    def create(self, data, owner):
+        """Insert a template from an API payload and return it."""
+        template_id = str(uuid.uuid4())[:8]
+        fields = self._sanitize(data)
+        conn = get_db()
+        conn.execute(
+            '''INSERT INTO server_templates
+               (id, name, description, category, server_type, version, java_args,
+                properties, memory_limit_mb, cpu_limit_percent, limit_action,
+                auto_restart, restart_attempts, owner, shared, use_count, created)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)''',
+            (template_id, fields['name'], fields['description'], fields['category'],
+             fields['serverType'], fields['version'], fields['javaArgs'],
+             json.dumps(fields['properties']), fields['memoryLimitMb'],
+             fields['cpuLimitPercent'], fields['limitAction'],
+             1 if fields['autoRestart'] else 0, fields['restartAttempts'],
+             owner, 1 if fields['shared'] else 0, datetime.now().isoformat()))
+        conn.commit()
+        return self.get(template_id)
+
+    def create_from_server(self, server_id, data, owner):
+        """Build a template out of an existing server's configuration.
+
+        Reads the live config plus the server's own server.properties, so the
+        template captures what the server actually runs with rather than what it
+        was created with. TEMPLATE_EXCLUDED_PROPERTIES are dropped on the way in.
+        """
+        config = server_manager.get_server_config(server_id)
+        if not config:
+            return None
+        server_dir = Path(config.get('serverPath', ''))
+        managed = server_manager._read_managed_conf(server_dir) if server_dir.exists() else {}
+        engine = managed.get('Engine') or config.get('serverType')
+        if engine and engine.lower() in ('imported', 'unknown'):
+            engine = None
+
+        payload = {
+            'name': data.get('name') or f"{config.get('name', 'Server')} template",
+            'description': data.get('description', ''),
+            'category': config.get('category', 'unmodded'),
+            'serverType': (engine or '').lower() or None,
+            # managed.conf writes the literal string 'Unknown' for a server
+            # whose version was never recorded (an import, say). Carrying that
+            # into a template would make deploy try to download a JAR for a
+            # version called "Unknown"; a null version means "no JAR" instead.
+            'version': _real_version(managed.get('Version') or config.get('version')),
+            'javaArgs': config.get('javaArgs', ''),
+            'properties': self._read_properties(server_dir),
+            'memoryLimitMb': config.get('memoryLimitMb', 0),
+            'cpuLimitPercent': config.get('cpuLimitPercent', 0),
+            'limitAction': config.get('limitAction', 'warn'),
+            'autoRestart': config.get('autoRestart', False),
+            'restartAttempts': config.get('restartAttempts', 3),
+            'shared': data.get('shared', False),
+        }
+        return self.create(payload, owner)
+
+    def get(self, template_id):
+        """Return one template as a dict, or None."""
+        row = get_db().execute(
+            'SELECT * FROM server_templates WHERE id=?', (template_id,)).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def list_visible(self, user_id, is_admin=False):
+        """Templates the caller may use: their own plus shared ones (admins: all)."""
+        conn = get_db()
+        if is_admin:
+            rows = conn.execute(
+                'SELECT * FROM server_templates ORDER BY created DESC').fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT * FROM server_templates WHERE owner=? OR shared=1 '
+                'ORDER BY created DESC', (user_id,)).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def update(self, template_id, data):
+        """Apply a partial update; unknown keys are ignored."""
+        current = self.get(template_id)
+        if not current:
+            return None
+        merged = {**current, **{k: v for k, v in data.items() if k in current}}
+        fields = self._sanitize(merged)
+        conn = get_db()
+        conn.execute(
+            '''UPDATE server_templates
+               SET name=?, description=?, category=?, server_type=?, version=?,
+                   java_args=?, properties=?, memory_limit_mb=?, cpu_limit_percent=?,
+                   limit_action=?, auto_restart=?, restart_attempts=?, shared=?, updated=?
+               WHERE id=?''',
+            (fields['name'], fields['description'], fields['category'],
+             fields['serverType'], fields['version'], fields['javaArgs'],
+             json.dumps(fields['properties']), fields['memoryLimitMb'],
+             fields['cpuLimitPercent'], fields['limitAction'],
+             1 if fields['autoRestart'] else 0, fields['restartAttempts'],
+             1 if fields['shared'] else 0, datetime.now().isoformat(), template_id))
+        conn.commit()
+        return self.get(template_id)
+
+    def delete(self, template_id):
+        """Delete a template. Servers already deployed from it are untouched."""
+        conn = get_db()
+        cur = conn.execute('DELETE FROM server_templates WHERE id=?', (template_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+    def record_use(self, template_id):
+        """Bump the deploy counter so popular templates are visible as such."""
+        conn = get_db()
+        conn.execute('UPDATE server_templates SET use_count=use_count+1 WHERE id=?',
+                     (template_id,))
+        conn.commit()
+
+    def can_manage(self, template, user_id, is_admin=False):
+        """Whether this user may edit or delete the template."""
+        return bool(is_admin or (template and template.get('owner') == user_id))
+
+    def to_export(self, template):
+        """Portable form of a template: no ids, no owner, no usage counters.
+
+        Those are properties of *this* panel's copy, not of the recipe, and
+        carrying them across would let an import collide with a local id or
+        claim an owner that does not exist here.
+        """
+        return {
+            'mserverTemplate': 1,
+            'exported': datetime.now().isoformat(),
+            'name': template['name'],
+            'description': template['description'],
+            'category': template['category'],
+            'serverType': template['serverType'],
+            'version': template['version'],
+            'javaArgs': template['javaArgs'],
+            'properties': template['properties'],
+            'memoryLimitMb': template['memoryLimitMb'],
+            'cpuLimitPercent': template['cpuLimitPercent'],
+            'limitAction': template['limitAction'],
+            'autoRestart': template['autoRestart'],
+            'restartAttempts': template['restartAttempts'],
+        }
+
+    def deploy_payload(self, template, name, server_properties=None):
+        """Translate a template into the body /api/servers already understands.
+
+        Deploying reuses the create route's provisioning helper rather than
+        reimplementing it, so a template-created server gets the same policy
+        checks, port-conflict handling, EULA stub and JAR copy as a wizard-created
+        one — there is no second code path to keep in step.
+        """
+        properties = dict(template.get('properties') or {})
+        if server_properties:
+            properties.update({k: v for k, v in server_properties.items()
+                               if k not in TEMPLATE_EXCLUDED_PROPERTIES})
+        # Re-checked rather than trusted: a template stored before placeholder
+        # versions were filtered out can still hold the string 'Unknown', and
+        # asking the bucket for a JAR of version "Unknown" only ever fails.
+        version = _real_version(template['version'])
+        payload = {
+            'name': name,
+            'category': template['category'],
+            'serverEngine': template['serverType'],
+            'version': version,
+            'javaArgs': template['javaArgs'] or DEFAULT_JAVA_ARGS,
+            'downloadJar': bool(template['serverType'] and version),
+            'serverProperties': properties,
+            'memoryLimitMb': template['memoryLimitMb'],
+            'cpuLimitPercent': template['cpuLimitPercent'],
+            'limitAction': template['limitAction'],
+            'autoRestart': template['autoRestart'],
+            'restartAttempts': template['restartAttempts'],
+        }
+        return payload
+
+    # ── Internals ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _read_properties(server_dir):
+        """Snapshot a server's server.properties, minus the per-server keys."""
+        properties = {}
+        path = server_dir / 'server.properties'
+        if not path.is_file():
+            return properties
+        try:
+            for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                key = key.strip()
+                if key and key not in TEMPLATE_EXCLUDED_PROPERTIES:
+                    properties[key] = value.strip()
+        except Exception:
+            pass
+        return properties
+
+    @staticmethod
+    def _sanitize(data):
+        """Coerce an arbitrary payload into the exact fields a template stores.
+
+        Everything is bounded here — name length, property count, allowed
+        category — so neither the create route, the import route nor an edit can
+        write a template the deploy path would then choke on. Property values
+        are stringified and stripped of newlines, since they end up as lines in
+        a generated server.properties.
+        """
+        category = str(data.get('category') or 'unmodded').strip().lower()
+        if category not in ('unmodded', 'modded', 'bedrock'):
+            category = 'unmodded'
+
+        raw_properties = data.get('properties')
+        properties = {}
+        if isinstance(raw_properties, dict):
+            for key, value in list(raw_properties.items())[:200]:
+                key = str(key).strip()
+                if not key or key in TEMPLATE_EXCLUDED_PROPERTIES:
+                    continue
+                if isinstance(value, bool):
+                    value = 'true' if value else 'false'
+                properties[key[:100]] = str(value).replace('\n', ' ').replace('\r', ' ')[:500]
+
+        server_type = data.get('serverType') or data.get('serverEngine')
+        server_type = str(server_type).strip().lower()[:40] if server_type else None
+
+        return {
+            'name': (str(data.get('name') or 'Untitled template').strip() or
+                     'Untitled template')[:100],
+            'description': str(data.get('description') or '').strip()[:500],
+            'category': category,
+            'serverType': server_type,
+            'version': str(data.get('version')).strip()[:40] if data.get('version') else None,
+            'javaArgs': str(data.get('javaArgs') or '').strip()[:500],
+            'properties': properties,
+            'memoryLimitMb': _clamp_memory_limit(data.get('memoryLimitMb')),
+            'cpuLimitPercent': _clamp_cpu_limit(data.get('cpuLimitPercent')),
+            'limitAction': _clamp_limit_action(data.get('limitAction')),
+            'autoRestart': bool(data.get('autoRestart')),
+            'restartAttempts': _clamp_restart_attempts(data.get('restartAttempts')),
+            'shared': bool(data.get('shared')),
+        }
+
+    @staticmethod
+    def _row_to_dict(row):
+        """Convert a server_templates row to its API shape."""
+        try:
+            properties = json.loads(row['properties'] or '{}')
+        except (ValueError, TypeError):
+            properties = {}
+        return {
+            'id': row['id'],
+            'name': row['name'],
+            'description': row['description'],
+            'category': row['category'],
+            'serverType': row['server_type'],
+            'version': row['version'],
+            'javaArgs': row['java_args'],
+            'properties': properties,
+            'memoryLimitMb': row['memory_limit_mb'],
+            'cpuLimitPercent': row['cpu_limit_percent'],
+            'limitAction': row['limit_action'],
+            'autoRestart': bool(row['auto_restart']),
+            'restartAttempts': row['restart_attempts'],
+            'owner': row['owner'],
+            'shared': bool(row['shared']),
+            'useCount': row['use_count'],
+            'created': row['created'],
+            'updated': row['updated'],
+        }
+
+
+template_manager = TemplateManager()
+
 
 
 # ==================== Background Job Queue ====================
@@ -6651,6 +7915,8 @@ def _job_backup(job_id, params, progress, cancel):
         params: 'serverId' (required), 'compressionLevel' (0-9, clamped,
             default 6), 'backupType' (label for the event log, default
             'manual') and 'customName' (defaults to backup-<timestamp>.zip).
+            'rollbackPoint' (with optional 'rollbackLabel' and 'createdBy')
+            additionally registers the finished archive as a rollback point.
         progress: Callback(pct, message=None) pushed to the client over
             Socket.IO — 5-85% is the archive walk, then verify and restart.
         cancel: threading.Event the runner sets when the user cancels;
@@ -6731,11 +7997,24 @@ def _job_backup(job_id, params, progress, cancel):
         if settings_manager.get_app_settings().get('autoDeleteExpiredBackups', False):
             backup_scheduler._cleanup_old_backups(server_id)
 
+        # Registered only after the archive exists and verifies — a rollback
+        # point that names a missing or broken ZIP is worse than none at all.
+        # Deliberately before the restart, so the point is on record even if the
+        # server then fails to come back up.
+        point_id = None
+        if params.get('rollbackPoint'):
+            point = rollback_manager.create(
+                server_id, backup_name, kind='manual',
+                label=params.get('rollbackLabel') or 'Manual restore point',
+                created_by=params.get('createdBy'))
+            point_id = point['id'] if point else None
+
         if was_running:
             progress(95, 'Restarting server…')
             server_manager.start_server(server_id)
 
-        return {'backup': backup_name, 'size': size, 'verified': ok, 'checksum': checksum}
+        return {'backup': backup_name, 'size': size, 'verified': ok, 'checksum': checksum,
+                'rollbackPointId': point_id}
 
     except JobCancelled:
         try:
@@ -6954,7 +8233,63 @@ def _job_jar_download(job_id, params, progress, cancel):
     return result
 
 
+def _job_rollback(job_id, params, progress, cancel):
+    """
+    JobManager handler that undoes a tracked change by restoring its rollback point.
+
+    Args:
+        job_id: Id of the jobs row (unused).
+        params: 'serverId' and 'pointId'.
+        progress: Callback(pct, message=None).
+        cancel: threading.Event, passed straight through to the restore.
+
+    Returns:
+        {'backup', 'pointId', 'version'} — version is the one the server was
+        put back on, or None when the archive carried no managed.conf.
+
+    Side effects:
+        Delegates the destructive part to _job_restore rather than repeating it,
+        so a rollback and a plain restore behave identically (same stop/clear/
+        extract/restart, same safety checks). What this adds on top is the
+        metadata: the archive restores the server's old managed.conf, and the
+        servers row is then re-synced from it, because the row and managed.conf
+        disagreeing about the version is what makes the panel show the wrong
+        JAR and offer the wrong upgrades. Finally the point is marked
+        'rolled_back'. If the restore raises, the point is left untouched and
+        still available to retry.
+    """
+    server_id = params['serverId']
+    point_id = params['pointId']
+    point = rollback_manager.get(point_id)
+    if not point or point['serverId'] != server_id:
+        raise Exception('Rollback point not found')
+    if not point['backupExists']:
+        raise Exception(f"The backup for this rollback point is gone: {point['backupName']}")
+
+    result = _job_restore(job_id, {'serverId': server_id,
+                                   'backupName': point['backupName']}, progress, cancel)
+
+    progress(95, 'Restoring version metadata…')
+    restored_version = None
+    try:
+        server_dir = server_manager.get_server_path(server_id)
+        managed = server_manager._read_managed_conf(server_dir)
+        restored_version = managed.get('Version') or point.get('fromVersion')
+        if restored_version:
+            server_manager.update_server(server_id, version=restored_version)
+    except Exception as e:
+        app.logger.error(f'[Rollback] Version re-sync failed for {server_id}: {e}')
+
+    rollback_manager.set_status(
+        point_id, 'rolled_back',
+        f"Restored {point['backupName']}" +
+        (f" (back to {restored_version})" if restored_version else ''))
+
+    return {'backup': result.get('backup'), 'pointId': point_id, 'version': restored_version}
+
+
 job_manager.register('backup', _job_backup)
+job_manager.register('rollback', _job_rollback)
 job_manager.register('restore', _job_restore)
 job_manager.register('delete_server', _job_delete_server)
 job_manager.register('zip_download', _job_zip_download)
@@ -8698,24 +10033,41 @@ def _find_port_conflict(requested_ports, exclude_server_id=None):
 @app.route('/api/servers', methods=['POST'])
 @permission_required('servers.create')
 def create_server():
+    """Create a server from the wizard's JSON body.
+
+    A thin wrapper: the work lives in _provision_server(), which the template
+    deploy route calls with a body it builds itself, so a templated server and
+    a wizard-created one are provisioned by exactly the same code.
+    """
+    user_id, user = get_current_user()
+    return _provision_server(request.get_json() or {}, user_id, user)
+
+
+def _provision_server(data, user_id, user):
     """
     Create a server: DB row, directory, and its initial config files.
 
     Args:
-        JSON body: 'name' (default 'New Server'), 'serverPath' (optional;
-            must resolve inside SERVERS_DIR), 'javaArgs' (default
+        data: The create payload — 'name' (default 'New Server'),
+            'serverPath' (optional; must resolve inside SERVERS_DIR),
+            'javaArgs' (default
             DEFAULT_JAVA_ARGS), 'category' ('unmodded', 'modded' or
             'bedrock'; picks server.jar vs server.sh as the executable),
             'serverEngine' / legacy 'serverType', 'version', 'downloadJar'
             (copy a JAR from the bucket) and 'serverProperties' (the wizard's
-            server.properties values).
+            server.properties values), plus the per-server resource limits
+            ('memoryLimitMb', 'cpuLimitPercent', 'limitAction') and crash
+            handling ('autoRestart', 'restartAttempts').
+        user_id, user: The caller, already resolved — this is a helper, not
+            a route, so it cannot read the session itself.
 
     Returns:
         200 {'success': True, 'serverId': ...}; plus 'pendingApproval' and a
-        message when the serverCreate policy holds it for approval, or
-        'warning' when the server was created but the JAR copy failed (the
-        server exists either way). 400 for a serverPath outside SERVERS_DIR
-        or a 'server-port' another server already claims.
+        message when the serverCreate policy holds it for approval, and
+        'warning' when the JAR copy failed — the rest of the directory is
+        still built in that case, so the operator only has to supply the JAR.
+        400 for a serverPath outside SERVERS_DIR or a 'server-port' another
+        server already claims.
 
     Side effects:
         Inserts the servers row owned by the caller, creates servers/<id>/,
@@ -8733,9 +10085,6 @@ def create_server():
         wizards need the serverId back immediately, and the work is only a
         row plus a local file copy.
     """
-    user_id, user = get_current_user()
-    
-    data = request.get_json()
     name = data.get('name', 'New Server')
     server_path = data.get('serverPath', '')
     # Reject server paths outside SERVERS_DIR — a user-controlled base directory
@@ -8793,7 +10142,12 @@ def create_server():
             owner=user_id,
             approved=approved,
             category=category,
-            port=server_properties.get('server-port')
+            port=server_properties.get('server-port'),
+            memory_limit_mb=data.get('memoryLimitMb', 0),
+            cpu_limit_percent=data.get('cpuLimitPercent', 0),
+            limit_action=data.get('limitAction', 'warn'),
+            auto_restart=data.get('autoRestart', False),
+            restart_attempts=data.get('restartAttempts', 3)
         )
 
         # Get server directory for creating files
@@ -8815,17 +10169,19 @@ def create_server():
             return jsonify(response)
 
         # Copy JAR from serverexecutables if requested (Java servers only)
+        jar_warning = None
         if download_jar and server_type and version:
             jar_path = server_dir / executable
 
             # Copy the local JAR file to the server directory
             success, result = jar_manager.copy_jar_to_server(server_type, version, jar_path)
             if not success:
-                return jsonify({
-                    'success': True,
-                    'serverId': server_id,
-                    'warning': f'Server created but JAR copy failed: {result}'
-                })
+                # Carry the failure as a warning instead of returning here: the
+                # server row already exists, and bailing out early left it with
+                # no eula.txt and no server.properties, so it could never start
+                # and had no port for the conflict checker to see. The operator
+                # can drop a JAR in by hand; a half-built directory they cannot.
+                jar_warning = f'Server created but JAR copy failed: {result}'
 
         # Create eula.txt for convenience
         eula_path = server_dir / 'eula.txt'
@@ -8838,6 +10194,8 @@ def create_server():
             properties_path.write_text(properties_content, encoding='utf-8')
 
     response = {'success': True, 'serverId': server_id}
+    if jar_warning:
+        response['warning'] = jar_warning
     if not approved:
         response['pendingApproval'] = True
         response['message'] = 'Server created and pending admin approval'
@@ -9856,13 +11214,31 @@ def change_server_version(server_id):
     # Update version in managed.conf
     managed_conf['Version'] = new_version
     server_manager._write_managed_conf(server_dir, managed_conf)
-    
+
+    # Register the safety backup as a rollback point now that the change has
+    # actually been committed — registered any earlier and an aborted swap would
+    # leave the panel offering to undo a change that never happened. From here
+    # the server's next run decides the point's fate: survive
+    # ROLLBACK_HEALTH_WINDOW_SECONDS and it is marked verified, crash before
+    # that and it is marked failed and offered as a one-click undo (issue #40).
+    user_id, _user = get_current_user()
+    rollback_point = None
+    try:
+        rollback_point = rollback_manager.create(
+            server_id, backup_name, kind='version_change',
+            label=f'Version change {current_version} → {new_version}',
+            from_version=current_version, to_version=new_version,
+            engine=engine, created_by=user_id)
+    except Exception as e:
+        app.logger.error(f'[Rollback] Could not record rollback point for {server_id}: {e}')
+
     response = {
         'success': True,
         'message': f'Version updated from {current_version} to {new_version}',
         'oldVersion': current_version,
         'newVersion': new_version,
         'backupCreated': True,
+        'rollbackPointId': rollback_point['id'] if rollback_point else None,
     }
     # Surface at most one warning: the one-way conversion notice takes precedence.
     if world_conversion_warning:
@@ -13540,6 +14916,384 @@ def verify_backup(server_id):
         'error': error
     })
 
+# ==================== Rollback Points (issue #40) ====================
+
+@app.route('/api/servers/<server_id>/rollback-points', methods=['GET'])
+@server_access_required
+def get_rollback_points(server_id):
+    """List this server's rollback points, newest first.
+
+    Also returns the one point still 'pending' or 'failed', if any, as
+    'openPoint' — that is what the UI puts a banner on, so it does not have to
+    re-derive it from the list.
+    """
+    points = rollback_manager.list_for_server(server_id)
+    failed = next((p for p in points if p['status'] == 'failed'), None)
+    pending = next((p for p in points if p['status'] == 'pending'), None)
+    return api_success({
+        'points': points,
+        'openPoint': failed or pending,
+        'healthWindowSeconds': ROLLBACK_HEALTH_WINDOW_SECONDS,
+    })
+
+
+@app.route('/api/servers/<server_id>/rollback-points', methods=['POST'])
+@server_access_required
+def create_rollback_point(server_id):
+    """Take a backup now and register it as a manual restore point.
+
+    Queued on the job manager like any other backup — the archive can take
+    minutes on a large world — so this returns 202 with a jobId. The rollback
+    point itself is only recorded once the archive exists and verifies, inside
+    the job (see _job_backup).
+    """
+    user_id, user = get_current_user()
+    data = request.get_json() or {}
+
+    config = server_manager.get_server_config(server_id)
+    if not config:
+        return api_error('Server not found', 404)
+    server_name = config.get('name', server_id)
+
+    label = str(data.get('label') or 'Manual restore point').strip()[:120]
+    timestamp = datetime.now().strftime('%Y-%m-%dT%H-%M-%S')
+
+    # The policy payload is the job's params verbatim (plus serverName, which
+    # the approval executor strips): an approved 'backupCreate' action is
+    # re-submitted straight from this payload, so anything missing here would
+    # come back as a plain backup with no rollback point attached.
+    job_params = {
+        'serverId': server_id,
+        'compressionLevel': max(0, min(9, int(data.get('compressionLevel', 6)))),
+        'backupType': 'restore-point',
+        'customName': f'restore-point-{timestamp}.zip',
+        'rollbackPoint': True,
+        'rollbackLabel': label,
+        'createdBy': user_id,
+    }
+
+    def do_create():
+        job_id = job_manager.submit(
+            'backup', f'Restore point: {server_name}',
+            params=job_params, created_by=user_id, server_id=server_id)
+        return jsonify({'started': True, 'jobId': job_id}), 202
+
+    result, status = check_action_policy(
+        'backupCreate', user, {**job_params, 'serverName': server_name},
+        target_id=server_id, execute_fn=do_create,
+        description=f'{user.get("username","Unknown")} created a restore point for "{server_name}".')
+    return jsonify(result) if isinstance(result, dict) else result, status
+
+
+@app.route('/api/servers/<server_id>/rollback-points/<point_id>/restore', methods=['POST'])
+@server_access_required
+def restore_rollback_point(server_id, point_id):
+    """Roll the server back to this point — the one-click undo.
+
+    Queued as a 'rollback' job: the same destructive restore as
+    /backups/restore (the server directory is emptied and replaced with the
+    archive's contents), plus a re-sync of the version metadata afterwards.
+    Guarded by @server_access_required alone, matching /backups/restore —
+    there is no restore policy in settings_manager to consult, and adding one
+    here only would gate the rollback path while leaving plain restore open.
+    """
+    user_id, _user = get_current_user()
+
+    point = rollback_manager.get(point_id)
+    if not point or point['serverId'] != server_id:
+        return api_error('Rollback point not found', 404)
+    # An already-restored point stays usable on purpose: its archive is still a
+    # perfectly good backup, and refusing would force the operator over to the
+    # Backups tab to do the same thing by hand.
+    if not point['backupExists']:
+        return api_error(
+            f"The backup for this rollback point is no longer on disk "
+            f"({point['backupName']}). It may have been pruned by backup retention.", 410)
+
+    config = server_manager.get_server_config(server_id)
+    server_name = config.get('name', server_id) if config else server_id
+
+    job_id = job_manager.submit(
+        'rollback', f'Roll back: {server_name}',
+        params={'serverId': server_id, 'pointId': point_id},
+        created_by=user_id, server_id=server_id)
+    return jsonify({'started': True, 'jobId': job_id}), 202
+
+
+@app.route('/api/servers/<server_id>/rollback-points/<point_id>/dismiss', methods=['POST'])
+@server_access_required
+def dismiss_rollback_point(server_id, point_id):
+    """Clear a rollback point without restoring it — "the change is fine".
+
+    Leaves the backup archive alone; only the panel's offer to undo goes away.
+    """
+    point = rollback_manager.get(point_id)
+    if not point or point['serverId'] != server_id:
+        return api_error('Rollback point not found', 404)
+    _user_id, user = get_current_user()
+    updated = rollback_manager.set_status(
+        point_id, 'dismissed', f'Dismissed by {user.get("username", "a user")}')
+    return api_success({'point': updated})
+
+
+@app.route('/api/servers/<server_id>/rollback-points/<point_id>', methods=['DELETE'])
+@server_access_required
+def delete_rollback_point(server_id, point_id):
+    """Forget a rollback point. The backup it names stays in the Backups list."""
+    point = rollback_manager.get(point_id)
+    if not point or point['serverId'] != server_id:
+        return api_error('Rollback point not found', 404)
+    rollback_manager.delete(point_id)
+    return api_success({'deleted': point_id})
+
+
+# ==================== Per-server Resource Usage (issue #40) ====================
+
+@app.route('/api/servers/<server_id>/resources', methods=['GET'])
+@server_access_required
+def get_server_resources(server_id):
+    """Report a server's configured caps and, when it is running, its live usage.
+
+    Usage comes from the running instance's own sampler rather than being
+    measured here, so polling this endpoint costs nothing and several viewers
+    cannot each trigger their own psutil walk. A stopped server returns its
+    limits with an empty usage object.
+    """
+    config = server_manager.get_server_config(server_id)
+    if not config:
+        return api_error('Server not found', 404)
+
+    instance = server_manager.servers.get(server_id)
+    if instance is not None and instance.is_running():
+        payload = instance.get_resource_usage()
+        payload['running'] = True
+    else:
+        payload = {
+            'usage': {},
+            'limits': {
+                'memoryLimitMb': config.get('memoryLimitMb', 0),
+                'cpuLimitPercent': config.get('cpuLimitPercent', 0),
+                'limitAction': config.get('limitAction', 'warn'),
+                'cpuAffinity': None,
+                'hostCores': os.cpu_count() or 0,
+            },
+            'autoRestart': config.get('autoRestart', False),
+            'restartAttempts': config.get('restartAttempts', 3),
+            'running': False,
+        }
+    payload['restartsUsed'] = crash_supervisor.used(server_id)
+    payload['crashWindowSeconds'] = CRASH_WINDOW_SECONDS
+    return api_success(payload)
+
+
+# ==================== Server Templates (issue #40) ====================
+
+def _template_or_404(template_id):
+    """Fetch a template the caller may at least see, or an error response.
+
+    Returns (template, error_response, is_admin). Exactly one of template and
+    error_response is None.
+    """
+    user_id, user = get_current_user()
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+    template = template_manager.get(template_id)
+    if not template:
+        return None, api_error('Template not found', 404), is_admin
+    if not (is_admin or template['shared'] or template['owner'] == user_id):
+        # Same response as a genuine miss: whether a private template exists is
+        # itself information the caller is not entitled to.
+        return None, api_error('Template not found', 404), is_admin
+    return template, None, is_admin
+
+
+@app.route('/api/templates', methods=['GET'])
+@login_required
+def list_templates():
+    """List the templates this user may deploy: their own plus shared ones."""
+    user_id, user = get_current_user()
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+    templates = template_manager.list_visible(user_id, is_admin)
+    for template in templates:
+        template['canManage'] = template_manager.can_manage(template, user_id, is_admin)
+    return api_success({'templates': templates})
+
+
+@app.route('/api/templates', methods=['POST'])
+@permission_required('servers.create')
+def create_template():
+    """Create a template, either from scratch or by capturing an existing server.
+
+    Pass 'fromServerId' to snapshot a server's configuration and
+    server.properties; otherwise the body is taken as the template itself.
+    Capturing requires access to that server, checked here rather than by a
+    decorator because the server id arrives in the body, not the path.
+    """
+    user_id, user = get_current_user()
+    data = request.get_json() or {}
+
+    source_id = data.get('fromServerId')
+    if source_id:
+        if not can_access_server(source_id):
+            return api_error('You do not have access to that server', 403)
+        template = template_manager.create_from_server(source_id, data, user_id)
+        if not template:
+            return api_error('Server not found', 404)
+    else:
+        template = template_manager.create(data, user_id)
+
+    template['canManage'] = True
+    return api_success({'template': template}, status=201)
+
+
+@app.route('/api/templates/<template_id>', methods=['GET'])
+@login_required
+def get_template(template_id):
+    """Return one template."""
+    template, error, is_admin = _template_or_404(template_id)
+    if error:
+        return error
+    user_id, _user = get_current_user()
+    template['canManage'] = template_manager.can_manage(template, user_id, is_admin)
+    return api_success({'template': template})
+
+
+@app.route('/api/templates/<template_id>', methods=['PUT'])
+@login_required
+def update_template(template_id):
+    """Update a template. Owner or admin only."""
+    template, error, is_admin = _template_or_404(template_id)
+    if error:
+        return error
+    user_id, _user = get_current_user()
+    if not template_manager.can_manage(template, user_id, is_admin):
+        return api_error('You can only edit your own templates', 403)
+
+    data = request.get_json() or {}
+    data.pop('id', None)
+    data.pop('owner', None)
+    data.pop('useCount', None)
+    updated = template_manager.update(template_id, data)
+    updated['canManage'] = True
+    return api_success({'template': updated})
+
+
+@app.route('/api/templates/<template_id>', methods=['DELETE'])
+@login_required
+def delete_template(template_id):
+    """Delete a template. Owner or admin only; deployed servers are unaffected."""
+    template, error, is_admin = _template_or_404(template_id)
+    if error:
+        return error
+    user_id, _user = get_current_user()
+    if not template_manager.can_manage(template, user_id, is_admin):
+        return api_error('You can only delete your own templates', 403)
+    template_manager.delete(template_id)
+    return api_success({'deleted': template_id})
+
+
+@app.route('/api/templates/<template_id>/export', methods=['GET'])
+@login_required
+def export_template(template_id):
+    """Download a template as a portable JSON file — the share format.
+
+    Stripped of ids, owner and usage counts, so importing it anywhere (including
+    back into this panel) creates a clean new template rather than colliding
+    with the original.
+    """
+    template, error, _is_admin = _template_or_404(template_id)
+    if error:
+        return error
+    payload = template_manager.to_export(template)
+    safe_name = re.sub(r'[^A-Za-z0-9._-]+', '-', template['name']).strip('-') or 'template'
+    response = make_response(json.dumps(payload, indent=2))
+    response.headers['Content-Type'] = 'application/json'
+    response.headers['Content-Disposition'] = (
+        f'attachment; filename="mserver-template-{safe_name}.json"')
+    return response
+
+
+@app.route('/api/templates/import', methods=['POST'])
+@permission_required('servers.create')
+def import_template():
+    """Import a template from an exported JSON payload.
+
+    Accepts the JSON body directly or an uploaded file field named 'file'. The
+    payload is run through the same sanitiser as any other template write, so a
+    hand-edited or hostile file cannot introduce fields the deploy path would
+    trip over — an import is untrusted input, not a trusted restore.
+    """
+    user_id, _user = get_current_user()
+
+    payload = None
+    upload = request.files.get('file')
+    if upload is not None:
+        try:
+            payload = json.loads(upload.read().decode('utf-8', errors='replace'))
+        except (ValueError, UnicodeDecodeError):
+            return api_error('That file is not valid JSON', 400)
+    else:
+        payload = request.get_json(silent=True)
+
+    if not isinstance(payload, dict):
+        return api_error('No template payload provided', 400)
+    if not payload.get('name'):
+        return api_error('The template payload has no name', 400)
+
+    payload = dict(payload)
+    payload.pop('id', None)
+    payload.pop('owner', None)
+    payload['shared'] = bool(payload.get('shared'))
+    template = template_manager.create(payload, user_id)
+    template['canManage'] = True
+    return api_success({'template': template}, status=201)
+
+
+@app.route('/api/templates/<template_id>/deploy', methods=['POST'])
+@permission_required('servers.create')
+def deploy_template(template_id):
+    """Create a new server from a template.
+
+    Runs the template's settings through _provision_server(), the same helper
+    POST /api/servers uses, so a deployed server is subject to the identical
+    approval policy, port-conflict check, JAR copy and EULA stub. Bedrock
+    templates can only get as far as the server row — the Bedrock Dedicated
+    Server archive is fetched by the separate /setup-bedrock call — so the
+    response flags that with 'needsBedrockSetup'.
+    """
+    template, error, _is_admin = _template_or_404(template_id)
+    if error:
+        return error
+
+    user_id, user = get_current_user()
+    data = request.get_json() or {}
+    name = str(data.get('name') or template['name']).strip()[:100]
+    if not name:
+        return api_error('A server name is required', 400)
+
+    payload = template_manager.deploy_payload(
+        template, name, data.get('serverProperties'))
+    if data.get('serverPort'):
+        payload['serverProperties']['server-port'] = str(data['serverPort'])
+
+    response = _provision_server(payload, user_id, user)
+
+    # _provision_server hands back whatever the create route would: a Response,
+    # or a (Response, status) pair. Only count the deploy when a server actually
+    # came out of it, so a rejected or approval-held request leaves the counter
+    # alone.
+    body = response[0] if isinstance(response, tuple) else response
+    try:
+        created = body.get_json() or {}
+    except Exception:
+        created = {}
+    if created.get('serverId'):
+        template_manager.record_use(template_id)
+        created['templateId'] = template_id
+        created['needsBedrockSetup'] = template['category'] == 'bedrock'
+        return jsonify(created)
+    return response
+
+
 
 # ==================== Task Scheduler API ====================
 
@@ -14143,10 +15897,17 @@ def restore_all_servers():
                             shutil.copyfileobj(src, dst)
                         restored.append(name)
 
+        # The archive carries directories only. Without a servers row a
+        # restored server is on disk but absent from the server list.
+        user_id, _ = get_current_user()
+        registered = [sid for sid in sorted(server_ids_in_archive)
+                      if server_manager.register_restored_server(sid, owner=user_id)]
+
         return jsonify({
             'success': True,
             'mode': mode,
             'serversRestored': list(server_ids_in_archive),
+            'serversRegistered': registered,
             'filesRestored': len(restored),
             'filesSkipped': len(skipped)
         })

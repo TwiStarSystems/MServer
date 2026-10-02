@@ -3269,6 +3269,7 @@ const _TEMPLATE_LABELS = {
   backup_failure:  { label: 'Backup Failed',    vars: 'serverName, error, timestamp, siteTitle' },
   server_start:    { label: 'Server Started',   vars: 'serverName, serverId, timestamp, siteTitle' },
   server_stop:     { label: 'Server Stopped',   vars: 'serverName, serverId, timestamp, siteTitle' },
+  server_crash:    { label: 'Server Crashed',   vars: 'serverName, serverId, exitCode, uptime, timestamp, siteTitle' },
   player_join:     { label: 'Player Joined',    vars: 'player, serverName, serverId, timestamp, siteTitle' },
   player_leave:    { label: 'Player Left',      vars: 'player, serverName, serverId, timestamp, siteTitle' },
   critical_alert:  { label: 'Critical Alert',   vars: 'alertType, details, timestamp, siteTitle' },
