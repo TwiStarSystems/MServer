@@ -5037,8 +5037,8 @@ SELF_STOP_COMMAND = re.compile(r'^\s*/?\s*(stop|shutdown)\s*$', re.IGNORECASE)
 # ── Per-server resource-limit helpers (issue #40) ─────────────────────────────
 # Semantics, fixed here so every reader agrees:
 #   memory_limit_mb    0 = unlimited. Otherwise the cap on the server process
-#                      tree's resident memory, in MiB. For Java it is also
-#                      applied as the JVM's -Xmx, which is the only *hard* cap
+#                      tree's resident memory, in MiB. For Java it also caps
+#                      the JVM's -Xmx (lowering it, never raising it), the only *hard* cap
 #                      the panel can impose without root; the sampler is what
 #                      catches native/off-heap overrun and covers Bedrock,
 #                      which has no equivalent knob.
@@ -5094,10 +5094,13 @@ def _apply_memory_limit_to_java_args(java_args, memory_limit_mb):
     """Return java_args with -Xmx (and, if larger, -Xms) forced down to the cap.
 
     The JVM heap flag is the one hard memory cap the panel can set without root,
-    so a configured limit overrides whatever -Xmx the operator typed rather than
-    merely warning about it. -Xms is lowered only when it would exceed the new
-    -Xmx, since a JVM refuses to start with an initial heap above its maximum.
-    A limit of 0 (unlimited) returns the arguments untouched.
+    so a configured limit overrides a larger -Xmx the operator typed rather than
+    merely warning about it. It only ever lowers: arguments whose -Xmx is
+    already at or under the cap are returned untouched — a limit is a ceiling,
+    not a grant (issue #118). With no (parseable) -Xmx at all, one is added at
+    the cap. -Xms is lowered only when it would exceed the new -Xmx, since a
+    JVM refuses to start with an initial heap above its maximum. A limit of 0
+    (unlimited) returns the arguments untouched.
     """
     if not memory_limit_mb or memory_limit_mb <= 0:
         return java_args
@@ -5109,6 +5112,12 @@ def _apply_memory_limit_to_java_args(java_args, memory_limit_mb):
         size = int(match.group(1))
         return size * {'': 1 / (1024 * 1024), 'k': 1 / 1024, 'm': 1,
                        'g': 1024, 't': 1024 * 1024}[match.group(2).lower()]
+
+    for token in (java_args or '').split():
+        if token.lower().startswith('-xmx'):
+            xmx_mb = _to_mb(token[4:])
+            if xmx_mb is not None and xmx_mb <= memory_limit_mb:
+                return java_args  # already within the cap
 
     kept = []
     xms_mb = None
