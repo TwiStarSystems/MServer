@@ -65,6 +65,7 @@
           <button type="button" class="settings-tab-btn" data-tab="branding">🎨 Branding</button>
           <button type="button" class="settings-tab-btn" data-tab="users">👥 User/Group Management</button>
           <button type="button" class="settings-tab-btn" data-tab="approvals">✅ Approvals</button>
+          <button type="button" class="settings-tab-btn" data-tab="templates">📋 Templates</button>
           <button type="button" class="settings-tab-btn" data-tab="api">🔌 API Manager</button>
           <button type="button" class="settings-tab-btn" data-tab="appsettings">⚙️ Server Settings</button>
           <button type="button" class="settings-tab-btn" data-tab="external-backup">☁️ External Backup</button>
@@ -183,6 +184,28 @@
         </section>
         
         <!-- Approvals Section -->
+        <section id="templates-section" class="settings-section">
+          <div class="tool-panel">
+            <div class="tool-panel-header">
+              <h3>📋 Server Templates</h3>
+              <span class="tool-description">Reusable server recipes for Quick Deploy in the Add Server wizard. Templates hold configuration only — never world data.</span>
+              <div class="tool-header-actions">
+                <button type="button" class="btn btn-small btn-primary" onclick="openTemplateEditor()">➕ New Template</button>
+                <button type="button" class="btn btn-small" onclick="openTemplateFromServer()">📸 From Server…</button>
+                <label class="btn btn-small" title="Import an exported template JSON">
+                  📥 Import
+                  <input type="file" id="template-import-file" accept=".json,application/json" style="display: none;" onchange="importTemplateFile(this)">
+                </label>
+              </div>
+            </div>
+            <div class="tool-panel-body">
+              <div id="templates-list" class="templates-list">
+                <div class="loading">Loading templates...</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section id="approvals-section" class="settings-section">
           <div class="approvals-container">
             <div class="approval-card">
@@ -938,6 +961,128 @@
     </div>
   </div>
   
+  <!-- Template Editor Modal -->
+  <div id="template-editor-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2 id="template-editor-title">New Template</h2>
+        <button class="close-btn" onclick="closeTemplateEditor()">&times;</button>
+      </div>
+      <form id="template-editor-form" class="template-editor-form" onsubmit="saveTemplate(event)" novalidate>
+        <div class="form-group">
+          <label for="tpl-name">Name</label>
+          <input type="text" id="tpl-name" class="form-control" maxlength="100" required placeholder="e.g. Survival SMP">
+        </div>
+        <div class="form-group">
+          <label for="tpl-description">Description <span class="optional-label">(Optional)</span></label>
+          <input type="text" id="tpl-description" class="form-control" maxlength="500" placeholder="Shown on the Quick Deploy card">
+        </div>
+        <div class="template-editor-row">
+          <div class="form-group">
+            <label for="tpl-category">Edition</label>
+            <select id="tpl-category" class="form-control" onchange="onTemplateCategoryChange()">
+              <option value="unmodded">Java</option>
+              <option value="modded">Modded Java</option>
+              <option value="bedrock">Bedrock</option>
+            </select>
+          </div>
+          <div class="form-group" id="tpl-engine-group">
+            <label for="tpl-engine">Engine</label>
+            <select id="tpl-engine" class="form-control" onchange="loadTemplateVersionOptions()"></select>
+          </div>
+        </div>
+        <div class="template-editor-row">
+          <div class="checkbox-label">
+            <input type="checkbox" id="tpl-latest" onchange="onTemplateLatestChange()">
+            <span>Always use the latest version</span>
+          </div>
+          <div class="form-group" id="tpl-version-group">
+            <label for="tpl-version">Version</label>
+            <input type="text" id="tpl-version" class="form-control" maxlength="40" list="tpl-version-list" placeholder="e.g. 1.21.4">
+            <datalist id="tpl-version-list"></datalist>
+          </div>
+        </div>
+        <div class="form-group" id="tpl-java-args-group">
+          <label for="tpl-java-args">Java Arguments <span class="optional-label">(blank = panel default)</span></label>
+          <input type="text" id="tpl-java-args" class="form-control" maxlength="500" placeholder="-Xmx4G -Xms1G">
+        </div>
+
+        <div class="form-group">
+          <label>server.properties</label>
+          <small class="form-hint">Ports, server-ip and RCON settings are assigned per server and can't be set in a template.</small>
+          <div id="tpl-properties" class="tpl-properties"></div>
+          <button type="button" class="btn btn-small" onclick="addTemplatePropertyRow()">➕ Add Property</button>
+        </div>
+
+        <details class="tpl-limits">
+          <summary>Resource limits &amp; crash recovery</summary>
+          <div class="template-editor-row">
+            <div class="form-group">
+              <label for="tpl-memory">Memory limit (MB, 0 = none)</label>
+              <input type="number" id="tpl-memory" class="form-control" min="0" step="256" value="0">
+            </div>
+            <div class="form-group">
+              <label for="tpl-cpu">CPU limit (%, 0 = none)</label>
+              <input type="number" id="tpl-cpu" class="form-control" min="0" max="100" value="0">
+            </div>
+          </div>
+          <div class="template-editor-row">
+            <div class="form-group">
+              <label for="tpl-limit-action">When a limit is exceeded</label>
+              <select id="tpl-limit-action" class="form-control">
+                <option value="warn">Warn</option>
+                <option value="stop">Stop the server</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="tpl-restart-attempts">Restart attempts</label>
+              <input type="number" id="tpl-restart-attempts" class="form-control" min="1" max="20" value="3">
+            </div>
+          </div>
+          <div class="checkbox-label">
+            <input type="checkbox" id="tpl-auto-restart">
+            <span>Auto-restart on crash</span>
+          </div>
+        </details>
+
+        <div class="checkbox-label">
+          <input type="checkbox" id="tpl-shared">
+          <span>Shared — every user can deploy this template</span>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="closeTemplateEditor()">Cancel</button>
+          <button type="submit" class="btn btn-success" id="tpl-save-btn">Save Template</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Template From Server Modal -->
+  <div id="template-from-server-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>📸 Template From Server</h2>
+        <button class="close-btn" onclick="closeTemplateFromServer()">&times;</button>
+      </div>
+      <form onsubmit="createTemplateFromServer(event)">
+        <div class="form-group">
+          <label for="tpl-source-server">Server</label>
+          <select id="tpl-source-server" class="form-control" required></select>
+          <small class="form-hint">Captures the server's engine, version, Java args, limits and server.properties.</small>
+        </div>
+        <div class="form-group">
+          <label for="tpl-source-name">Template name <span class="optional-label">(Optional)</span></label>
+          <input type="text" id="tpl-source-name" class="form-control" maxlength="100">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn" onclick="closeTemplateFromServer()">Cancel</button>
+          <button type="submit" class="btn btn-success">Create Template</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- User Profile Settings Modal -->
   <div id="profile-modal" class="modal" style="display: none;">
     <div class="modal-content modal-medium">

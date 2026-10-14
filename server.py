@@ -7304,6 +7304,31 @@ def _real_version(value):
     return None if text.lower() in ('', 'unknown', 'none', 'imported') else text
 
 
+def _upstream_versions(server_type):
+    """The engine's upstream versions as plain strings, newest first.
+
+    get_versions() returns dicts for vanilla and strings for every other
+    engine; callers comparing or picking versions only want the strings.
+    """
+    versions = jar_bucket.get_versions(server_type) if server_type else []
+    return [v['version'] if isinstance(v, dict) else str(v) for v in versions]
+
+
+def _resolve_template_version(server_type, version):
+    """Turn a template's stored version into the one to deploy.
+
+    A template may store 'latest' to track the newest release, resolved here at
+    deploy time. Bedrock is left as 'latest': its installer only ever fetches
+    the current build, and the wizard records it the same way. Returns None
+    when 'latest' cannot be resolved (unknown engine, upstream unreachable).
+    """
+    version = _real_version(version)
+    if not version or version.lower() != 'latest' or server_type == 'bedrock':
+        return version
+    versions = _upstream_versions(server_type)
+    return versions[0] if versions else None
+
+
 class TemplateManager:
     """CRUD for server templates: reusable recipes for creating servers.
 
@@ -7458,13 +7483,16 @@ class TemplateManager:
             'restartAttempts': template['restartAttempts'],
         }
 
-    def deploy_payload(self, template, name, server_properties=None):
+    def deploy_payload(self, template, name, server_properties=None, version=None):
         """Translate a template into the body /api/servers already understands.
 
         Deploying reuses the create route's provisioning helper rather than
         reimplementing it, so a template-created server gets the same policy
         checks, port-conflict handling, EULA stub and JAR copy as a wizard-created
         one — there is no second code path to keep in step.
+
+        'version' is the already-resolved version to deploy (see
+        _resolve_template_version); when omitted the template's own is used.
         """
         properties = dict(template.get('properties') or {})
         if server_properties:
@@ -7473,7 +7501,7 @@ class TemplateManager:
         # Re-checked rather than trusted: a template stored before placeholder
         # versions were filtered out can still hold the string 'Unknown', and
         # asking the bucket for a JAR of version "Unknown" only ever fails.
-        version = _real_version(template['version'])
+        version = _real_version(version or template['version'])
         payload = {
             'name': name,
             'category': template['category'],
@@ -7489,6 +7517,58 @@ class TemplateManager:
             'restartAttempts': template['restartAttempts'],
         }
         return payload
+
+    # Built-in templates offered by Quick Deploy on a fresh install. Owned by no
+    # one and shared, so every user can deploy them and only admins can edit.
+    DEFAULT_TEMPLATES = (
+        {
+            'name': 'Vanilla Java',
+            'description': 'The official Minecraft Java Edition server, always on the latest release.',
+            'category': 'unmodded',
+            'serverType': 'vanilla',
+            'version': 'latest',
+            'properties': {
+                'gamemode': 'survival',
+                'difficulty': 'normal',
+                'max-players': '20',
+                'view-distance': '10',
+                'motd': 'A Minecraft Server',
+            },
+            'shared': True,
+        },
+        {
+            'name': 'Bedrock',
+            'description': 'The official Bedrock Dedicated Server, always on the latest build.',
+            'category': 'bedrock',
+            'serverType': 'bedrock',
+            'version': 'latest',
+            'properties': {
+                'gamemode': 'survival',
+                'difficulty': 'normal',
+                'max-players': '10',
+            },
+            'shared': True,
+        },
+    )
+
+    def seed_defaults(self):
+        """Insert DEFAULT_TEMPLATES once per database.
+
+        Guarded by a db_meta flag rather than by looking for the templates, so
+        an admin who deletes a default does not get it back on the next boot.
+        """
+        conn = get_db()
+        seeded = conn.execute(
+            "SELECT 1 FROM db_meta WHERE key='default_templates_seeded'").fetchone()
+        if seeded:
+            return
+        # Listings are newest first; insert in reverse so the first entry of
+        # DEFAULT_TEMPLATES is the first card Quick Deploy shows.
+        for template in reversed(self.DEFAULT_TEMPLATES):
+            self.create(template, None)
+        conn.execute(
+            "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('default_templates_seeded', '1')")
+        conn.commit()
 
     # ── Internals ────────────────────────────────────────────────────────────
 
@@ -7587,6 +7667,7 @@ class TemplateManager:
 
 
 template_manager = TemplateManager()
+template_manager.seed_defaults()
 
 
 
@@ -10203,7 +10284,17 @@ def _provision_server(data, user_id, user):
 
         # Handle Bedrock server setup
         if category == 'bedrock':
-            # server.properties is written by setup-bedrock after ZIP extraction
+            # server.properties is written by setup-bedrock after ZIP extraction.
+            # Until then the ports would be unclaimed — the conflict checks read
+            # server.properties — so a second Bedrock server created before the
+            # first finished installing got the same port. Claim them now with a
+            # stub; setup-bedrock preserves it through extraction and then
+            # rewrites the whole file.
+            port_v4 = str(server_properties.get('server-port') or '').strip()
+            if port_v4.isdigit() and int(port_v4) < 65535:
+                (server_dir / 'server.properties').write_text(
+                    f'server-port={port_v4}\nserver-portv6={int(port_v4) + 1}\n',
+                    encoding='utf-8')
             response = {'success': True, 'serverId': server_id}
             if not approved:
                 response['pendingApproval'] = True
@@ -15347,10 +15438,44 @@ def deploy_template(template_id):
     if not name:
         return api_error('A server name is required', 400)
 
+    # A 'latest' template is resolved here, unless the caller pins the version
+    # /prepare already resolved and downloaded — a release landing between the
+    # two calls would otherwise deploy a version whose JAR was never fetched.
+    # The pin is only honoured for 'latest' templates and only for a version
+    # the engine actually lists, so it cannot be used to pick something else.
+    is_bedrock = template['category'] == 'bedrock'
+    tracks_latest = str(template['version'] or '').lower() == 'latest'
+    version = None
+    requested = str(data.get('version') or '').strip()
+    if requested and tracks_latest and not is_bedrock:
+        if requested not in _upstream_versions(template['serverType']):
+            return api_error(f'Unknown version: {requested}', 400)
+        version = requested
+    else:
+        version = _resolve_template_version(template['serverType'], template['version'])
+        if tracks_latest and not version:
+            return api_error('Could not look up the latest version — try again later', 502)
+
     payload = template_manager.deploy_payload(
-        template, name, data.get('serverProperties'))
+        template, name, data.get('serverProperties'), version=version)
     if data.get('serverPort'):
         payload['serverProperties']['server-port'] = str(data['serverPort'])
+
+    # Bedrock binds an IPv4 port and IPv4 + 1 for IPv6, and _provision_server
+    # does not allocate one for it. Pick the first free pair so a one-click
+    # deploy does not collide with an existing Bedrock server on 19132. Both
+    # _provision_server and setup-bedrock re-check the port under the port
+    # lock, so a concurrent deploy grabbing the same pair fails cleanly.
+    bedrock_port = None
+    if is_bedrock:
+        bedrock_port = payload['serverProperties'].get('server-port')
+        if not bedrock_port:
+            used = server_manager.get_all_used_ports()
+            bedrock_port = next((str(p) for p in range(19132, 65535)
+                                 if str(p) not in used and str(p + 1) not in used), None)
+            if bedrock_port is None:
+                return api_error('No free port is available for this server', 400)
+            payload['serverProperties']['server-port'] = bedrock_port
 
     response = _provision_server(payload, user_id, user)
 
@@ -15366,9 +15491,70 @@ def deploy_template(template_id):
     if created.get('serverId'):
         template_manager.record_use(template_id)
         created['templateId'] = template_id
-        created['needsBedrockSetup'] = template['category'] == 'bedrock'
+        created['version'] = version
+        created['needsBedrockSetup'] = is_bedrock
+        if is_bedrock:
+            # setup-bedrock writes server.properties after extraction, so the
+            # client forwards these to it.
+            created['bedrockPort'] = bedrock_port
+            created['bedrockProperties'] = payload['serverProperties']
         return jsonify(created)
     return response
+
+
+@app.route('/api/templates/<template_id>/prepare', methods=['POST'])
+@permission_required('servers.create')
+def prepare_template(template_id):
+    """Make sure a template's server JAR is in the bucket before deploying it.
+
+    Resolves a 'latest' template to a concrete version and, if that JAR is not
+    cached yet, starts downloading it — returning a progressId to poll at
+    /api/jar-bucket/progress — so Quick Deploy never creates a server whose
+    JAR copy then fails. Only ever fetches the template's own engine and
+    version, which is why servers.create suffices here while the free-form
+    /api/jar-bucket/download needs panel.jars.manage.
+
+    Bedrock is always ready: setup-bedrock with source='auto' already uses a
+    cached build or downloads one. A template with no engine or version (a
+    capture of an imported server, say) is ready too — there is nothing to
+    fetch, and deploy creates it without a JAR exactly as before.
+    """
+    template, error, _is_admin = _template_or_404(template_id)
+    if error:
+        return error
+
+    server_type = template['serverType']
+    if template['category'] == 'bedrock':
+        return api_success(ready=True, version='latest')
+
+    version = _resolve_template_version(server_type, template['version'])
+    if not server_type or not version:
+        if str(template['version'] or '').lower() == 'latest':
+            return api_error('Could not look up the latest version — try again later', 502)
+        return api_success(ready=True, version=version)
+
+    if jar_manager.get_local_jar_info(server_type, version):
+        return api_success(ready=True, version=version)
+
+    progress_id = str(uuid.uuid4())
+    jar_bucket.set_progress(progress_id, {
+        'status': 'initializing',
+        'message': 'Starting download...',
+        'kind': 'download',
+        'type': server_type,
+        'version': version,
+    })
+
+    def do_download():
+        result = jar_bucket.download_jar(server_type, version, progress_id)
+        jar_bucket.update_progress(
+            progress_id,
+            status='complete' if result.get('success') else 'error',
+            **result
+        )
+
+    threading.Thread(target=do_download, daemon=True).start()
+    return api_success(ready=False, version=version, progressId=progress_id)
 
 
 
@@ -17565,9 +17751,14 @@ def api_jar_bucket_queue_download():
 
 @app.route('/api/jar-bucket/progress/<progress_id>', methods=['GET'])
 @limiter.exempt
-@permission_required('panel.jars.manage')
+@login_required
 def api_jar_bucket_progress(progress_id):
-    """Get download progress"""
+    """Get download progress.
+
+    Login only, not panel.jars.manage: progress ids are random handles given
+    to whoever started the work, and setup-bedrock and Quick Deploy's
+    /prepare hand them to users who may create servers but not manage JARs.
+    """
     progress = jar_bucket.get_progress(progress_id)
     if progress:
         return api_success(progress)

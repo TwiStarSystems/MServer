@@ -806,6 +806,14 @@
         <div id="creation-type-section" class="creation-type-section">
           <h3 id="creation-type-heading">Choose how to create your server</h3>
           <div class="creation-type-buttons" role="radiogroup" aria-labelledby="creation-type-heading">
+            <button type="button" class="creation-type-btn" data-type="quick" role="radio" aria-checked="false" onclick="openQuickDeploy()">
+              <span class="creation-check" aria-hidden="true">✓</span>
+              <span class="creation-icon" aria-hidden="true">⚡</span>
+              <span class="creation-text">
+                <span class="creation-label">Quick Deploy</span>
+                <span class="creation-desc">One-click deployment from a template — name it and go. Templates are managed in Settings.</span>
+              </span>
+            </button>
             <button type="button" class="creation-type-btn" data-type="fresh" role="radio" aria-checked="false" onclick="selectCreationType('fresh')">
               <span class="creation-check" aria-hidden="true">✓</span>
               <span class="creation-icon" aria-hidden="true">🆕</span>
@@ -831,6 +839,39 @@
               </span>
             </button>
           </div>
+        </div>
+
+        <!-- STEP 2 — Quick Deploy (template picker) -->
+        <div id="quick-deploy-section" class="quick-deploy-section" style="display: none;">
+          <div class="method-banner">
+            <span class="method-banner-icon" aria-hidden="true">⚡</span>
+            <span class="method-banner-text">
+              <strong>Quick Deploy</strong>
+              <small>Pick a template. The latest server files are fetched and a free port is assigned for you.</small>
+            </span>
+            <button type="button" class="btn btn-ghost btn-small" id="qd-change-btn" onclick="backToCreationType()">Change</button>
+          </div>
+          <div id="qd-template-grid" class="qd-template-grid" role="list"></div>
+          <form id="qd-confirm" class="qd-confirm" style="display: none;" onsubmit="submitQuickDeploy(event)" novalidate>
+            <div class="qd-confirm-head">
+              <span>Deploy <strong id="qd-confirm-template"></strong></span>
+            </div>
+            <div class="form-group">
+              <label for="qd-name">Server name</label>
+              <input type="text" id="qd-name" maxlength="100" required autocomplete="off">
+            </div>
+            <div id="qd-status" class="jar-download-status" style="display: none;">
+              <div class="download-info"><span class="info-icon">⏳</span><span class="qd-status-text"></span></div>
+              <div class="download-progress" style="display: none;">
+                <div class="progress-bar"><div class="progress-fill" style="width: 0%;"></div></div>
+                <span class="progress-text">0%</span>
+              </div>
+            </div>
+            <div class="qd-confirm-actions">
+              <button type="button" class="btn btn-secondary" id="qd-cancel-btn" onclick="cancelQuickDeployConfirm()">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="qd-deploy-btn">⚡ Deploy</button>
+            </div>
+          </form>
         </div>
 
         <!-- STEP 2 — Unified Server Form (Fresh / Import Server / Import World) -->

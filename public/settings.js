@@ -70,6 +70,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadUsers();
         loadGroups();
       }
+      // Load templates when Templates tab is clicked
+      if (tab === 'templates') {
+        loadTemplates();
+      }
       // Load approvals when Approvals tab is clicked
       if (tab === 'approvals') {
         loadPendingApprovals();
@@ -190,6 +194,7 @@ function applyTabVisibility() {
     'branding': 'panel.settings.manage',
     'users': 'panel.users.view',
     'approvals': 'panel.approvals.manage',
+    'templates': 'servers.create',
     'api': 'panel.settings.manage',
     'appsettings': 'panel.settings.view',
     'external-backup': 'panel.settings.view',
@@ -213,6 +218,9 @@ function applyTabVisibility() {
     const activeSec = document.getElementById(`${firstVisible}-section`);
     if (activeBtn) activeBtn.classList.add('active');
     if (activeSec) activeSec.classList.add('active');
+    // Templates is the only tab a plain server creator sees, so it can land
+    // here without a click to load it.
+    if (firstVisible === 'templates') loadTemplates();
   }
 }
 
@@ -3734,5 +3742,328 @@ async function setDefaultGroup(groupId) {
     loadGroups();
   } catch (err) {
     alert('Failed to set default group: ' + err.message);
+  }
+}
+
+// ==================== Server Templates ====================
+
+let settingsTemplates = [];
+let editingTemplateId = null;
+let templateEngineTypes = null;
+
+// Mirrors TEMPLATE_EXCLUDED_PROPERTIES server-side: assigned per server, so a
+// template can't carry them (the backend drops them anyway).
+const TEMPLATE_EXCLUDED_KEYS = new Set([
+  'server-port', 'server-portv6', 'query.port', 'rcon.port', 'rcon.password', 'server-ip'
+]);
+const TEMPLATE_CATEGORY_LABELS = { unmodded: 'Java', modded: 'Modded Java', bedrock: 'Bedrock' };
+
+async function loadTemplates() {
+  const list = document.getElementById('templates-list');
+  if (!list) return;
+  try {
+    const result = await apiRequest('/api/templates');
+    settingsTemplates = result.templates || [];
+  } catch (error) {
+    list.innerHTML = `<div class="error-message">Failed to load templates: ${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  renderTemplates();
+}
+
+function templateVersionLabel(t) {
+  if (String(t.version || '').toLowerCase() === 'latest') return 'Latest';
+  return t.version || 'No version';
+}
+
+function renderTemplates() {
+  const list = document.getElementById('templates-list');
+  if (!list) return;
+  if (!settingsTemplates.length) {
+    list.innerHTML = '<div class="empty-state">No templates yet. Create one, capture one from a server, or import one.</div>';
+    return;
+  }
+  const myId = currentUser && currentUser.id;
+  list.innerHTML = settingsTemplates.map(t => {
+    const owner = !t.owner ? 'Built-in' : (t.owner === myId ? 'You' : 'Another user');
+    const id = escapeAttr(t.id);
+    return `
+      <div class="template-row">
+        <div class="template-row-main">
+          <div class="template-row-name">
+            ${escapeHtml(t.name)}
+            ${t.shared ? '<span class="template-tag">Shared</span>' : '<span class="template-tag template-tag-muted">Private</span>'}
+          </div>
+          <div class="template-row-desc">${escapeHtml(t.description || '')}</div>
+          <div class="template-row-meta">
+            ${escapeHtml(TEMPLATE_CATEGORY_LABELS[t.category] || t.category)}
+            · ${escapeHtml(t.serverType || 'custom')} ${escapeHtml(templateVersionLabel(t))}
+            · ${Object.keys(t.properties || {}).length} properties
+            · Deployed ${Number(t.useCount) || 0}×
+            · ${escapeHtml(owner)}
+          </div>
+        </div>
+        <div class="template-row-actions">
+          ${t.canManage ? `<button type="button" class="btn btn-small" onclick="openTemplateEditor('${id}')">✏️ Edit</button>` : ''}
+          <a class="btn btn-small" href="/api/templates/${encodeURIComponent(t.id)}/export" download>📤 Export</a>
+          ${t.canManage ? `<button type="button" class="btn btn-small btn-danger" onclick="deleteTemplate('${id}')">🗑️ Delete</button>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function loadTemplateEngineTypes() {
+  if (templateEngineTypes) return templateEngineTypes;
+  try {
+    const result = await apiRequest('/api/jar-bucket/all-types');
+    templateEngineTypes = result.types || [];
+  } catch (error) {
+    console.error('Failed to load server types:', error);
+    templateEngineTypes = [];
+  }
+  return templateEngineTypes;
+}
+
+// Fill the engine dropdown for the selected edition, keeping `selected` even if
+// the bucket doesn't list it (e.g. a template captured from a custom engine).
+function populateTemplateEngines(selected) {
+  const category = document.getElementById('tpl-category').value;
+  const select = document.getElementById('tpl-engine');
+  const types = (templateEngineTypes || []).filter(t =>
+    category === 'bedrock' ? t.id === 'bedrock' : t.id !== 'bedrock');
+  const options = types.map(t => ({ id: t.id, name: t.name }));
+  if (category === 'bedrock' && !options.length) options.push({ id: 'bedrock', name: 'Bedrock' });
+  if (selected && !options.some(o => o.id === selected)) options.unshift({ id: selected, name: selected });
+  if (category !== 'bedrock') options.unshift({ id: '', name: '— None (no JAR) —' });
+  select.innerHTML = options.map(o =>
+    `<option value="${escapeAttrValue(o.id)}">${escapeHtml(o.name)}</option>`).join('');
+  const fallback = category === 'bedrock' ? 'bedrock' : (options.some(o => o.id === 'vanilla') ? 'vanilla' : '');
+  select.value = selected && options.some(o => o.id === selected) ? selected : fallback;
+}
+
+function onTemplateCategoryChange() {
+  const isBedrock = document.getElementById('tpl-category').value === 'bedrock';
+  populateTemplateEngines(isBedrock ? 'bedrock' : null);
+  document.getElementById('tpl-engine-group').style.display = isBedrock ? 'none' : '';
+  document.getElementById('tpl-java-args-group').style.display = isBedrock ? 'none' : '';
+  // Bedrock's installer only fetches the current build.
+  const latest = document.getElementById('tpl-latest');
+  if (isBedrock) latest.checked = true;
+  latest.disabled = isBedrock;
+  onTemplateLatestChange();
+  loadTemplateVersionOptions();
+}
+
+function onTemplateLatestChange() {
+  const latest = document.getElementById('tpl-latest').checked;
+  document.getElementById('tpl-version-group').style.display = latest ? 'none' : '';
+}
+
+async function loadTemplateVersionOptions() {
+  const engine = document.getElementById('tpl-engine').value;
+  const datalist = document.getElementById('tpl-version-list');
+  datalist.innerHTML = '';
+  if (!engine || engine === 'bedrock') return;
+  try {
+    const result = await apiRequest(`/api/jar-bucket/all-versions/${encodeURIComponent(engine)}`);
+    if (document.getElementById('tpl-engine').value !== engine) return;
+    datalist.innerHTML = (result.versions || []).slice(0, 200).map(v =>
+      `<option value="${escapeAttrValue(v.version)}"></option>`).join('');
+  } catch (error) {
+    console.error('Failed to load versions:', error);
+  }
+}
+
+function addTemplatePropertyRow(key = '', value = '') {
+  const container = document.getElementById('tpl-properties');
+  const row = document.createElement('div');
+  row.className = 'tpl-property-row';
+  row.innerHTML = `
+    <input type="text" class="form-control tpl-prop-key" maxlength="100" placeholder="key (e.g. difficulty)" value="${escapeAttrValue(key)}">
+    <input type="text" class="form-control tpl-prop-value" maxlength="500" placeholder="value" value="${escapeAttrValue(value)}">
+    <button type="button" class="btn btn-small btn-danger" title="Remove" aria-label="Remove property">✕</button>`;
+  row.querySelector('button').addEventListener('click', () => row.remove());
+  container.appendChild(row);
+}
+
+async function openTemplateEditor(templateId = null) {
+  const template = templateId ? settingsTemplates.find(t => t.id === templateId) : null;
+  if (templateId && !template) return;
+  editingTemplateId = template ? template.id : null;
+
+  await loadTemplateEngineTypes();
+
+  document.getElementById('template-editor-title').textContent = template ? 'Edit Template' : 'New Template';
+  document.getElementById('tpl-name').value = template ? template.name : '';
+  document.getElementById('tpl-description').value = template ? (template.description || '') : '';
+  document.getElementById('tpl-category').value = template ? template.category : 'unmodded';
+  document.getElementById('tpl-java-args').value = template ? (template.javaArgs || '') : '';
+  document.getElementById('tpl-memory').value = template ? (template.memoryLimitMb || 0) : 0;
+  document.getElementById('tpl-cpu').value = template ? (template.cpuLimitPercent || 0) : 0;
+  document.getElementById('tpl-limit-action').value = template ? (template.limitAction || 'warn') : 'warn';
+  document.getElementById('tpl-restart-attempts').value = template ? (template.restartAttempts || 3) : 3;
+  document.getElementById('tpl-auto-restart').checked = template ? !!template.autoRestart : false;
+  document.getElementById('tpl-shared').checked = template ? !!template.shared : false;
+
+  const isLatest = !template || String(template.version || '').toLowerCase() === 'latest';
+  document.getElementById('tpl-latest').checked = isLatest;
+  document.getElementById('tpl-version').value = isLatest ? '' : (template.version || '');
+
+  // onTemplateCategoryChange resets the engine, so set the stored one after.
+  onTemplateCategoryChange();
+  if (template && template.category !== 'bedrock') {
+    populateTemplateEngines(template.serverType || '');
+    loadTemplateVersionOptions();
+  }
+
+  const props = document.getElementById('tpl-properties');
+  props.innerHTML = '';
+  const entries = Object.entries(template ? (template.properties || {}) : {
+    gamemode: 'survival', difficulty: 'normal', 'max-players': '20'
+  });
+  entries.forEach(([k, v]) => addTemplatePropertyRow(k, v));
+
+  document.getElementById('template-editor-modal').style.display = 'flex';
+  document.getElementById('tpl-name').focus();
+}
+
+function closeTemplateEditor() {
+  document.getElementById('template-editor-modal').style.display = 'none';
+  editingTemplateId = null;
+}
+
+async function saveTemplate(event) {
+  event.preventDefault();
+  const name = document.getElementById('tpl-name').value.trim();
+  if (!name) {
+    showNotification('Template name is required', 'error');
+    return;
+  }
+
+  const properties = {};
+  for (const row of document.querySelectorAll('#tpl-properties .tpl-property-row')) {
+    const key = row.querySelector('.tpl-prop-key').value.trim();
+    const value = row.querySelector('.tpl-prop-value').value.trim();
+    if (!key) continue;
+    if (TEMPLATE_EXCLUDED_KEYS.has(key)) {
+      showNotification(`"${key}" is assigned per server and can't be set in a template`, 'error');
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(key)) {
+      showNotification(`"${key}" is not a valid property key`, 'error');
+      return;
+    }
+    properties[key] = value;
+  }
+
+  const category = document.getElementById('tpl-category').value;
+  const latest = document.getElementById('tpl-latest').checked;
+  const version = latest ? 'latest' : document.getElementById('tpl-version').value.trim();
+  const serverType = category === 'bedrock' ? 'bedrock' : document.getElementById('tpl-engine').value;
+  if (serverType && !version) {
+    showNotification('Pick a version, or tick "Always use the latest version"', 'error');
+    return;
+  }
+
+  const payload = {
+    name,
+    description: document.getElementById('tpl-description').value.trim(),
+    category,
+    serverType: serverType || null,
+    version: serverType ? version : null,
+    javaArgs: category === 'bedrock' ? '' : document.getElementById('tpl-java-args').value.trim(),
+    properties,
+    memoryLimitMb: parseInt(document.getElementById('tpl-memory').value, 10) || 0,
+    cpuLimitPercent: parseInt(document.getElementById('tpl-cpu').value, 10) || 0,
+    limitAction: document.getElementById('tpl-limit-action').value,
+    autoRestart: document.getElementById('tpl-auto-restart').checked,
+    restartAttempts: parseInt(document.getElementById('tpl-restart-attempts').value, 10) || 3,
+    shared: document.getElementById('tpl-shared').checked
+  };
+
+  const saveBtn = document.getElementById('tpl-save-btn');
+  saveBtn.disabled = true;
+  try {
+    if (editingTemplateId) {
+      await apiRequest(`/api/templates/${encodeURIComponent(editingTemplateId)}`, {
+        method: 'PUT', body: JSON.stringify(payload)
+      });
+      showNotification('Template saved', 'success');
+    } else {
+      await apiRequest('/api/templates', { method: 'POST', body: JSON.stringify(payload) });
+      showNotification('Template created', 'success');
+    }
+    closeTemplateEditor();
+    await loadTemplates();
+  } catch (error) {
+    showNotification(`Failed to save template: ${error.message}`, 'error');
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+async function deleteTemplate(templateId) {
+  const template = settingsTemplates.find(t => t.id === templateId);
+  if (!template) return;
+  if (!confirm(`Delete the template "${template.name}"? Servers already deployed from it are not affected.`)) return;
+  try {
+    await apiRequest(`/api/templates/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
+    showNotification('Template deleted', 'success');
+    await loadTemplates();
+  } catch (error) {
+    showNotification(`Failed to delete template: ${error.message}`, 'error');
+  }
+}
+
+async function importTemplateFile(input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const result = await apiRequest('/api/templates/import', { method: 'POST', body: formData });
+    showNotification(`Imported "${result.template.name}"`, 'success');
+    await loadTemplates();
+  } catch (error) {
+    showNotification(`Import failed: ${error.message}`, 'error');
+  }
+}
+
+async function openTemplateFromServer() {
+  const select = document.getElementById('tpl-source-server');
+  select.innerHTML = '<option value="">Loading...</option>';
+  document.getElementById('tpl-source-name').value = '';
+  document.getElementById('template-from-server-modal').style.display = 'flex';
+  try {
+    const result = await apiRequest('/api/servers');
+    const servers = result.servers || [];
+    select.innerHTML = servers.length
+      ? servers.map(s => `<option value="${escapeAttrValue(s.id)}">${escapeHtml(s.name)}</option>`).join('')
+      : '<option value="">No servers available</option>';
+  } catch (error) {
+    select.innerHTML = '<option value="">Failed to load servers</option>';
+  }
+}
+
+function closeTemplateFromServer() {
+  document.getElementById('template-from-server-modal').style.display = 'none';
+}
+
+async function createTemplateFromServer(event) {
+  event.preventDefault();
+  const serverId = document.getElementById('tpl-source-server').value;
+  if (!serverId) return;
+  const name = document.getElementById('tpl-source-name').value.trim();
+  try {
+    const result = await apiRequest('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify({ fromServerId: serverId, name: name || undefined })
+    });
+    showNotification(`Created "${result.template.name}"`, 'success');
+    closeTemplateFromServer();
+    await loadTemplates();
+  } catch (error) {
+    showNotification(`Failed to create template: ${error.message}`, 'error');
   }
 }

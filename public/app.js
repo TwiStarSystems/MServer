@@ -1725,6 +1725,8 @@ async function openAddServerModal() {
     if (creationTypeSection) creationTypeSection.style.display = 'block';
     if (unifiedForm) unifiedForm.style.display = 'none';
     if (manualForm) manualForm.style.display = 'none';
+    hideEl('quick-deploy-section');
+    if (!quickDeployBusy) cancelQuickDeployConfirm();
 
     const wizardSteps = document.getElementById('wizard-steps');
     if (wizardSteps) wizardSteps.style.display = 'flex';
@@ -2002,6 +2004,284 @@ function configureUnifiedFormForMethod(type) {
   onUnifiedCategoryChange();
 }
 
+// ==================== Quick Deploy (templates) ====================
+
+let quickDeployTemplates = [];
+let quickDeploySelected = null;
+let quickDeployBusy = false;
+
+const QD_CATEGORY_LABELS = { unmodded: 'Java', modded: 'Modded Java', bedrock: 'Bedrock' };
+
+function openQuickDeploy() {
+  currentCreationType = 'quick';
+  clearCreationTypeSelection();
+  const card = document.querySelector('.creation-type-btn[data-type="quick"]');
+  if (card) {
+    card.classList.add('selected');
+    card.setAttribute('aria-checked', 'true');
+  }
+
+  const reveal = () => {
+    hideEl('creation-type-section');
+    showEl('quick-deploy-section', 'block');
+    setWizardStep(2);
+    setModalSubtitle('Deploy a server from a template in one click');
+    cancelQuickDeployConfirm();
+    loadQuickDeployTemplates();
+  };
+  const reducedMotion = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reducedMotion) reveal();
+  else setTimeout(reveal, 190);
+}
+
+async function loadQuickDeployTemplates() {
+  const grid = document.getElementById('qd-template-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="qd-empty">Loading templates…</div>';
+  try {
+    const result = await apiRequest('/api/templates');
+    quickDeployTemplates = result.templates || [];
+  } catch (error) {
+    grid.innerHTML = `<div class="qd-empty">Failed to load templates: ${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  renderQuickDeployTemplates();
+}
+
+function renderQuickDeployTemplates() {
+  const grid = document.getElementById('qd-template-grid');
+  if (!grid) return;
+  if (!quickDeployTemplates.length) {
+    grid.innerHTML = '<div class="qd-empty">No templates yet — create one in Settings → Templates.</div>';
+    return;
+  }
+  grid.innerHTML = quickDeployTemplates.map(t => {
+    const isBedrock = t.category === 'bedrock';
+    const version = String(t.version || '').toLowerCase() === 'latest' ? 'Latest' : (t.version || 'No version');
+    const engine = t.serverType || QD_CATEGORY_LABELS[t.category] || 'Custom';
+    const selected = quickDeploySelected && quickDeploySelected.id === t.id ? ' selected' : '';
+    return `
+      <button type="button" class="qd-template-card${selected}" role="listitem"
+              onclick="selectQuickDeployTemplate('${escapeAttr(t.id)}')">
+        <span class="qd-template-icon" aria-hidden="true">${isBedrock ? '🪨' : '☕'}</span>
+        <span class="qd-template-text">
+          <span class="qd-template-name">${escapeHtml(t.name)}</span>
+          <span class="qd-template-desc">${escapeHtml(t.description || '')}</span>
+          <span class="qd-template-badges">
+            <span class="qd-badge">${escapeHtml(QD_CATEGORY_LABELS[t.category] || t.category)}</span>
+            <span class="qd-badge">${escapeHtml(engine)} · ${escapeHtml(version)}</span>
+            ${t.useCount ? `<span class="qd-badge qd-badge-muted">Deployed ${Number(t.useCount)}×</span>` : ''}
+          </span>
+        </span>
+      </button>`;
+  }).join('');
+}
+
+// A free display name: the template's name, or "<name> 2", "<name> 3", ...
+function quickDeployDefaultName(base) {
+  const taken = new Set((servers || []).map(s => String(s.name || '').toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base} ${i}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return base;
+}
+
+function selectQuickDeployTemplate(templateId) {
+  if (quickDeployBusy) return;
+  const template = quickDeployTemplates.find(t => t.id === templateId);
+  if (!template) return;
+  quickDeploySelected = template;
+  renderQuickDeployTemplates();
+
+  const label = document.getElementById('qd-confirm-template');
+  if (label) label.textContent = template.name;
+  const nameInput = document.getElementById('qd-name');
+  if (nameInput) nameInput.value = quickDeployDefaultName(template.name).slice(0, 100);
+  setQuickDeployStatus(null);
+  showEl('qd-confirm', 'block');
+  if (nameInput) {
+    nameInput.focus();
+    nameInput.select();
+  }
+}
+
+function cancelQuickDeployConfirm() {
+  if (quickDeployBusy) return;
+  quickDeploySelected = null;
+  hideEl('qd-confirm');
+  setQuickDeployStatus(null);
+  renderQuickDeployTemplates();
+}
+
+function setQuickDeployBusy(busy) {
+  quickDeployBusy = busy;
+  ['qd-deploy-btn', 'qd-cancel-btn', 'qd-change-btn', 'qd-name'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = busy;
+  });
+  const deployBtn = document.getElementById('qd-deploy-btn');
+  if (deployBtn) deployBtn.textContent = busy ? 'Deploying…' : '⚡ Deploy';
+}
+
+// message === null hides the status block; percent === null hides the bar.
+function setQuickDeployStatus(message, percent = null, isError = false) {
+  const box = document.getElementById('qd-status');
+  if (!box) return;
+  if (message === null) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'block';
+  const info = box.querySelector('.download-info');
+  info.classList.toggle('error', isError);
+  box.querySelector('.info-icon').textContent = isError ? '✗' : (percent === 100 ? '✓' : '⏳');
+  box.querySelector('.qd-status-text').textContent = message;
+  const bar = box.querySelector('.download-progress');
+  if (percent === null) {
+    bar.style.display = 'none';
+  } else {
+    bar.style.display = 'flex';
+    box.querySelector('.progress-fill').style.width = `${percent}%`;
+    box.querySelector('.progress-text').textContent = `${Math.round(percent)}%`;
+  }
+}
+
+// Poll a jar-bucket progress feed until it completes or fails. onTick gets each
+// progress snapshot. Resolves to null on success or an error message.
+async function pollBucketProgress(progressId, onTick, maxPolls = 720) {
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    let progress;
+    try {
+      progress = await apiRequest(`/api/jar-bucket/progress/${encodeURIComponent(progressId)}`);
+    } catch (pollErr) {
+      console.error('Progress poll error:', pollErr);
+      continue;
+    }
+    if (onTick) onTick(progress);
+    if (progress.status === 'complete') {
+      return progress.success === false ? (progress.error || 'Failed') : null;
+    }
+    if (progress.status === 'error') return progress.error || 'Failed';
+  }
+  return 'Timed out — please try again';
+}
+
+async function submitQuickDeploy(e) {
+  if (e) e.preventDefault();
+  if (quickDeployBusy || !quickDeploySelected) return;
+  const template = quickDeploySelected;
+  const name = (document.getElementById('qd-name').value || '').trim();
+  if (!name) {
+    showNotification('Please enter a server name', 'error');
+    return;
+  }
+
+  const fail = (msg) => {
+    setQuickDeployStatus(msg, null, true);
+    showNotification(msg, 'error');
+    setQuickDeployBusy(false);
+  };
+
+  setQuickDeployBusy(true);
+  setWizardStep(3);
+  try {
+    // 1. Make sure the server files are cached (downloads them if not).
+    setQuickDeployStatus('Checking server files…');
+    let prepared;
+    try {
+      prepared = await apiRequest(`/api/templates/${encodeURIComponent(template.id)}/prepare`, { method: 'POST' });
+    } catch (err) {
+      return fail(`Could not prepare template: ${err.message}`);
+    }
+    const label = `${template.serverType || 'server'} ${prepared.version || ''}`.trim();
+    if (prepared.progressId) {
+      setQuickDeployStatus(`Downloading ${label}…`, 0);
+      const err = await pollBucketProgress(prepared.progressId, p => {
+        if (p.status === 'downloading') {
+          setQuickDeployStatus(
+            `Downloading ${label}… (${formatBytes(p.downloaded || 0)} / ${formatBytes(p.total || 0)})`,
+            p.progress || 0);
+        }
+      });
+      if (err) return fail(`Download failed: ${err}`);
+    }
+
+    // 2. Create the server from the template.
+    setQuickDeployStatus('Creating server…');
+    let result;
+    try {
+      result = await apiRequest(`/api/templates/${encodeURIComponent(template.id)}/deploy`, {
+        method: 'POST',
+        body: JSON.stringify({ name, version: prepared.version })
+      });
+    } catch (err) {
+      return fail(`Failed to create server: ${err.message}`);
+    }
+
+    if (result.pendingApproval) {
+      setQuickDeployStatus('Server created and pending admin approval', 100);
+      showNotification('Server created and pending admin approval', 'info');
+      setQuickDeployBusy(false);
+      closeServerModal();
+      await loadServers();
+      return;
+    }
+
+    // 3. Bedrock: install the Bedrock Dedicated Server into the new server.
+    if (result.needsBedrockSetup) {
+      setQuickDeployStatus('Installing Bedrock server…', 0);
+      let setup;
+      try {
+        setup = await apiRequest(`/api/servers/${encodeURIComponent(result.serverId)}/setup-bedrock`, {
+          method: 'POST',
+          body: JSON.stringify({
+            serverName: name,
+            serverProperties: { ...(result.bedrockProperties || {}), 'server-port': result.bedrockPort },
+            source: 'auto'
+          })
+        });
+      } catch (err) {
+        await loadServers();
+        return fail(`Server created, but Bedrock setup failed to start: ${err.message}`);
+      }
+      if (!setup.progressId) {
+        await loadServers();
+        return fail('Server created, but Bedrock setup returned no progress ID');
+      }
+      const err = await pollBucketProgress(setup.progressId, p => {
+        if (p.step === 2 && p.progress != null) {
+          setQuickDeployStatus('Downloading Bedrock server…', p.progress);
+        } else if (p.step === 3) {
+          setQuickDeployStatus('Extracting server files…');
+        } else if (p.step === 4) {
+          setQuickDeployStatus('Writing server.properties…');
+        }
+      });
+      if (err) {
+        await loadServers();
+        return fail(`Server created, but Bedrock setup failed: ${err}`);
+      }
+    }
+
+    if (result.warning) {
+      showNotification(result.warning, 'warning');
+    } else {
+      showNotification(`${name} deployed!`, 'success');
+    }
+    setQuickDeployStatus('Server deployed!', 100);
+    setQuickDeployBusy(false);
+    await loadServers();
+    selectServer(result.serverId);
+    closeServerModal();
+  } catch (error) {
+    fail(error.message || 'Quick Deploy failed');
+  }
+}
+
 function backToCreationType() {
   if (editingServerId) {
     // Edit mode has no method step to go back to
@@ -2011,8 +2291,12 @@ function backToCreationType() {
 
   currentCreationType = null;
 
+  if (quickDeployBusy) return;
+
   hideEl('unified-server-form');
   hideEl('manual-server-form');
+  hideEl('quick-deploy-section');
+  cancelQuickDeployConfirm();
 
   resetUnifiedForm();
   clearCreationTypeSelection();
