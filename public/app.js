@@ -5998,6 +5998,7 @@ async function toggleMod(filename, type, isEnabled) {
     showNotification(`Mod ${action}d successfully`, 'success');
     loadMods();
   } catch (error) {
+    showNotification(`Failed to ${action} ${filename}: ${error.message}`, 'error');
     console.error('Failed to toggle mod:', error);
   }
 }
@@ -6016,6 +6017,7 @@ async function deleteMod(filename, type) {
     showNotification('Mod deleted successfully', 'success');
     loadMods();
   } catch (error) {
+    showNotification(`Failed to delete ${filename}: ${error.message}`, 'error');
     console.error('Failed to delete mod:', error);
   }
 }
@@ -6740,7 +6742,11 @@ async function _applyOneUpdate(u) {
   // old file must stay.
   if (result && result.pending) return false;
 
-  if (u.filename !== u.currentFilename) {
+  // Compare against the name the server actually saved: if that is the old
+  // file's name, the install already replaced it and deleting would remove
+  // the new version.
+  const savedAs = (result && result.filename) || u.filename;
+  if (savedAs !== u.currentFilename) {
     try {
       await apiRequest(`/api/servers/${currentServerId}/mods/${u.folder}/${encodeURIComponent(u.currentFilename)}`, {
         method: 'DELETE'

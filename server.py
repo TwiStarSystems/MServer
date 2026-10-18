@@ -14338,6 +14338,13 @@ def modrinth_project_versions(server_id, project_id):
         return api_error(f'Modrinth API error: {str(e)}', 502)
 
 
+# A Modrinth file name as saved: one path component, no leading dot. Not
+# secure_filename(), which strips the '+' most mod versions carry
+# (fabric-api-0.163.0+26.3.jar) — the same reason _mod_file_or_error()
+# checks containment instead of spelling (issue #111).
+_MODRINTH_FILENAME_RE = re.compile(r'^[A-Za-z0-9_\-+\[\]()][A-Za-z0-9_.\-+\[\]() ]{0,200}\.jar\Z')
+
+
 def _modrinth_download(server_id, url, safe_filename, mod_type, sha512_expected=''):
     """Download one Modrinth file into the server's mods/ or plugins/ folder.
 
@@ -14353,8 +14360,7 @@ def _modrinth_download(server_id, url, safe_filename, mod_type, sha512_expected=
         return {'success': False, 'error': 'modType must be mods or plugins'}, 400
     if not url.startswith('https://cdn.modrinth.com/'):
         return {'success': False, 'error': 'Only Modrinth CDN URLs are permitted'}, 400
-    if not safe_filename or safe_filename != secure_filename(safe_filename) \
-            or not safe_filename.endswith('.jar'):
+    if not _MODRINTH_FILENAME_RE.match(safe_filename or ''):
         return {'success': False, 'error': 'Invalid filename'}, 400
 
     server_path = server_manager.get_server_path(server_id)
@@ -14422,8 +14428,8 @@ def modrinth_install(server_id):
     if not url.startswith('https://cdn.modrinth.com/'):
         return api_error('Only Modrinth CDN URLs are permitted', 400)
 
-    safe_filename = secure_filename(filename)
-    if not safe_filename:
+    safe_filename = filename if _MODRINTH_FILENAME_RE.match(filename) else secure_filename(filename)
+    if not safe_filename or not _MODRINTH_FILENAME_RE.match(safe_filename):
         return api_error('Invalid filename', 400)
 
     cfg = server_manager.get_server_config(server_id) or {}
