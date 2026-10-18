@@ -6882,6 +6882,152 @@ async function installAllMissingLibs(btn) {
   loadMods();
 }
 
+// ==================== Per-mod Check ====================
+
+// Checks the installed JARs one request at a time, so each mod gets its own
+// dependency budget and a big folder isn't limited by one batch call. The
+// server meters the Modrinth calls; a 503 carries how long to wait.
+let _modCheckRun = 0;     // bumped to cancel the run in progress
+let _modCheckActive = 0;  // the newest run, which alone may draw results
+
+function cancelModCheck() {
+  _modCheckRun++;
+}
+
+async function _checkOneMod(folder, filename, ctx, runId, onWait) {
+  const params = new URLSearchParams({ folder, filename, ...ctx });
+  for (;;) {
+    const response = await fetch(`/api/servers/${currentServerId}/mods/check?${params}`);
+    let data = {};
+    try { data = await response.json(); } catch (_) { /* non-JSON error page */ }
+    if (response.ok) return data;
+    if ((response.status === 503 || response.status === 429) && runId === _modCheckRun) {
+      const wait = Math.min(Math.max(parseInt(data.retryAfter, 10) || 10, 1), 120);
+      for (let left = wait; left > 0; left--) {
+        if (runId !== _modCheckRun) return null;
+        onWait(left);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      continue;
+    }
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+}
+
+function _modCheckLine(r) {
+  const name = escapeHtml(r.title && r.title !== r.filename ? `${r.title} (${r.filename})` : r.filename);
+  if (r.error) return `<li class="mod-check-error">⚠️ ${name} — ${escapeHtml(r.error)}</li>`;
+  const notes = [];
+  if (r.status === 'update') notes.push(`update → ${escapeHtml(r.update.versionNumber || '')}`);
+  if (r.missing?.length) notes.push(`missing ${escapeHtml(r.missing.map(m => m.title).join(', '))}`);
+  if (r.unresolved?.length) notes.push(`no compatible ${escapeHtml(r.unresolved.map(u => u.title).join(', '))}`);
+  if (r.incompatible?.length) notes.push(`conflicts with ${escapeHtml(r.incompatible.map(i => i.title).join(', '))}`);
+  if (r.truncated) notes.push('dependency tree too large to check fully');
+  const icon = r.status === 'not_on_modrinth' ? '❔'
+    : notes.length ? (r.status === 'update' ? '🔄' : '🧩') : '✅';
+  const text = r.status === 'not_on_modrinth' ? 'not on Modrinth'
+    : notes.length ? notes.join(' · ') : `up to date (${escapeHtml(r.currentVersion || '')})`;
+  return `<li>${icon} ${name} — ${text}</li>`;
+}
+
+async function checkEachMod() {
+  if (!currentServerId || !modrinthEnabled()) return;
+  const runId = ++_modCheckRun;
+  _modCheckActive = runId;
+  const btn = document.getElementById('check-each-btn');
+  const resultsEl = document.getElementById('mods-update-results');
+
+  let files;
+  try {
+    const data = await apiRequest(`/api/servers/${currentServerId}/mods`);
+    files = [
+      ...(data.mods || []).map(m => ['mods', m.name]),
+      ...(data.plugins || []).map(p => ['plugins', p.name]),
+    ].filter(([, name]) => name.endsWith('.jar'));
+  } catch (error) {
+    showNotification(`Couldn't list mods: ${error.message}`, 'error');
+    return;
+  }
+  if (!files.length) {
+    showNotification('No enabled mods or plugins to check', 'info');
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  const ctx = _modContext();
+  const results = [];
+  const render = (status) => {
+    const done = results.length;
+    resultsEl.innerHTML = `
+      <div class="update-results-header">
+        <h4>🔎 Checking ${done < files.length ? done + 1 : done} of ${files.length}…</h4>
+        <button class="btn btn-small" onclick="cancelModCheck()">Cancel</button>
+      </div>
+      <div class="mod-check-progress"><div style="width:${Math.round(done / files.length * 100)}%"></div></div>
+      <p class="update-note">${escapeHtml(status)}</p>
+      <ul class="mod-check-list">${results.map(_modCheckLine).join('')}</ul>`;
+    resultsEl.style.display = 'block';
+  };
+
+  try {
+    for (const [folder, filename] of files) {
+      if (runId !== _modCheckRun) break;
+      render(filename);
+      try {
+        const r = await _checkOneMod(folder, filename, ctx, runId,
+          left => render(`Waiting for the Modrinth rate limit… ${left}s`));
+        if (!r) break;
+        results.push(r);
+      } catch (error) {
+        results.push({ filename, folder, error: error.message });
+      }
+    }
+  } finally {
+    if (btn && _modCheckActive === runId) btn.disabled = false;
+  }
+  // Cancelled and a newer run already started: leave the panel to that one
+  if (_modCheckActive !== runId) return;
+  const cancelled = runId !== _modCheckRun;
+
+  // Fold the per-mod answers into the same lists Check Updates fills, so
+  // Update all / Install all work on them unchanged.
+  _modUpdates = results.filter(r => r.update).map(r => r.update);
+  const libs = new Map();
+  const unresolved = new Map();
+  const incompatible = new Map();
+  results.forEach(r => {
+    (r.missing || []).forEach(m => {
+      const known = libs.get(m.projectId);
+      if (known) known.requiredBy = [...new Set([...known.requiredBy, ...m.requiredBy])];
+      else libs.set(m.projectId, { ...m, requiredBy: [...m.requiredBy] });
+    });
+    (r.unresolved || []).forEach(u => {
+      const known = unresolved.get(u.projectId);
+      if (known) known.requiredBy = [...new Set([...known.requiredBy, ...u.requiredBy])];
+      else unresolved.set(u.projectId, { ...u });
+    });
+    (r.incompatible || []).forEach(c => incompatible.set(c.projectId, c));
+  });
+  _missingLibs = [...libs.values()];
+  renderModUpdateResults({ unresolved: [...unresolved.values()], incompatible: [...incompatible.values()] });
+
+  const counts = {
+    update: results.filter(r => r.status === 'update').length,
+    ok: results.filter(r => r.status === 'up_to_date' && !r.missing?.length).length,
+    unknown: results.filter(r => r.status === 'not_on_modrinth').length,
+    failed: results.filter(r => r.error).length,
+  };
+  const summary = `${cancelled ? 'Cancelled after' : 'Checked'} ${results.length} of ${files.length}: `
+    + `${counts.update} with updates, ${counts.ok} up to date, ${counts.unknown} not on Modrinth`
+    + (counts.failed ? `, ${counts.failed} failed` : '');
+  resultsEl.insertAdjacentHTML('beforeend', `
+    <details class="mod-check-details"${_modUpdates.length || _missingLibs.length ? '' : ' open'}>
+      <summary>${escapeHtml(summary)}</summary>
+      <ul class="mod-check-list">${results.map(_modCheckLine).join('')}</ul>
+    </details>`);
+  resultsEl.style.display = 'block';
+}
+
 // ==================== Player Management ====================
 
 let currentEditingOpUuid = null;

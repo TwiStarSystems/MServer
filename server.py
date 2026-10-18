@@ -14070,16 +14070,110 @@ def _modrinth_env_group(environments):
     return 'both'
 
 
-def _modrinth_get(path, params=None, timeout=15):
-    """Make a GET request to the Modrinth API with proper headers."""
+# Modrinth allows 300 API requests a minute per IP, and every panel user's
+# requests leave from the panel's one IP — so the panel keeps its own,
+# lower, shared budget (MODRINTH_RATE_LIMIT) and also obeys the
+# X-Ratelimit-* headers Modrinth sends back. CDN downloads are not API
+# calls and are not counted.
+MODRINTH_RATE_LIMIT = max(1, _env_int('MODRINTH_RATE_LIMIT', 250))
+MODRINTH_RATE_MAX_WAIT = 20     # seconds a request may queue before giving up
+
+
+class ModrinthRateLimited(requests.exceptions.RequestException):
+    """The panel's Modrinth budget is spent for longer than a request may wait."""
+
+    def __init__(self, retry_after):
+        self.retry_after = max(1, int(retry_after + 0.999))
+        super().__init__(f'Modrinth rate limit reached — try again in {self.retry_after}s')
+
+
+class _ModrinthRateLimiter:
+    """Sliding one-minute window shared by every thread in the process."""
+
+    def __init__(self, per_minute):
+        self.per_minute = per_minute
+        self._sent = deque()
+        self._blocked_until = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self, max_wait=MODRINTH_RATE_MAX_WAIT):
+        deadline = time.monotonic() + max_wait
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._sent and now - self._sent[0] >= 60:
+                    self._sent.popleft()
+                wait = max(self._blocked_until - now, 0.0)
+                if not wait and len(self._sent) >= self.per_minute:
+                    wait = 60 - (now - self._sent[0])
+                if wait <= 0:
+                    self._sent.append(now)
+                    return
+            if time.monotonic() + wait > deadline:
+                raise ModrinthRateLimited(wait)
+            time.sleep(min(wait, 1.0))
+
+    def observe(self, resp):
+        """Pause everyone until Modrinth's window resets when it says we're out."""
+        try:
+            remaining = int(resp.headers.get('X-Ratelimit-Remaining', ''))
+            reset = int(resp.headers.get('X-Ratelimit-Reset', '') or 60)
+        except ValueError:
+            return
+        if remaining <= 1 or resp.status_code == 429:
+            with self._lock:
+                self._blocked_until = max(self._blocked_until, time.monotonic() + max(reset, 1))
+
+
+_modrinth_rate = _ModrinthRateLimiter(MODRINTH_RATE_LIMIT)
+
+
+def _modrinth_request(method, path, params=None, json_body=None, timeout=15):
+    """Send one Modrinth API request through the shared rate limiter.
+
+    Returns the response unchecked (callers raise_for_status or inspect the
+    status). A 429 is retried once after Modrinth's reset when that is
+    short enough; otherwise ModrinthRateLimited is raised.
+    """
     headers = {'User-Agent': MODRINTH_UA}
-    resp = requests.get(f'{MODRINTH_API}{path}', headers=headers, params=params, timeout=timeout)
+    for attempt in range(2):
+        _modrinth_rate.acquire()
+        resp = requests.request(method, f'{MODRINTH_API}{path}', headers=headers,
+                                params=params, json=json_body, timeout=timeout)
+        _modrinth_rate.observe(resp)
+        if resp.status_code != 429:
+            return resp
+        try:
+            reset = int(resp.headers.get('X-Ratelimit-Reset', '') or 60)
+        except ValueError:
+            reset = 60
+        if attempt or reset > MODRINTH_RATE_MAX_WAIT:
+            raise ModrinthRateLimited(reset)
+        time.sleep(max(reset, 1))
+    return resp
+
+
+def _modrinth_get(path, params=None, timeout=15):
+    """GET a Modrinth API path and return its JSON (raises on HTTP errors)."""
+    resp = _modrinth_request('GET', path, params=params, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 
 
+def _modrinth_error_response(e):
+    """The api_error for a failed Modrinth call."""
+    if isinstance(e, ModrinthRateLimited):
+        return api_error(str(e), 503, retryAfter=e.retry_after)
+    if isinstance(e, requests.exceptions.Timeout):
+        return api_error('Modrinth API timed out', 504)
+    return api_error(f'Modrinth API error: {str(e)}', 502)
+
+
 MODRINTH_SORTS = ('relevance', 'downloads', 'follows', 'newest', 'updated')
 MODRINTH_BROWSE_LIMIT = '60 per minute'
+# The per-mod check calls its route once per JAR; the shared outbound limit
+# above is what actually protects Modrinth.
+MODRINTH_CHECK_LIMIT = '300 per minute'
 MODRINTH_MAX_LIMIT = 100        # Modrinth silently caps a search page at 100
 MODRINTH_TAG_TTL = 3600
 _modrinth_tag_cache = {'at': 0.0, 'data': None}
@@ -14137,9 +14231,7 @@ def modrinth_tags():
         except requests.exceptions.RequestException as e:
             if cached:
                 return api_success(cached)
-            if isinstance(e, requests.exceptions.Timeout):
-                return api_error('Modrinth API timed out', 504)
-            return api_error(f'Modrinth API error: {str(e)}', 502)
+            return _modrinth_error_response(e)
 
         known_loaders = {l.get('name') for l in loaders}
         data = {
@@ -14281,10 +14373,8 @@ def modrinth_search(server_id):
             'offset':   data.get('offset', 0),
             'limit':    data.get('limit', limit),
         })
-    except requests.exceptions.Timeout:
-        return api_error('Modrinth API timed out', 504)
     except requests.exceptions.RequestException as e:
-        return api_error(f'Modrinth API error: {str(e)}', 502)
+        return _modrinth_error_response(e)
 
 
 @app.route('/api/servers/<server_id>/mods/modrinth/versions/<project_id>', methods=['GET'])
@@ -14332,10 +14422,8 @@ def modrinth_project_versions(server_id, project_id):
                 'sha1':         jar_file.get('hashes', {}).get('sha1'),
             })
         return api_success({'versions': slim})
-    except requests.exceptions.Timeout:
-        return api_error('Modrinth API timed out', 504)
     except requests.exceptions.RequestException as e:
-        return api_error(f'Modrinth API error: {str(e)}', 502)
+        return _modrinth_error_response(e)
 
 
 # A Modrinth file name as saved: one path component, no leading dot. Not
@@ -14449,6 +14537,37 @@ def modrinth_install(server_id):
     return jsonify(result) if isinstance(result, dict) else result, status
 
 
+_jar_hash_cache = {}            # (path, size, mtime_ns) -> sha512 hexdigest
+_jar_hash_lock = threading.Lock()
+
+
+def _jar_sha512(path):
+    """SHA-512 of one file, cached by path/size/mtime so a re-check of an
+    unchanged mods folder doesn't re-read every JAR. None if unreadable."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    with _jar_hash_lock:
+        cached = _jar_hash_cache.get(key)
+    if cached:
+        return cached
+    sha = hashlib.sha512()
+    try:
+        with open(str(path), 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                sha.update(chunk)
+    except OSError:
+        return None
+    digest = sha.hexdigest()
+    with _jar_hash_lock:
+        if len(_jar_hash_cache) > 5000:
+            _jar_hash_cache.clear()
+        _jar_hash_cache[key] = digest
+    return digest
+
+
 def _installed_jar_hashes(server_path):
     """SHA-512 of every JAR in the server's mods/ and plugins/ folders.
 
@@ -14463,15 +14582,42 @@ def _installed_jar_hashes(server_path):
         for item in folder_path.iterdir():
             if not (item.is_file() and item.suffix == '.jar'):
                 continue
-            sha = hashlib.sha512()
-            try:
-                with open(str(item), 'rb') as f:
-                    for chunk in iter(lambda: f.read(65536), b''):
-                        sha.update(chunk)
-            except OSError:
-                continue
-            hashes[sha.hexdigest()] = {'path': item, 'folder': folder}
+            digest = _jar_sha512(item)
+            if digest:
+                hashes[digest] = {'path': item, 'folder': folder}
     return hashes
+
+
+MODRINTH_IDENTIFY_TTL = 120
+_modrinth_identify_cache = {}   # server_id -> (time, frozenset(hashes), result)
+_modrinth_identify_lock = threading.Lock()
+
+
+def _identify_installed(server_id, hashes):
+    """Ask Modrinth which project/version each installed JAR is.
+
+    Returns {project_id: {'version': version, 'folder': ..., 'hash': ...}}.
+    Cached per server for MODRINTH_IDENTIFY_TTL while the set of JARs is
+    unchanged, so a per-mod check of a whole folder costs one lookup, not
+    one per mod.
+    """
+    if not hashes:
+        return {}
+    key = frozenset(hashes)
+    with _modrinth_identify_lock:
+        hit = _modrinth_identify_cache.get(server_id)
+        if hit and hit[1] == key and time.time() - hit[0] < MODRINTH_IDENTIFY_TTL:
+            return hit[2]
+    resp = _modrinth_request('POST', '/version_files',
+                             json_body={'hashes': list(hashes), 'algorithm': 'sha512'}, timeout=20)
+    resp.raise_for_status()
+    installed = {}
+    for h, ver in resp.json().items():
+        if h in hashes and ver.get('project_id'):
+            installed[ver['project_id']] = {'version': ver, 'folder': hashes[h]['folder'], 'hash': h}
+    with _modrinth_identify_lock:
+        _modrinth_identify_cache[server_id] = (time.time(), key, installed)
+    return installed
 
 
 def _modrinth_jar_file(version):
@@ -14481,8 +14627,164 @@ def _modrinth_jar_file(version):
             or next((f for f in files if f['filename'].endswith('.jar')), None))
 
 
+def _modrinth_update_entry(current_filename, folder, latest):
+    """The update record the UI acts on, or None if `latest` has no JAR."""
+    jar = _modrinth_jar_file(latest)
+    if not jar:
+        return None
+    return {
+        'currentFilename': current_filename,
+        'folder':          folder,
+        'projectId':       latest.get('project_id'),
+        'versionId':       latest.get('id'),
+        'versionNumber':   latest.get('version_number'),
+        'filename':        jar['filename'],
+        'url':             jar['url'],
+        'sha512':          jar.get('hashes', {}).get('sha512'),
+        'size':            jar.get('size', 0),
+    }
+
+
 MODRINTH_DEP_MAX = 30           # most dependency lookups one check may make
 _MODRINTH_ID_RE = re.compile(r'^[a-zA-Z0-9]{1,16}$')
+
+
+def _resolve_modrinth_dependencies(roots, installed, loader, mc_version,
+                                   reverse_incompatible=False, extra_names=()):
+    """Resolve the required libraries `roots` (version objects) need.
+
+    `installed` is _identify_installed()'s map. Projects already installed,
+    or among the roots, count as present. Follows 'required' dependencies
+    transitively within a MODRINTH_DEP_MAX lookup budget and records
+    'incompatible' ones that hit an installed project; with
+    reverse_incompatible it also reports installed mods that declare a root
+    incompatible. Raises requests exceptions on Modrinth failure.
+
+    Returns the dependency route's body (missing / unresolved /
+    incompatible / truncated) plus 'names', {project_id: title} for every
+    project mentioned and for extra_names.
+    """
+    present = set(installed) | {r.get('project_id') for r in roots}
+    folder_of = {pid: i['folder'] for pid, i in installed.items()}
+
+    planned = {}            # project_id -> resolved library record
+    order = []
+    unresolved = {}
+    incompatible = {}
+    required_by = defaultdict(list)
+    lookups = 0
+    truncated = False
+
+    def visit(version, parent_pid):
+        nonlocal lookups, truncated
+        for dep in version.get('dependencies') or []:
+            dep_pid = dep.get('project_id')
+            kind = dep.get('dependency_type')
+            if kind == 'incompatible':
+                if dep_pid in installed and dep_pid != parent_pid:
+                    incompatible.setdefault(dep_pid, set()).add(parent_pid)
+                continue
+            if kind != 'required':
+                continue
+            if not dep_pid and not dep.get('version_id'):
+                continue         # external file only; nothing to fetch
+            if dep_pid:
+                if parent_pid not in required_by[dep_pid]:
+                    required_by[dep_pid].append(parent_pid)
+                if dep_pid in present or dep_pid in planned or dep_pid in unresolved:
+                    continue
+            if lookups >= MODRINTH_DEP_MAX:
+                truncated = True
+                return
+            lookups += 1
+            if dep.get('version_id'):
+                candidate = _modrinth_get(f"/version/{dep['version_id']}")
+                dep_pid = candidate.get('project_id')
+                if dep_pid in present or dep_pid in planned:
+                    continue
+                if parent_pid not in required_by[dep_pid]:
+                    required_by[dep_pid].append(parent_pid)
+            else:
+                params = {'include_changelog': 'false'}
+                if loader:
+                    params['loaders'] = json.dumps([loader])
+                if mc_version:
+                    params['game_versions'] = json.dumps([mc_version])
+                candidates = [c for c in _modrinth_get(f'/project/{dep_pid}/version', params=params)
+                              if _modrinth_jar_file(c)]
+                # Newest first; prefer a release over a beta/alpha
+                candidate = next((c for c in candidates if c.get('version_type') == 'release'),
+                                 candidates[0] if candidates else None)
+            if not candidate or not _modrinth_jar_file(candidate):
+                unresolved[dep_pid] = True
+                continue
+            jar = _modrinth_jar_file(candidate)
+            planned[dep_pid] = {
+                'projectId':     dep_pid,
+                'versionId':     candidate.get('id'),
+                'versionNumber': candidate.get('version_number'),
+                'filename':      jar['filename'],
+                'url':           jar['url'],
+                'sha512':        jar.get('hashes', {}).get('sha512'),
+                'size':          jar.get('size', 0),
+                'folder':        folder_of.get(parent_pid),
+            }
+            visit(candidate, dep_pid)       # its own requirements first …
+            order.append(dep_pid)           # … then the library itself
+
+    for root in roots:
+        visit(root, root.get('project_id'))
+    # … and the other direction: an installed mod that declares a mod
+    # being installed incompatible.
+    if reverse_incompatible:
+        root_pids = {r.get('project_id') for r in roots}
+        for pid, info in installed.items():
+            for dep in info['version'].get('dependencies') or []:
+                if dep.get('dependency_type') == 'incompatible' \
+                        and dep.get('project_id') in root_pids and dep['project_id'] != pid:
+                    incompatible.setdefault(pid, set()).add(dep['project_id'])
+
+    names = {}
+    wanted = set(planned) | set(unresolved) | set(incompatible) | set(extra_names) \
+        | {p for parents in required_by.values() for p in parents} \
+        | {p for parents in incompatible.values() for p in parents}
+    wanted.discard(None)
+    if wanted:
+        for proj in _modrinth_get('/projects', params={'ids': json.dumps(sorted(wanted))}, timeout=20):
+            names[proj['id']] = proj.get('title') or proj.get('slug') or proj['id']
+
+    def title(pid):
+        return names.get(pid, pid)
+
+    missing = []
+    for pid in order:
+        rec = dict(planned[pid], title=title(pid),
+                   requiredBy=[title(p) for p in required_by[pid]])
+        # A library pulled in by another library goes where that one goes
+        if not rec['folder']:
+            rec['folder'] = next((planned[p]['folder'] for p in required_by[pid]
+                                  if p in planned and planned[p]['folder']), None)
+        missing.append(rec)
+
+    return {
+        'missing':      missing,
+        'unresolved':   [{'projectId': pid, 'title': title(pid),
+                          'requiredBy': [title(p) for p in required_by[pid]]} for pid in unresolved],
+        'incompatible': [{'projectId': pid, 'title': title(pid),
+                          'conflictsWith': [title(p) for p in sorted(parents)]}
+                         for pid, parents in incompatible.items()],
+        'truncated':    truncated,
+        'names':        names,
+    }
+
+
+def _modrinth_context_args():
+    """(loader, mc_version, error_response) from the request's query."""
+    loader     = request.args.get('loader', '')
+    mc_version = request.args.get('mcVersion', '')
+    if any(v and not _MODRINTH_TAG_RE.match(v) for v in (loader, mc_version)):
+        return loader, mc_version, api_error('Invalid loader or version', 400)
+    return loader, mc_version, None
 
 
 @app.route('/api/servers/<server_id>/mods/dependencies', methods=['GET'])
@@ -14510,167 +14812,129 @@ def modrinth_dependencies(server_id):
             loader/game version: projectId, title, requiredBy.
         'incompatible' — installed projects a checked version declares
             incompatible: projectId, title, conflictsWith.
-        'truncated' — true if the MODRINTH_DEP_MAX lookup budget ran out.
+        'truncated' — true if the MODRINTH_DEP_MAX lookup budget ran out
+            (the per-mod check gives each mod its own budget).
         400 on a malformed version id, 403 if the integration is disabled,
-        504/502 on Modrinth errors.
+        503 if the panel's Modrinth rate limit is exhausted, 504/502 on
+        Modrinth errors.
 
     Side effects:
-        Read-only. Hashes the server's JARs and identifies them with one
-        POST /version_files, so a library already present is not offered
-        again even if it was uploaded by hand; then one bulk /versions GET,
-        one /project/<id>/version GET per missing library (resolved
+        Read-only. Identifies the server's JARs by hash (one POST
+        /version_files, cached briefly), so a library already present is
+        not offered again even if it was uploaded by hand; then one bulk
+        /versions GET, one lookup per missing library (resolved
         transitively) and one bulk /projects GET for names. Only 'required'
         dependencies are followed; 'embedded' ones ship inside the mod.
     """
     if not _modrinth_enabled():
         return _modrinth_disabled_error()
-    loader      = request.args.get('loader', '')
-    mc_version  = request.args.get('mcVersion', '')
+    loader, mc_version, error = _modrinth_context_args()
+    if error:
+        return error
     version_ids = [v for v in request.args.get('versionIds', '').split(',') if v]
     if any(not _MODRINTH_ID_RE.match(v) for v in version_ids) or len(version_ids) > 100:
         return api_error('Invalid version id', 400)
-    if any(v and not _MODRINTH_TAG_RE.match(v) for v in (loader, mc_version)):
-        return api_error('Invalid loader or version', 400)
 
     server_path = server_manager.get_server_path(server_id)
-    hashes = _installed_jar_hashes(server_path)
-    headers = {'User-Agent': MODRINTH_UA}
-
     try:
-        installed = {}          # project_id -> {'version': ..., 'folder': ...}
-        if hashes:
-            resp = requests.post(f'{MODRINTH_API}/version_files',
-                                 json={'hashes': list(hashes), 'algorithm': 'sha512'},
-                                 headers=headers, timeout=20)
-            resp.raise_for_status()
-            for h, ver in resp.json().items():
-                if h in hashes and ver.get('project_id'):
-                    installed[ver['project_id']] = {'version': ver, 'folder': hashes[h]['folder']}
-
+        installed = _identify_installed(server_id, _installed_jar_hashes(server_path))
         if version_ids:
             roots = _modrinth_get('/versions', params={'ids': json.dumps(version_ids)}, timeout=20)
         else:
             roots = [i['version'] for i in installed.values()]
-
-        # Projects being installed or updated count as present: an update
-        # must not be offered its own project as a missing library.
-        present = set(installed) | {r.get('project_id') for r in roots}
-        folder_of = {pid: i['folder'] for pid, i in installed.items()}
-
-        planned = {}            # project_id -> resolved library record
-        order = []
-        unresolved = {}
-        incompatible = {}
-        required_by = defaultdict(list)
-        lookups = 0
-        truncated = False
-
-        def visit(version, parent_pid):
-            nonlocal lookups, truncated
-            for dep in version.get('dependencies') or []:
-                dep_pid = dep.get('project_id')
-                kind = dep.get('dependency_type')
-                if kind == 'incompatible':
-                    if dep_pid in installed and dep_pid != parent_pid:
-                        incompatible.setdefault(dep_pid, set()).add(parent_pid)
-                    continue
-                if kind != 'required':
-                    continue
-                if not dep_pid and dep.get('version_id'):
-                    dep_pid = None   # resolved below from the pinned version
-                elif not dep_pid:
-                    continue         # external file only; nothing to fetch
-                if dep_pid:
-                    if parent_pid not in required_by[dep_pid]:
-                        required_by[dep_pid].append(parent_pid)
-                    if dep_pid in present or dep_pid in planned or dep_pid in unresolved:
-                        continue
-                if lookups >= MODRINTH_DEP_MAX:
-                    truncated = True
-                    return
-                lookups += 1
-                if dep.get('version_id'):
-                    candidate = _modrinth_get(f"/version/{dep['version_id']}")
-                    dep_pid = candidate.get('project_id')
-                    if dep_pid in present or dep_pid in planned:
-                        continue
-                    if parent_pid not in required_by[dep_pid]:
-                        required_by[dep_pid].append(parent_pid)
-                else:
-                    params = {'include_changelog': 'false'}
-                    if loader:
-                        params['loaders'] = json.dumps([loader])
-                    if mc_version:
-                        params['game_versions'] = json.dumps([mc_version])
-                    candidates = [c for c in _modrinth_get(f'/project/{dep_pid}/version', params=params)
-                                  if _modrinth_jar_file(c)]
-                    # Newest first; prefer a release over a beta/alpha
-                    candidate = next((c for c in candidates if c.get('version_type') == 'release'),
-                                     candidates[0] if candidates else None)
-                if not candidate or not _modrinth_jar_file(candidate):
-                    unresolved[dep_pid] = True
-                    continue
-                jar = _modrinth_jar_file(candidate)
-                planned[dep_pid] = {
-                    'projectId':     dep_pid,
-                    'versionId':     candidate.get('id'),
-                    'versionNumber': candidate.get('version_number'),
-                    'filename':      jar['filename'],
-                    'url':           jar['url'],
-                    'sha512':        jar.get('hashes', {}).get('sha512'),
-                    'size':          jar.get('size', 0),
-                    'folder':        folder_of.get(parent_pid),
-                }
-                visit(candidate, dep_pid)       # its own requirements first …
-                order.append(dep_pid)           # … then the library itself
-
-        for root in roots:
-            visit(root, root.get('project_id'))
-        # … and the other direction: an installed mod that declares a mod
-        # being installed incompatible.
-        if version_ids:
-            root_pids = {r.get('project_id') for r in roots}
-            for pid, info in installed.items():
-                for dep in info['version'].get('dependencies') or []:
-                    if dep.get('dependency_type') == 'incompatible' \
-                            and dep.get('project_id') in root_pids and dep['project_id'] != pid:
-                        incompatible.setdefault(pid, set()).add(dep['project_id'])
-
-        names = {}
-        wanted = set(planned) | set(unresolved) | set(incompatible) \
-            | {p for parents in required_by.values() for p in parents} \
-            | {p for parents in incompatible.values() for p in parents}
-        wanted.discard(None)
-        if wanted:
-            for proj in _modrinth_get('/projects', params={'ids': json.dumps(sorted(wanted))}, timeout=20):
-                names[proj['id']] = proj.get('title') or proj.get('slug') or proj['id']
-    except requests.exceptions.Timeout:
-        return api_error('Modrinth API timed out', 504)
+        result = _resolve_modrinth_dependencies(roots, installed, loader, mc_version,
+                                                reverse_incompatible=bool(version_ids))
     except requests.exceptions.RequestException as e:
-        return api_error(f'Modrinth API error: {str(e)}', 502)
+        return _modrinth_error_response(e)
+    result.pop('names')
+    return api_success(result)
 
-    def title(pid):
-        return names.get(pid, pid)
 
-    missing = []
-    for pid in order:
-        rec = dict(planned[pid], title=title(pid),
-                   requiredBy=[title(p) for p in required_by[pid]])
-        # A library pulled in by another library goes where that one goes
-        if not rec['folder']:
-            rec['folder'] = next((planned[p]['folder'] for p in required_by[pid]
-                                  if p in planned and planned[p]['folder']), None)
-        missing.append(rec)
+@app.route('/api/servers/<server_id>/mods/check', methods=['GET'])
+@limiter.limit(MODRINTH_CHECK_LIMIT)
+@server_access_required
+def modrinth_check_mod(server_id):
+    """
+    Check one installed mod/plugin: is it on Modrinth, is there an update,
+    and are its required libraries installed.
 
-    return api_success({
-        'missing':      missing,
-        'unresolved':   [{'projectId': pid, 'title': title(pid),
-                          'requiredBy': [title(p) for p in required_by[pid]]} for pid in unresolved],
-        'incompatible': [{'projectId': pid, 'title': title(pid),
-                          'conflictsWith': [title(p) for p in sorted(parents)]}
-                         for pid, parents in incompatible.items()],
-        'truncated':    truncated,
-    })
+    The per-mod counterpart of /mods/updates + /mods/dependencies: the UI
+    walks the folder calling this once per JAR, so every mod gets its own
+    MODRINTH_DEP_MAX dependency budget and a slow or failing mod doesn't
+    sink the rest.
+
+    Args:
+        server_id: Target server (path param).
+        Query params: 'folder' ('mods' or 'plugins'), 'filename' (a .jar
+            directly in that folder), 'loader', 'mcVersion'.
+
+    Returns:
+        200 api_success with 'filename', 'folder', 'status'
+        ('not_on_modrinth', 'up_to_date' or 'update'), 'projectId', 'title',
+        'currentVersion', 'update' (the /mods/updates entry shape, or null)
+        and the missing / unresolved / incompatible / truncated fields of
+        /mods/dependencies for the installed version. 400 on a bad folder
+        or filename, 404 if the file is gone, 403 if the integration is
+        disabled, 503 (with 'retryAfter' seconds) when the panel's Modrinth
+        rate limit is exhausted, 504/502 on Modrinth errors.
+
+    Side effects:
+        Read-only. Hashes the file (cached by size/mtime), identifies the
+        folder's JARs (cached for MODRINTH_IDENTIFY_TTL), then one
+        /version_file/<hash>/update lookup and the dependency lookups.
+    """
+    if not _modrinth_enabled():
+        return _modrinth_disabled_error()
+    loader, mc_version, error = _modrinth_context_args()
+    if error:
+        return error
+    folder = request.args.get('folder', '')
+    if folder not in ('mods', 'plugins'):
+        return api_error('folder must be mods or plugins', 400)
+    server_path = server_manager.get_server_path(server_id)
+    jar_path, error = _mod_file_or_error(server_path / folder, request.args.get('filename', ''))
+    if error:
+        return error
+    if not jar_path.name.endswith('.jar'):
+        return api_error('Only .jar files can be checked', 400)
+    if not jar_path.is_file():
+        return api_error('Mod not found', 404)
+    digest = _jar_sha512(jar_path)
+    if not digest:
+        return api_error('Could not read the file', 500)
+
+    body = {'filename': jar_path.name, 'folder': folder, 'status': 'not_on_modrinth',
+            'projectId': None, 'title': jar_path.name, 'currentVersion': None, 'update': None,
+            'missing': [], 'unresolved': [], 'incompatible': [], 'truncated': False}
+    try:
+        installed = _identify_installed(server_id, _installed_jar_hashes(server_path))
+        current = next((i['version'] for i in installed.values() if i['hash'] == digest), None)
+        if current is None:
+            return api_success(body)
+        pid = current.get('project_id')
+        body.update(projectId=pid, currentVersion=current.get('version_number'), status='up_to_date')
+
+        update_body = {}
+        if loader:
+            update_body['loaders'] = [loader]
+        if mc_version:
+            update_body['game_versions'] = [mc_version]
+        resp = _modrinth_request('POST', f'/version_file/{digest}/update',
+                                 params={'algorithm': 'sha512'}, json_body=update_body)
+        if resp.status_code != 404:      # 404: no version for this loader/game version
+            resp.raise_for_status()
+            latest = resp.json()
+            entry = _modrinth_update_entry(jar_path.name, folder, latest)
+            if entry and entry['sha512'] and entry['sha512'] != digest:
+                body.update(status='update', update=entry)
+
+        deps = _resolve_modrinth_dependencies([current], installed, loader, mc_version,
+                                              extra_names=[pid])
+    except requests.exceptions.RequestException as e:
+        return _modrinth_error_response(e)
+    body['title'] = deps.pop('names').get(pid, jar_path.name)
+    body.update(deps)
+    return api_success(body)
 
 
 @app.route('/api/servers/<server_id>/mods/updates', methods=['GET'])
@@ -14695,8 +14959,9 @@ def check_mod_updates(server_id):
         'versionNumber', 'filename', 'url', 'sha512', 'size') — and
         'notOnModrinth', the filenames Modrinth could not identify. Both
         lists are empty when the server has no mods/ or plugins/ JARs.
-        403 if the integration is disabled, 504 if Modrinth times out, 502
-        on any other Modrinth error.
+        403 if the integration is disabled, 503 if the panel's Modrinth rate
+        limit is exhausted, 504 if Modrinth times out, 502 on any other
+        Modrinth error.
 
     Side effects:
         Read-only: hashes every JAR under mods/ and plugins/ (unreadable
@@ -14706,9 +14971,10 @@ def check_mod_updates(server_id):
     """
     if not _modrinth_enabled():
         return _modrinth_disabled_error()
-    server_path  = server_manager.get_server_path(server_id)
-    loader       = request.args.get('loader', '')
-    mc_version   = request.args.get('mcVersion', '')
+    loader, mc_version, error = _modrinth_context_args()
+    if error:
+        return error
+    server_path = server_manager.get_server_path(server_id)
 
     hashes = _installed_jar_hashes(server_path)
     if not hashes:
@@ -14725,44 +14991,20 @@ def check_mod_updates(server_id):
         if mc_version:
             body['game_versions'] = [mc_version]
 
-        headers = {'User-Agent': MODRINTH_UA, 'Content-Type': 'application/json'}
-        resp = requests.post(
-            f'{MODRINTH_API}/version_files/update',
-            json=body,
-            headers=headers,
-            timeout=20
-        )
+        resp = _modrinth_request('POST', '/version_files/update', json_body=body, timeout=20)
         resp.raise_for_status()
         latest_map = resp.json()   # {current_hash: {version object with latest available}}
-    except requests.exceptions.Timeout:
-        return api_error('Modrinth API timed out', 504)
     except requests.exceptions.RequestException as e:
-        return api_error(f'Modrinth API error: {str(e)}', 502)
+        return _modrinth_error_response(e)
 
     updates = []
     not_on_modrinth = []
 
     for current_hash, entry in hashes.items():
         if current_hash in latest_map:
-            latest = latest_map[current_hash]
-            jar_file = next((f for f in latest.get('files', []) if f.get('primary') and f['filename'].endswith('.jar')), None)
-            if jar_file is None:
-                jar_file = next((f for f in latest.get('files', []) if f['filename'].endswith('.jar')), None)
-
-            latest_hash = (jar_file.get('hashes', {}).get('sha512') if jar_file else None)
-
-            if latest_hash and latest_hash != current_hash:
-                updates.append({
-                    'currentFilename': entry['path'].name,
-                    'folder':          entry['folder'],
-                    'projectId':       latest.get('project_id'),
-                    'versionId':       latest.get('id'),
-                    'versionNumber':   latest.get('version_number'),
-                    'filename':        jar_file['filename'] if jar_file else '',
-                    'url':             jar_file['url'] if jar_file else '',
-                    'sha512':          latest_hash,
-                    'size':            jar_file.get('size', 0) if jar_file else 0,
-                })
+            update = _modrinth_update_entry(entry['path'].name, entry['folder'], latest_map[current_hash])
+            if update and update['sha512'] and update['sha512'] != current_hash:
+                updates.append(update)
         else:
             not_on_modrinth.append(entry['path'].name)
 
