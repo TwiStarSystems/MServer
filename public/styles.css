@@ -5664,6 +5664,19 @@ select.form-control:disabled {
   max-width: 160px;
 }
 
+.modrinth-env-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin: -6px 0 16px;
+}
+
+.modrinth-env-label {
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+
 .modrinth-hint {
   text-align: center;
   color: var(--color-muted);

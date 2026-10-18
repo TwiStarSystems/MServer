@@ -239,6 +239,7 @@ async function checkAuth() {
       currentUser = await response.json();
       window.currentUser = currentUser;
       updateUserUI();
+      applyModrinthFeature();
       return true;
     } else {
       // Not authenticated, redirect to login
@@ -6102,8 +6103,27 @@ let _modrinthSearchPage = 0;
 let _modrinthLastQuery  = {};
 const MODRINTH_PAGE_SIZE = 20;
 
+function modrinthEnabled() {
+  return currentUser?.features?.modrinth !== false;
+}
+
+// An admin can switch the Modrinth integration off in Settings; the server
+// refuses its routes then, so hide the controls that would call them.
+function applyModrinthFeature() {
+  const enabled = modrinthEnabled();
+  document.querySelectorAll('.modrinth-feature').forEach(el => {
+    el.style.display = enabled ? '' : 'none';
+  });
+  const info = document.getElementById('mods-info-text');
+  if (info) {
+    info.textContent = enabled
+      ? "Manage JAR files in your server's mods and plugins folders. Browse and install from Modrinth, upload your own, or manage existing ones."
+      : "Manage JAR files in your server's mods and plugins folders. Upload your own or manage existing ones.";
+  }
+}
+
 function openModrinthSearch() {
-  if (!currentServerId) return;
+  if (!currentServerId || !modrinthEnabled()) return;
 
   // Pre-populate loader/version from server config if available
   const server = servers.find(s => s.id === currentServerId);
@@ -6145,11 +6165,17 @@ async function doModrinthSearch(pageOffset = 0) {
   const type      = document.getElementById('modrinth-type').value;
   const loader    = document.getElementById('modrinth-loader').value;
   const mcVersion = document.getElementById('modrinth-mcversion').value.trim();
+  const environments = [...document.querySelectorAll('.modrinth-env:checked')].map(el => el.value);
 
   _modrinthSearchPage = pageOffset;
-  _modrinthLastQuery  = { query, type, loader, mcVersion };
+  _modrinthLastQuery  = { query, type, loader, mcVersion, environments };
 
   const resultsEl = document.getElementById('modrinth-results');
+  if (environments.length === 0) {
+    resultsEl.innerHTML = '<p class="modrinth-hint">Select at least one of Singleplayer only, Singleplayer + Multiplayer or Multiplayer only.</p>';
+    document.getElementById('modrinth-pagination').innerHTML = '';
+    return;
+  }
   resultsEl.innerHTML = '<div class="table-loading-overlay"><div class="loading-spinner"></div><span>Searching…</span></div>';
   document.getElementById('modrinth-pagination').innerHTML = '';
 
@@ -6159,6 +6185,7 @@ async function doModrinthSearch(pageOffset = 0) {
       projectType: type,
       loader,
       mcVersion:  mcVersion,
+      environments: environments.join(','),
       limit:      MODRINTH_PAGE_SIZE,
       offset:     pageOffset,
     });
@@ -6184,6 +6211,12 @@ async function doModrinthSearch(pageOffset = 0) {
         : hit.downloads >= 1000 ? (hit.downloads / 1000).toFixed(1) + 'K'
         : String(hit.downloads);
 
+      const envBadge = hit.environment === 'singleplayer'
+        ? '<span class="badge badge-warning" title="Modrinth lists this as working only in singleplayer">Singleplayer only</span>'
+        : hit.environment === 'multiplayer'
+          ? '<span class="badge badge-info" title="Modrinth lists this as working only on a dedicated server">Multiplayer only</span>'
+          : '';
+
       card.innerHTML = `
         ${iconHtml}
         <div class="modrinth-info">
@@ -6192,6 +6225,7 @@ async function doModrinthSearch(pageOffset = 0) {
           <div class="modrinth-desc">${escapeHtml(hit.description || '')}</div>
           <div class="modrinth-meta">
             <span class="modrinth-downloads">⬇️ ${dlFormatted}</span>
+            ${envBadge}
             ${hit.categories.slice(0, 3).map(c => `<span class="badge badge-secondary">${escapeHtml(c)}</span>`).join('')}
           </div>
           <button class="btn btn-success btn-small modrinth-install-btn"
@@ -6257,15 +6291,17 @@ async function openModrinthVersionModal(projectId, projectTitle) {
       const row = document.createElement('div');
       row.className = 'modrinth-version-row';
       row.innerHTML = `
-        <span class="modrinth-ver-name">${escapeHtml(v.name || v.versionNumber)}</span>
-        <span class="modrinth-ver-loaders">${v.loaders.join(', ')}</span>
-        <span class="modrinth-ver-mc">${v.gameVersions.slice(-3).join(', ')}</span>
+        <span class="modrinth-ver-name">${escapeHtml(v.name || v.versionNumber)}${
+          v.versionType && v.versionType !== 'release'
+            ? ` <span class="badge badge-warning">${escapeHtml(v.versionType)}</span>` : ''}</span>
+        <span class="modrinth-ver-loaders">${escapeHtml(v.loaders.join(', '))}</span>
+        <span class="modrinth-ver-mc">${escapeHtml(v.gameVersions.slice(-3).join(', '))}</span>
         <span class="modrinth-ver-size">${formatBytes(v.size)}</span>
         <button class="btn btn-success btn-small"
                 onclick="installModrinthVersion(
-                  '${escapeHtml(v.url)}',
-                  '${escapeHtml(v.filename)}',
-                  '${escapeHtml(v.sha512 || '')}')">
+                  '${escapeAttr(v.url)}',
+                  '${escapeAttr(v.filename)}',
+                  '${escapeAttr(v.sha512 || '')}')">
           Install
         </button>
       `;
@@ -6323,7 +6359,7 @@ async function installModrinthVersion(url, filename, sha512) {
 // ==================== Mod Update Checker ====================
 
 async function checkModUpdates() {
-  if (!currentServerId) return;
+  if (!currentServerId || !modrinthEnabled()) return;
 
   const btn = document.getElementById('check-updates-btn');
   if (btn) { btn.textContent = '⏳ Checking…'; btn.disabled = true; }
@@ -6355,11 +6391,11 @@ async function checkModUpdates() {
             <span class="update-arrow">(${escapeHtml(u.filename)})</span>
             <button class="btn btn-success btn-small"
                     onclick="applyModUpdate(
-                      '${escapeHtml(u.url)}',
-                      '${escapeHtml(u.filename)}',
-                      '${escapeHtml(u.sha512 || '')}',
-                      '${escapeHtml(u.folder)}',
-                      '${escapeHtml(u.currentFilename)}',
+                      '${escapeAttr(u.url)}',
+                      '${escapeAttr(u.filename)}',
+                      '${escapeAttr(u.sha512 || '')}',
+                      '${escapeAttr(u.folder)}',
+                      '${escapeAttr(u.currentFilename)}',
                       this)">
               Update
             </button>

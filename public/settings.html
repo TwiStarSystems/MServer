@@ -381,6 +381,20 @@
           </div>
 
           <div class="settings-card">
+            <h3>🧩 Integrations</h3>
+            <div class="settings-option">
+              <div class="settings-option-info">
+                <label>Enable Modrinth</label>
+                <small>Let users browse, install and update mods and plugins from Modrinth on modded servers. When disabled, the panel makes no requests to Modrinth and mods can only be uploaded manually.</small>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="enable-modrinth" onchange="saveAppSettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-card">
             <h3>🛡️ Action Policies</h3>
             <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 16px;">
               Control what happens when non-admin users perform actions. Admins always bypass these policies.

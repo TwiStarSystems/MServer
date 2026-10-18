@@ -507,6 +507,7 @@ class SettingsManager:
             'enableRegistration': True,
             'globalMaxBackups': 10,
             'autoDeleteExpiredBackups': False,
+            'enableModrinth': True,
             'policies': {
                 'registration':       'require_approval',
                 'serverCreate':       'allow',
@@ -650,7 +651,7 @@ class SettingsManager:
         if 'app' not in self.settings:
             self.settings['app'] = {}
 
-        for key in ['enableRegistration', 'autoDeleteExpiredBackups']:
+        for key in ['enableRegistration', 'autoDeleteExpiredBackups', 'enableModrinth']:
             if key in app_data:
                 self.settings['app'][key] = bool(app_data[key])
         if 'globalMaxBackups' in app_data:
@@ -8888,7 +8889,8 @@ def api_current_user():
         'groupId': user.get('groupId'),
         'groupName': user.get('groupName'),
         'permissions': user_manager.get_user_permissions(user),
-        'mfaEnabled': user.get('mfaEnabled', False)
+        'mfaEnabled': user.get('mfaEnabled', False),
+        'features': {'modrinth': _modrinth_enabled()},
     })
 
 @app.route('/api/auth/password', methods=['POST'])
@@ -14001,7 +14003,72 @@ def delete_mod(server_id, mod_type, filename):
 # ==================== Modrinth Integration ====================
 
 MODRINTH_API = 'https://api.modrinth.com/v2'
-MODRINTH_UA  = 'TwiStarSystems/MServer/1.0 (github.com/TwiStarSystems)'
+# Modrinth asks for a User-Agent that uniquely identifies the application and
+# its version, and blocks generic ones.
+MODRINTH_UA  = f'TwiStarSystems/MServer/{read_version_file() or "unknown"} (github.com/TwiStarSystems/MServer)'
+
+# A project's Modrinth `environment` values, grouped by where it works. The
+# field is an array aggregated over the project's versions; legacy projects
+# that were never classified carry 'unknown' or no value at all, and those are
+# treated as working in both, since that is what the old server_side flag
+# (still applied below) already allowed.
+MODRINTH_ENV_SINGLEPLAYER = ('singleplayer_only',)
+MODRINTH_ENV_MULTIPLAYER  = ('dedicated_server_only',)
+MODRINTH_ENV_BOTH = (
+    'client_and_server', 'server_only', 'server_only_client_optional',
+    'client_only_server_optional', 'client_or_server',
+    'client_or_server_prefers_both', 'unknown',
+)
+MODRINTH_ENV_FILTERS = ('singleplayer', 'both', 'multiplayer')
+MODRINTH_ENV_DEFAULT = ('both', 'multiplayer')
+
+
+def _modrinth_enabled():
+    """Whether the admin has left the Modrinth integration switched on."""
+    return bool(settings_manager.get_app_settings().get('enableModrinth', True))
+
+
+def _modrinth_disabled_error():
+    return api_error('The Modrinth integration is disabled in Settings', 403)
+
+
+def _modrinth_env_facets(selected):
+    """Search facets that keep only the selected environment groups.
+
+    Excluding the unwanted exclusive groups (rather than listing the wanted
+    values) keeps projects with no environment value at all — most plugins.
+    The 'both' group has too many values to exclude, so dropping it switches
+    to listing the exclusive groups that remain instead.
+    """
+    selected = set(selected)
+    if 'both' in selected:
+        facets = []
+        if 'singleplayer' not in selected:
+            facets += [[f'environment!={e}'] for e in MODRINTH_ENV_SINGLEPLAYER]
+        if 'multiplayer' not in selected:
+            facets += [[f'environment!={e}'] for e in MODRINTH_ENV_MULTIPLAYER]
+        return facets
+    values = []
+    if 'singleplayer' in selected:
+        values += MODRINTH_ENV_SINGLEPLAYER
+    if 'multiplayer' in selected:
+        values += MODRINTH_ENV_MULTIPLAYER
+    return [[f'environment:{e}' for e in values]]
+
+
+def _modrinth_env_group(environments):
+    """Collapse a project's environment array to one display group."""
+    envs = set(environments or [])
+    if envs & set(MODRINTH_ENV_BOTH) or not envs:
+        return 'both'
+    if envs & set(MODRINTH_ENV_SINGLEPLAYER) and envs & set(MODRINTH_ENV_MULTIPLAYER):
+        return 'both'
+    if envs & set(MODRINTH_ENV_SINGLEPLAYER):
+        return 'singleplayer'
+    if envs & set(MODRINTH_ENV_MULTIPLAYER):
+        return 'multiplayer'
+    return 'both'
+
 
 def _modrinth_get(path, params=None, timeout=15):
     """Make a GET request to the Modrinth API with proper headers."""
@@ -14022,49 +14089,60 @@ def modrinth_search(server_id):
             guard; the search itself is not server-specific.
         Query params: 'query' (free text), 'projectType' ('mod', 'plugin'
             or 'modpack'; default 'mod'), 'loader' (fabric, forge, paper …),
-            'mcVersion', 'limit' (default 20, capped at 50) and 'offset'
-            (floored at 0).
+            'mcVersion', 'environments' (comma list of 'singleplayer',
+            'both', 'multiplayer'; default 'both,multiplayer'), 'limit'
+            (default 20, capped at 50) and 'offset' (floored at 0).
 
     Returns:
         200 api_success with 'hits' (slimmed project records: projectId,
         slug, title, description, iconUrl, downloads, categories, versions,
-        gameVersions, latestVersion, projectType, author), plus 'totalHits',
-        'offset' and 'limit' for paging. 504 if Modrinth times out, 502 on
-        any other Modrinth error.
+        gameVersions, latestVersion, projectType, author, environment — one of
+        'singleplayer'/'both'/'multiplayer'), plus 'totalHits', 'offset' and
+        'limit' for paging. 400 if no environment group is selected, 403 if
+        the integration is disabled, 504 if Modrinth times out, 502 on any
+        other Modrinth error.
 
     Side effects:
         Read-only; one outbound GET to Modrinth's /search. The facets are
-        built here, not by the client: 'plugin' maps to project_type:mod
-        narrowed by loader category (or the whole Bukkit-family set when no
-        loader is given), and every search is constrained to
-        server_side:required/optional so client-only projects never appear.
+        built here, not by the client: every search is constrained to
+        server_side:required/optional so client-only projects never appear,
+        and the environment groups narrow it further (see
+        _modrinth_env_facets).
     """
+    if not _modrinth_enabled():
+        return _modrinth_disabled_error()
+
     query        = request.args.get('query', '').strip()
     project_type = request.args.get('projectType', 'mod')   # mod | plugin | modpack
     loader       = request.args.get('loader', '')             # fabric, forge, spigot, paper …
     mc_version   = request.args.get('mcVersion', '')
-    limit        = min(int(request.args.get('limit', 20)), 50)
-    offset       = max(int(request.args.get('offset', 0)), 0)
-
-    # Build facets: always filter to server-side-relevant and requested project_type
-    facets = []
-    if project_type == 'plugin':
-        # Plugins live under project_type:mod on Modrinth but with loader 'spigot'/'paper' etc.
-        facets.append(['project_type:mod'])
-        if loader:
-            facets.append([f'categories:{loader}'])
-        else:
-            facets.append(['categories:paper', 'categories:spigot', 'categories:bukkit', 'categories:folia', 'categories:purpur'])
+    try:
+        limit  = min(max(int(request.args.get('limit', 20)), 1), 50)
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except ValueError:
+        return api_error('limit and offset must be integers', 400)
+    if project_type not in ('mod', 'plugin', 'modpack'):
+        return api_error('projectType must be mod, plugin or modpack', 400)
+    if 'environments' in request.args:
+        environments = [e for e in request.args['environments'].split(',')
+                        if e in MODRINTH_ENV_FILTERS]
+        if not environments:
+            return api_error('Select at least one of Singleplayer, Singleplayer + Multiplayer or Multiplayer', 400)
     else:
-        facets.append([f'project_type:{project_type}'])
-        if loader:
-            facets.append([f'categories:{loader}'])
+        environments = list(MODRINTH_ENV_DEFAULT)
 
+    # Modrinth has had its own 'plugin' project type since 2024; the older
+    # project_type:mod + Bukkit-loader query now matches almost nothing.
+    facets = [[f'project_type:{project_type}']]
+    if loader:
+        facets.append([f'categories:{loader}'])
     if mc_version:
         facets.append([f'versions:{mc_version}'])
 
     # Always prefer server-side content
     facets.append(['server_side:required', 'server_side:optional'])
+    if set(environments) != set(MODRINTH_ENV_FILTERS):
+        facets.extend(_modrinth_env_facets(environments))
 
     params = {
         'query': query,
@@ -14092,6 +14170,7 @@ def modrinth_search(server_id):
                 'latestVersion': h.get('latest_version'),
                 'projectType':  h.get('project_type'),
                 'author':       h.get('author'),
+                'environment':  _modrinth_env_group(h.get('environment')),
             })
         return api_success({
             'hits':     hits,
@@ -14109,6 +14188,8 @@ def modrinth_search(server_id):
 @server_access_required
 def modrinth_project_versions(server_id, project_id):
     """Return available versions for a Modrinth project, filtered by loader/mc_version."""
+    if not _modrinth_enabled():
+        return _modrinth_disabled_error()
     # Validate project_id is safe (base62 or slug)
     if not re.match(r'^[a-zA-Z0-9_\-]{1,64}$', project_id):
         return api_error('Invalid project ID', 400)
@@ -14139,6 +14220,7 @@ def modrinth_project_versions(server_id, project_id):
                 'loaders':      v.get('loaders', []),
                 'gameVersions': v.get('game_versions', []),
                 'datePublished': v.get('date_published'),
+                'versionType':  v.get('version_type'),
                 'filename':     jar_file['filename'],
                 'url':          jar_file['url'],
                 'size':         jar_file.get('size', 0),
@@ -14161,6 +14243,8 @@ def _modrinth_download(server_id, url, safe_filename, mod_type, sha512_expected=
 
     Returns (body_dict, http_status).
     """
+    if not _modrinth_enabled():
+        return {'success': False, 'error': 'The Modrinth integration is disabled in Settings'}, 403
     if mod_type not in ('mods', 'plugins'):
         return {'success': False, 'error': 'modType must be mods or plugins'}, 400
     if not url.startswith('https://cdn.modrinth.com/'):
@@ -14213,8 +14297,10 @@ def modrinth_install(server_id):
     (issue #101). Unlike an upload, the request is fully described by its
     payload, so an approved install is replayed by _execute_approved_action().
     """
+    if not _modrinth_enabled():
+        return _modrinth_disabled_error()
     user_id, user = get_current_user()
-    data       = request.get_json()
+    data       = request.get_json(silent=True) or {}
     url        = data.get('url', '').strip()
     filename   = data.get('filename', '').strip()
     mod_type   = data.get('modType', 'mods')   # 'mods' or 'plugins'
@@ -14275,7 +14361,8 @@ def check_mod_updates(server_id):
         'versionNumber', 'filename', 'url', 'sha512', 'size') — and
         'notOnModrinth', the filenames Modrinth could not identify. Both
         lists are empty when the server has no mods/ or plugins/ JARs.
-        504 if Modrinth times out, 502 on any other Modrinth error.
+        403 if the integration is disabled, 504 if Modrinth times out, 502
+        on any other Modrinth error.
 
     Side effects:
         Read-only: hashes every JAR under mods/ and plugins/ (unreadable
@@ -14283,6 +14370,8 @@ def check_mod_updates(server_id):
         /version_files/update endpoint with a 20s timeout. Nothing is
         downloaded or installed — the caller decides what to act on.
     """
+    if not _modrinth_enabled():
+        return _modrinth_disabled_error()
     server_path  = server_manager.get_server_path(server_id)
     loader       = request.args.get('loader', '')
     mc_version   = request.args.get('mcVersion', '')

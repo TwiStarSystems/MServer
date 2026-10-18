@@ -368,14 +368,14 @@
             <div class="mods-header">
               <h3>🧩 Server Mods & Plugins</h3>
               <div class="mods-actions">
-                <button class="btn btn-primary" onclick="openModrinthSearch()">🔍 Browse Modrinth</button>
-                <button class="btn btn-small" onclick="checkModUpdates()" id="check-updates-btn">🔄 Check Updates</button>
+                <button class="btn btn-primary modrinth-feature" onclick="openModrinthSearch()">🔍 Browse Modrinth</button>
+                <button class="btn btn-small modrinth-feature" onclick="checkModUpdates()" id="check-updates-btn">🔄 Check Updates</button>
                 <label for="mod-upload" class="btn btn-success">⬆️ Upload</label>
                 <input type="file" id="mod-upload" style="display: none;" accept=".jar" multiple>
                 <button id="refresh-mods-btn" class="btn">Refresh</button>
               </div>
             </div>
-            <p class="mods-info">Manage JAR files in your server's mods and plugins folders. Browse and install from Modrinth, upload your own, or manage existing ones.</p>
+            <p class="mods-info" id="mods-info-text">Manage JAR files in your server's mods and plugins folders. Browse and install from Modrinth, upload your own, or manage existing ones.</p>
 
             <!-- Update results banner (hidden by default) -->
             <div id="mods-update-results" class="mods-update-results" style="display:none;"></div>
@@ -2308,6 +2308,12 @@
           </select>
           <input type="text" id="modrinth-mcversion" class="form-control modrinth-filter" placeholder="MC version e.g. 1.21.4" autocomplete="off">
           <button class="btn btn-primary" onclick="doModrinthSearch()">Search</button>
+        </div>
+        <div class="modrinth-env-filters" title="Filter by where the project works, as declared on Modrinth">
+          <span class="modrinth-env-label">Works in:</span>
+          <label class="switch-row"><input type="checkbox" class="modrinth-env" value="singleplayer" onchange="doModrinthSearch()"><span class="switch-label">Singleplayer only</span></label>
+          <label class="switch-row"><input type="checkbox" class="modrinth-env" value="both" checked onchange="doModrinthSearch()"><span class="switch-label">Singleplayer + Multiplayer</span></label>
+          <label class="switch-row"><input type="checkbox" class="modrinth-env" value="multiplayer" checked onchange="doModrinthSearch()"><span class="switch-label">Multiplayer only</span></label>
         </div>
         <div id="modrinth-results" class="modrinth-results">
           <p class="modrinth-hint">Search for mods or plugins to install directly to your server.</p>

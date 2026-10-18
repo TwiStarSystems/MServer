@@ -2532,6 +2532,7 @@ async function loadAppSettings() {
       document.getElementById('enable-registration').checked = settings.enableRegistration ?? true;
       document.getElementById('global-max-backups').value = settings.globalMaxBackups ?? 10;
       document.getElementById('auto-delete-expired-backups').checked = settings.autoDeleteExpiredBackups ?? false;
+      document.getElementById('enable-modrinth').checked = settings.enableModrinth ?? true;
     }
 
     // Load action policies
@@ -2668,7 +2669,8 @@ async function saveAppSettings() {
   const settings = {
     enableRegistration: document.getElementById('enable-registration').checked,
     globalMaxBackups: parseInt(document.getElementById('global-max-backups').value) || 0,
-    autoDeleteExpiredBackups: document.getElementById('auto-delete-expired-backups').checked
+    autoDeleteExpiredBackups: document.getElementById('auto-delete-expired-backups').checked,
+    enableModrinth: document.getElementById('enable-modrinth').checked
   };
   
   const mfaSettings = {
