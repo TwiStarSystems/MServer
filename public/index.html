@@ -2284,41 +2284,83 @@
 
   <!-- Modrinth Search Modal -->
   <div id="modrinth-modal" class="modal">
-    <div class="modal-content modal-large">
+    <div class="modal-content modal-modrinth">
       <div class="modal-header">
         <h2>🔍 Browse Modrinth</h2>
         <button class="close-btn" onclick="closeModrinthSearch()">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="modrinth-search-bar">
-          <input type="text" id="modrinth-query" class="form-control" placeholder="Search mods, plugins…" autocomplete="off">
-          <select id="modrinth-type" class="form-control modrinth-filter">
-            <option value="mod">Mods</option>
-            <option value="plugin">Plugins</option>
-          </select>
-          <select id="modrinth-loader" class="form-control modrinth-filter">
-            <option value="">Any loader</option>
-            <option value="fabric">Fabric</option>
-            <option value="forge">Forge</option>
-            <option value="neoforge">NeoForge</option>
-            <option value="paper">Paper</option>
-            <option value="spigot">Spigot</option>
-            <option value="purpur">Purpur</option>
-            <option value="folia">Folia</option>
-          </select>
-          <input type="text" id="modrinth-mcversion" class="form-control modrinth-filter" placeholder="MC version e.g. 1.21.4" autocomplete="off">
-          <button class="btn btn-primary" onclick="doModrinthSearch()">Search</button>
+        <div class="modrinth-tabs" role="tablist">
+          <button type="button" class="modrinth-tab active" data-type="mod" onclick="setModrinthType('mod')">Mods</button>
+          <button type="button" class="modrinth-tab" data-type="plugin" onclick="setModrinthType('plugin')">Plugins</button>
         </div>
-        <div class="modrinth-env-filters" title="Filter by where the project works, as declared on Modrinth">
-          <span class="modrinth-env-label">Works in:</span>
-          <label class="switch-row"><input type="checkbox" class="modrinth-env" value="singleplayer" onchange="doModrinthSearch()"><span class="switch-label">Singleplayer only</span></label>
-          <label class="switch-row"><input type="checkbox" class="modrinth-env" value="both" checked onchange="doModrinthSearch()"><span class="switch-label">Singleplayer + Multiplayer</span></label>
-          <label class="switch-row"><input type="checkbox" class="modrinth-env" value="multiplayer" checked onchange="doModrinthSearch()"><span class="switch-label">Multiplayer only</span></label>
+        <div class="modrinth-layout">
+          <aside class="modrinth-sidebar">
+            <details class="modrinth-facet" open>
+              <summary>Game version</summary>
+              <input type="text" id="modrinth-version-search" class="form-control" placeholder="Search…" autocomplete="off" oninput="renderModrinthVersions()">
+              <div id="modrinth-version-options" class="modrinth-facet-list modrinth-facet-scroll"></div>
+              <label class="switch-row"><input type="checkbox" id="modrinth-all-versions" onchange="renderModrinthVersions()"><span class="switch-label">Show all versions</span></label>
+            </details>
+            <details class="modrinth-facet" open>
+              <summary>Loader</summary>
+              <div id="modrinth-loader-options" class="modrinth-facet-list"></div>
+            </details>
+            <details class="modrinth-facet" open>
+              <summary>Category</summary>
+              <div id="modrinth-category-options" class="modrinth-facet-list"></div>
+            </details>
+            <details class="modrinth-facet" open title="Filter by where the project works, as declared on Modrinth">
+              <summary>Environment</summary>
+              <div class="modrinth-facet-list">
+                <label class="switch-row"><input type="checkbox" class="modrinth-env" value="singleplayer" onchange="doModrinthSearch()"><span class="switch-label">Singleplayer only</span></label>
+                <label class="switch-row"><input type="checkbox" class="modrinth-env" value="both" checked onchange="doModrinthSearch()"><span class="switch-label">Singleplayer + Multiplayer</span></label>
+                <label class="switch-row"><input type="checkbox" class="modrinth-env" value="multiplayer" checked onchange="doModrinthSearch()"><span class="switch-label">Multiplayer only</span></label>
+              </div>
+            </details>
+            <details class="modrinth-facet" open>
+              <summary>License</summary>
+              <div class="modrinth-facet-list">
+                <label class="switch-row"><input type="checkbox" id="modrinth-open-source" onchange="doModrinthSearch()"><span class="switch-label">Open source only</span></label>
+              </div>
+            </details>
+            <button type="button" class="btn btn-small" onclick="clearModrinthFilters()">Clear filters</button>
+          </aside>
+          <div class="modrinth-main">
+            <form class="modrinth-search-bar" onsubmit="event.preventDefault(); doModrinthSearch();">
+              <input type="search" id="modrinth-query" class="form-control" placeholder="Search mods…" autocomplete="off">
+              <button type="submit" class="btn btn-primary">Search</button>
+            </form>
+            <div class="modrinth-toolbar">
+              <label class="modrinth-select-label">Sort by
+                <select id="modrinth-sort" class="form-control" onchange="doModrinthSearch()">
+                  <option value="relevance">Relevance</option>
+                  <option value="downloads">Downloads</option>
+                  <option value="follows">Followers</option>
+                  <option value="newest">Date published</option>
+                  <option value="updated">Date updated</option>
+                </select>
+              </label>
+              <label class="modrinth-select-label">View
+                <select id="modrinth-page-size" class="form-control" onchange="onModrinthPageSizeChange()">
+                  <option value="5">5</option>
+                  <option value="10">10</option>
+                  <option value="15">15</option>
+                  <option value="20" selected>20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+              </label>
+              <span id="modrinth-result-count" class="pagination-info"></span>
+              <div id="modrinth-active-filters" class="modrinth-active-filters"></div>
+              <div id="modrinth-pagination-top" class="pagination-controls modrinth-pagination"></div>
+            </div>
+            <div id="modrinth-results" class="modrinth-results">
+              <p class="modrinth-hint">Search for mods or plugins to install directly to your server.</p>
+            </div>
+            <div id="modrinth-pagination" class="pagination-controls modrinth-pagination"></div>
+          </div>
         </div>
-        <div id="modrinth-results" class="modrinth-results">
-          <p class="modrinth-hint">Search for mods or plugins to install directly to your server.</p>
-        </div>
-        <div id="modrinth-pagination" class="pagination-controls"></div>
       </div>
     </div>
   </div>

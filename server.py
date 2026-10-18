@@ -14078,7 +14078,87 @@ def _modrinth_get(path, params=None, timeout=15):
     return resp.json()
 
 
+MODRINTH_SORTS = ('relevance', 'downloads', 'follows', 'newest', 'updated')
+MODRINTH_BROWSE_LIMIT = '60 per minute'
+MODRINTH_MAX_LIMIT = 100        # Modrinth silently caps a search page at 100
+MODRINTH_TAG_TTL = 3600
+_modrinth_tag_cache = {'at': 0.0, 'data': None}
+_modrinth_tag_lock = threading.Lock()
+_MODRINTH_TAG_RE = re.compile(r'^[a-z0-9_.+-]{1,64}$')
+
+# Loaders the panel can actually run, by Browse tab. Modrinth's loader tag
+# list also has client-only and legacy ones (iris, babric, liteloader …).
+MODRINTH_TAB_LOADERS = {
+    'mod':    ('fabric', 'forge', 'neoforge', 'quilt'),
+    'plugin': ('paper', 'purpur', 'folia', 'spigot', 'bukkit', 'sponge',
+               'velocity', 'bungeecord', 'waterfall'),
+}
+
+# Every loader tag Modrinth has, used to split loaders out of a hit's
+# categories (search returns both in one list).
+MODRINTH_ALL_LOADERS = frozenset((
+    'babric', 'bta-babric', 'bukkit', 'bungeecord', 'canvas', 'datapack',
+    'fabric', 'folia', 'forge', 'geyser', 'iris', 'java-agent',
+    'legacy-fabric', 'liteloader', 'minecraft', 'modloader', 'neoforge',
+    'nilloader', 'optifine', 'ornithe', 'paper', 'purpur', 'quilt', 'rift',
+    'spigot', 'sponge', 'vanilla', 'velocity', 'waterfall',
+))
+
+
+
+@app.route('/api/modrinth/tags', methods=['GET'])
+@login_required
+def modrinth_tags():
+    """Filter options for the Modrinth browser, from Modrinth's tag endpoints.
+
+    Returns:
+        200 api_success with 'categories' (names, for mods and plugins —
+        Modrinth files plugin categories under the mod type), 'loaders'
+        ({'mod': [...], 'plugin': [...]}, limited to loaders a server can
+        run) and 'gameVersions' ([{'version', 'type'}], newest first, type
+        being release/snapshot/beta/alpha). 403 if the integration is
+        disabled, 502/504 if Modrinth fails and nothing is cached.
+
+    Side effects:
+        Cached in-process for an hour; a failed refresh serves the stale
+        copy. Category icons are deliberately dropped: they are raw SVG
+        markup and would have to be injected unescaped.
+    """
+    if not _modrinth_enabled():
+        return _modrinth_disabled_error()
+    with _modrinth_tag_lock:
+        cached = _modrinth_tag_cache['data']
+        if cached and time.time() - _modrinth_tag_cache['at'] < MODRINTH_TAG_TTL:
+            return api_success(cached)
+        try:
+            categories = _modrinth_get('/tag/category')
+            loaders    = _modrinth_get('/tag/loader')
+            versions   = _modrinth_get('/tag/game_version')
+        except requests.exceptions.RequestException as e:
+            if cached:
+                return api_success(cached)
+            if isinstance(e, requests.exceptions.Timeout):
+                return api_error('Modrinth API timed out', 504)
+            return api_error(f'Modrinth API error: {str(e)}', 502)
+
+        known_loaders = {l.get('name') for l in loaders}
+        data = {
+            'categories': sorted({c['name'] for c in categories
+                                  if c.get('project_type') == 'mod'
+                                  and c.get('header') == 'categories'}),
+            'loaders': {tab: [l for l in names if l in known_loaders]
+                        for tab, names in MODRINTH_TAB_LOADERS.items()},
+            'gameVersions': [{'version': v['version'], 'type': v.get('version_type', 'release')}
+                             for v in versions if v.get('version')],
+        }
+        _modrinth_tag_cache.update(at=time.time(), data=data)
+        return api_success(data)
+
+
+# Each filter click re-runs the search, so the default per-endpoint window is
+# too tight; this still stays well under Modrinth's 300/min per panel IP.
 @app.route('/api/servers/<server_id>/mods/search', methods=['GET'])
+@limiter.limit(MODRINTH_BROWSE_LIMIT)
 @server_access_required
 def modrinth_search(server_id):
     """
@@ -14089,14 +14169,18 @@ def modrinth_search(server_id):
             guard; the search itself is not server-specific.
         Query params: 'query' (free text), 'projectType' ('mod', 'plugin'
             or 'modpack'; default 'mod'), 'loader' (fabric, forge, paper …),
-            'mcVersion', 'environments' (comma list of 'singleplayer',
-            'both', 'multiplayer'; default 'both,multiplayer'), 'limit'
-            (default 20, capped at 50) and 'offset' (floored at 0).
+            'mcVersion', 'categories' (comma list; a project must have
+            all of them, as on modrinth.com), 'openSource' ('1' for open
+            source only), 'sort' (relevance, downloads, follows, newest,
+            updated), 'environments' (comma list of 'singleplayer', 'both',
+            'multiplayer'; default 'both,multiplayer'), 'limit' (default 20,
+            1–100) and 'offset' (floored at 0).
 
     Returns:
         200 api_success with 'hits' (slimmed project records: projectId,
-        slug, title, description, iconUrl, downloads, categories, versions,
-        gameVersions, latestVersion, projectType, author, environment — one of
+        slug, title, description, iconUrl, downloads, follows, dateModified,
+        categories, loaders, versions, gameVersions, latestVersion,
+        projectType, author, environment — one of
         'singleplayer'/'both'/'multiplayer'), plus 'totalHits', 'offset' and
         'limit' for paging. 400 if no environment group is selected, 403 if
         the integration is disabled, 504 if Modrinth times out, 502 on any
@@ -14116,13 +14200,23 @@ def modrinth_search(server_id):
     project_type = request.args.get('projectType', 'mod')   # mod | plugin | modpack
     loader       = request.args.get('loader', '')             # fabric, forge, spigot, paper …
     mc_version   = request.args.get('mcVersion', '')
+    sort         = request.args.get('sort', 'relevance')
+    categories   = [c for c in request.args.get('categories', '').split(',') if c]
+    open_source  = request.args.get('openSource') == '1'
     try:
-        limit  = min(max(int(request.args.get('limit', 20)), 1), 50)
+        limit  = min(max(int(request.args.get('limit', 20)), 1), MODRINTH_MAX_LIMIT)
         offset = max(int(request.args.get('offset', 0)), 0)
     except ValueError:
         return api_error('limit and offset must be integers', 400)
     if project_type not in ('mod', 'plugin', 'modpack'):
         return api_error('projectType must be mod, plugin or modpack', 400)
+    if sort not in MODRINTH_SORTS:
+        return api_error(f'sort must be one of {", ".join(MODRINTH_SORTS)}', 400)
+    # Facet values are interpolated into the facet strings, so a ':' or ']'
+    # in one could reshape the filter.
+    if any(not _MODRINTH_TAG_RE.match(v) for v in [loader, mc_version, *categories] if v) \
+            or len(categories) > 20:
+        return api_error('Invalid loader, version or category', 400)
     if 'environments' in request.args:
         environments = [e for e in request.args['environments'].split(',')
                         if e in MODRINTH_ENV_FILTERS]
@@ -14138,6 +14232,9 @@ def modrinth_search(server_id):
         facets.append([f'categories:{loader}'])
     if mc_version:
         facets.append([f'versions:{mc_version}'])
+    facets.extend([f'categories:{c}'] for c in categories)
+    if open_source:
+        facets.append(['open_source:true'])
 
     # Always prefer server-side content
     facets.append(['server_side:required', 'server_side:optional'])
@@ -14149,11 +14246,12 @@ def modrinth_search(server_id):
         'limit': limit,
         'offset': offset,
         'facets': json.dumps(facets),
-        'index': 'relevance',
+        'index': sort,
     }
 
     try:
         data = _modrinth_get('/search', params=params)
+        loader_names = MODRINTH_ALL_LOADERS
         # Slim down the response to only what the frontend needs
         hits = []
         for h in data.get('hits', []):
@@ -14164,7 +14262,12 @@ def modrinth_search(server_id):
                 'description':  h.get('description'),
                 'iconUrl':      h.get('icon_url'),
                 'downloads':    h.get('downloads', 0),
-                'categories':   h.get('categories', []),
+                'follows':      h.get('follows', 0),
+                'dateModified': h.get('date_modified'),
+                # Modrinth mixes loaders into categories; split them back out
+                'categories':   [c for c in h.get('display_categories', h.get('categories', []))
+                                 if c not in loader_names],
+                'loaders':      [c for c in h.get('categories', []) if c in loader_names],
                 'versions':     h.get('versions', []),
                 'gameVersions': h.get('display_categories', h.get('versions', [])),
                 'latestVersion': h.get('latest_version'),
@@ -14185,6 +14288,7 @@ def modrinth_search(server_id):
 
 
 @app.route('/api/servers/<server_id>/mods/modrinth/versions/<project_id>', methods=['GET'])
+@limiter.limit(MODRINTH_BROWSE_LIMIT)
 @server_access_required
 def modrinth_project_versions(server_id, project_id):
     """Return available versions for a Modrinth project, filtered by loader/mc_version."""

@@ -6099,9 +6099,19 @@ function showModUploadDialog() {
 
 // ==================== Modrinth Browser ====================
 
-let _modrinthSearchPage = 0;
-let _modrinthLastQuery  = {};
-const MODRINTH_PAGE_SIZE = 20;
+// Filter state for the browser. Loader and game version are single picks
+// (a server runs one of each); categories are ANDed, as on modrinth.com.
+const _modrinth = {
+  type: 'mod',
+  loader: '',
+  mcVersion: '',
+  categories: new Set(),
+  offset: 0,
+  tags: null,
+};
+const MODRINTH_PAGE_SIZES = [5, 10, 15, 20, 50, 100];
+const MODRINTH_PAGE_SIZE_KEY = 'mserver.modrinthPageSize';
+let _modrinthSearchSeq = 0;
 
 function modrinthEnabled() {
   return currentUser?.features?.modrinth !== false;
@@ -6122,78 +6132,253 @@ function applyModrinthFeature() {
   }
 }
 
-function openModrinthSearch() {
+function modrinthPageSize() {
+  const n = parseInt(document.getElementById('modrinth-page-size').value, 10);
+  return MODRINTH_PAGE_SIZES.includes(n) ? n : 20;
+}
+
+function onModrinthPageSizeChange() {
+  try { localStorage.setItem(MODRINTH_PAGE_SIZE_KEY, String(modrinthPageSize())); } catch (_) { /* storage blocked */ }
+  doModrinthSearch();
+}
+
+async function loadModrinthTags() {
+  if (_modrinth.tags) return _modrinth.tags;
+  try {
+    _modrinth.tags = await apiRequest('/api/modrinth/tags');
+  } catch (error) {
+    console.error('Failed to load Modrinth filters:', error);
+    _modrinth.tags = null;
+  }
+  return _modrinth.tags;
+}
+
+function _modrinthLabel(name) {
+  const special = { neoforge: 'NeoForge', bungeecord: 'BungeeCord', 'game-mechanics': 'Game Mechanics' };
+  return special[name] || name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+// A clickable single-choice list (loader / game version): clicking the
+// selected entry again clears it.
+function _modrinthChoiceHtml(values, selected, onPick) {
+  return values.map(v => `
+    <button type="button" class="modrinth-facet-option${v.value === selected ? ' selected' : ''}"
+            onclick="${onPick}('${escapeAttr(v.value)}')">${escapeHtml(v.label)}</button>`).join('');
+}
+
+function renderModrinthVersions() {
+  const el = document.getElementById('modrinth-version-options');
+  const all = document.getElementById('modrinth-all-versions').checked;
+  const q = document.getElementById('modrinth-version-search').value.trim().toLowerCase();
+  let versions = (_modrinth.tags?.gameVersions || [])
+    .filter(v => all || v.type === 'release' || v.version === _modrinth.mcVersion)
+    .map(v => v.version);
+  // A server version Modrinth doesn't list (e.g. typed by hand) still shows
+  if (_modrinth.mcVersion && !versions.includes(_modrinth.mcVersion)) versions.unshift(_modrinth.mcVersion);
+  if (q) versions = versions.filter(v => v.toLowerCase().includes(q));
+  el.innerHTML = versions.length
+    ? _modrinthChoiceHtml(versions.map(v => ({ value: v, label: v })), _modrinth.mcVersion, 'pickModrinthVersion')
+    : '<p class="modrinth-facet-empty">No matching versions</p>';
+  const picked = el.querySelector('.selected');
+  if (picked) el.scrollTop = picked.offsetTop - el.offsetTop - el.clientHeight / 2;
+}
+
+function renderModrinthLoaders() {
+  const loaders = _modrinth.tags?.loaders?.[_modrinth.type]
+    || (_modrinth.type === 'plugin' ? ['paper', 'purpur', 'folia', 'spigot', 'bukkit'] : ['fabric', 'forge', 'neoforge', 'quilt']);
+  document.getElementById('modrinth-loader-options').innerHTML =
+    _modrinthChoiceHtml(loaders.map(l => ({ value: l, label: _modrinthLabel(l) })), _modrinth.loader, 'pickModrinthLoader');
+}
+
+function renderModrinthCategories() {
+  const cats = _modrinth.tags?.categories || [];
+  document.getElementById('modrinth-category-options').innerHTML = cats.length
+    ? cats.map(c => `
+        <label class="switch-row"><input type="checkbox" value="${escapeAttrValue(c)}"
+               ${_modrinth.categories.has(c) ? 'checked' : ''}
+               onchange="toggleModrinthCategory(this.value, this.checked)"><span class="switch-label">${escapeHtml(_modrinthLabel(c).replace(/-/g, ' '))}</span></label>`).join('')
+    : '<p class="modrinth-facet-empty">Categories unavailable</p>';
+}
+
+function renderModrinthFilters() {
+  document.querySelectorAll('.modrinth-tab').forEach(t => t.classList.toggle('active', t.dataset.type === _modrinth.type));
+  document.getElementById('modrinth-query').placeholder = _modrinth.type === 'plugin' ? 'Search plugins…' : 'Search mods…';
+  renderModrinthVersions();
+  renderModrinthLoaders();
+  renderModrinthCategories();
+  renderModrinthActiveFilters();
+}
+
+// Removable chips for the filters in effect, above the results
+function renderModrinthActiveFilters() {
+  // `clear` is inline-handler source: fixed code, with any value already
+  // passed through escapeAttr()
+  const chips = [];
+  if (_modrinth.mcVersion) chips.push({ label: _modrinth.mcVersion, clear: "pickModrinthVersion('')" });
+  if (_modrinth.loader) chips.push({ label: _modrinthLabel(_modrinth.loader), clear: "pickModrinthLoader('')" });
+  _modrinth.categories.forEach(c => chips.push({
+    label: _modrinthLabel(c).replace(/-/g, ' '),
+    clear: `toggleModrinthCategory('${escapeAttr(c)}', false)`,
+  }));
+  document.getElementById('modrinth-active-filters').innerHTML = chips.map(c =>
+    `<button type="button" class="modrinth-chip" onclick="${c.clear}" title="Remove filter">${escapeHtml(c.label)} ✕</button>`
+  ).join('');
+}
+
+function setModrinthType(type) {
+  if (type === _modrinth.type) return;
+  _modrinth.type = type;
+  // Loaders differ between the tabs, so the old pick no longer applies
+  _modrinth.loader = '';
+  renderModrinthFilters();
+  doModrinthSearch();
+}
+
+function pickModrinthLoader(loader) {
+  _modrinth.loader = (loader === _modrinth.loader) ? '' : loader;
+  renderModrinthLoaders();
+  renderModrinthActiveFilters();
+  doModrinthSearch();
+}
+
+function pickModrinthVersion(version) {
+  _modrinth.mcVersion = (version === _modrinth.mcVersion) ? '' : version;
+  renderModrinthVersions();
+  renderModrinthActiveFilters();
+  doModrinthSearch();
+}
+
+function toggleModrinthCategory(cat, on) {
+  if (on) _modrinth.categories.add(cat); else _modrinth.categories.delete(cat);
+  renderModrinthCategories();
+  renderModrinthActiveFilters();
+  doModrinthSearch();
+}
+
+function clearModrinthFilters() {
+  _modrinth.loader = '';
+  _modrinth.mcVersion = '';
+  _modrinth.categories.clear();
+  document.getElementById('modrinth-open-source').checked = false;
+  document.getElementById('modrinth-version-search').value = '';
+  document.querySelectorAll('.modrinth-env').forEach(el => { el.checked = el.value !== 'singleplayer'; });
+  renderModrinthFilters();
+  doModrinthSearch();
+}
+
+async function openModrinthSearch() {
   if (!currentServerId || !modrinthEnabled()) return;
 
-  // Pre-populate loader/version from server config if available
+  // Pre-populate type/loader/version from the server's config
   const server = servers.find(s => s.id === currentServerId);
-  if (server) {
-    const loaderMap = {
-      paper: 'paper', purpur: 'purpur', folia: 'folia', spigot: 'spigot',
-      fabric: 'fabric', forge: 'forge', neoforge: 'neoforge',
-    };
-    const typeEl = document.getElementById('modrinth-type');
-    const loaderEl = document.getElementById('modrinth-loader');
-    const mcVerEl = document.getElementById('modrinth-mcversion');
+  const serverType = (server?.serverType || '').toLowerCase();
+  const pluginLoaders = ['paper', 'purpur', 'folia', 'spigot', 'bukkit'];
+  const modLoaders = ['fabric', 'forge', 'neoforge', 'quilt'];
+  _modrinth.type = pluginLoaders.includes(serverType) ? 'plugin' : 'mod';
+  _modrinth.loader = (pluginLoaders.includes(serverType) || modLoaders.includes(serverType)) ? serverType : '';
+  _modrinth.mcVersion = (server?.version && server.version !== 'unknown') ? server.version : '';
+  _modrinth.categories.clear();
 
-    if (server.serverType && loaderMap[server.serverType.toLowerCase()]) {
-      loaderEl.value = loaderMap[server.serverType.toLowerCase()];
-      // Plugins loaders imply plugin type
-      if (['paper','purpur','folia','spigot'].includes(server.serverType.toLowerCase())) {
-        typeEl.value = 'plugin';
-      } else {
-        typeEl.value = 'mod';
-      }
-    }
-    if (server.version && server.version !== 'unknown') {
-      mcVerEl.value = server.version;
-    }
-  }
+  try {
+    const saved = parseInt(localStorage.getItem(MODRINTH_PAGE_SIZE_KEY), 10);
+    if (MODRINTH_PAGE_SIZES.includes(saved)) document.getElementById('modrinth-page-size').value = String(saved);
+  } catch (_) { /* storage blocked */ }
+
+  // On a phone the filter sections would push the results off-screen
+  const narrow = window.matchMedia('(max-width: 760px)').matches;
+  document.querySelectorAll('#modrinth-modal details.modrinth-facet').forEach(d => { d.open = !narrow; });
 
   document.getElementById('modrinth-modal').classList.add('active');
   document.getElementById('modrinth-query').focus();
+
+  renderModrinthFilters();
+  await loadModrinthTags();
+  renderModrinthFilters();
+  doModrinthSearch();
 }
 
 function closeModrinthSearch() {
   document.getElementById('modrinth-modal').classList.remove('active');
 }
 
+function _modrinthCount(n) {
+  return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M'
+    : n >= 1000 ? (n / 1000).toFixed(1) + 'K'
+    : String(n || 0);
+}
+
+function _modrinthAgo(iso) {
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  const units = [[31536000, 'year'], [2592000, 'month'], [604800, 'week'], [86400, 'day'], [3600, 'hour'], [60, 'minute']];
+  for (const [secs, name] of units) {
+    const n = Math.floor(s / secs);
+    if (n >= 1) return `${n} ${name}${n === 1 ? '' : 's'} ago`;
+  }
+  return 'just now';
+}
+
+// Numbered pages: 1 … around-current … last
+function _modrinthPaginationHtml(total, pageSize, offset) {
+  const totalPages = Math.ceil(total / pageSize);
+  if (totalPages <= 1) return '';
+  const current = Math.floor(offset / pageSize) + 1;
+  const pages = new Set([1, totalPages, current - 1, current, current + 1]);
+  const list = [...pages].filter(p => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+  let html = `<button ${current === 1 ? 'disabled' : ''} onclick="doModrinthSearch(${(current - 2) * pageSize})" title="Previous page">‹</button>`;
+  let prev = 0;
+  list.forEach(p => {
+    if (p - prev > 1) html += '<span class="pagination-info">…</span>';
+    html += `<button class="${p === current ? 'active' : ''}" onclick="doModrinthSearch(${(p - 1) * pageSize})">${p}</button>`;
+    prev = p;
+  });
+  html += `<button ${current === totalPages ? 'disabled' : ''} onclick="doModrinthSearch(${current * pageSize})" title="Next page">›</button>`;
+  return html;
+}
+
 async function doModrinthSearch(pageOffset = 0) {
   if (!currentServerId) return;
 
   const query     = document.getElementById('modrinth-query').value.trim();
-  const type      = document.getElementById('modrinth-type').value;
-  const loader    = document.getElementById('modrinth-loader').value;
-  const mcVersion = document.getElementById('modrinth-mcversion').value.trim();
+  const sort      = document.getElementById('modrinth-sort').value;
+  const pageSize  = modrinthPageSize();
   const environments = [...document.querySelectorAll('.modrinth-env:checked')].map(el => el.value);
-
-  _modrinthSearchPage = pageOffset;
-  _modrinthLastQuery  = { query, type, loader, mcVersion, environments };
+  _modrinth.offset = pageOffset;
 
   const resultsEl = document.getElementById('modrinth-results');
+  const pagers = ['modrinth-pagination', 'modrinth-pagination-top'].map(id => document.getElementById(id));
+  const countEl = document.getElementById('modrinth-result-count');
+  countEl.textContent = '';
   if (environments.length === 0) {
     resultsEl.innerHTML = '<p class="modrinth-hint">Select at least one of Singleplayer only, Singleplayer + Multiplayer or Multiplayer only.</p>';
-    document.getElementById('modrinth-pagination').innerHTML = '';
+    pagers.forEach(p => { p.innerHTML = ''; });
     return;
   }
   resultsEl.innerHTML = '<div class="table-loading-overlay"><div class="loading-spinner"></div><span>Searching…</span></div>';
-  document.getElementById('modrinth-pagination').innerHTML = '';
 
+  // Filters re-run the search on every click; only the latest answer counts
+  const seq = ++_modrinthSearchSeq;
   try {
     const params = new URLSearchParams({
       query,
-      projectType: type,
-      loader,
-      mcVersion:  mcVersion,
+      projectType: _modrinth.type,
+      loader:      _modrinth.loader,
+      mcVersion:   _modrinth.mcVersion,
+      categories:  [..._modrinth.categories].join(','),
+      openSource:  document.getElementById('modrinth-open-source').checked ? '1' : '',
+      sort,
       environments: environments.join(','),
-      limit:      MODRINTH_PAGE_SIZE,
-      offset:     pageOffset,
+      limit:       pageSize,
+      offset:      pageOffset,
     });
 
     const data = await apiRequest(`/api/servers/${currentServerId}/mods/search?${params}`);
+    if (seq !== _modrinthSearchSeq) return;
 
     if (!data.hits || data.hits.length === 0) {
-      resultsEl.innerHTML = '<p class="modrinth-hint">No results found. Try a different search.</p>';
+      resultsEl.innerHTML = '<p class="modrinth-hint">No results found. Try a different search or fewer filters.</p>';
+      pagers.forEach(p => { p.innerHTML = ''; });
       return;
     }
 
@@ -6206,29 +6391,29 @@ async function doModrinthSearch(pageOffset = 0) {
         ? `<img class="modrinth-icon" src="${escapeAttrValue(hit.iconUrl)}" alt="" loading="lazy" onerror="this.style.display='none'">`
         : `<div class="modrinth-icon-placeholder">📦</div>`;
 
-      const dlFormatted = hit.downloads >= 1_000_000
-        ? (hit.downloads / 1_000_000).toFixed(1) + 'M'
-        : hit.downloads >= 1000 ? (hit.downloads / 1000).toFixed(1) + 'K'
-        : String(hit.downloads);
-
       const envBadge = hit.environment === 'singleplayer'
         ? '<span class="badge badge-warning" title="Modrinth lists this as working only in singleplayer">Singleplayer only</span>'
         : hit.environment === 'multiplayer'
           ? '<span class="badge badge-info" title="Modrinth lists this as working only on a dedicated server">Multiplayer only</span>'
           : '';
+      const updated = _modrinthAgo(hit.dateModified);
 
       card.innerHTML = `
         ${iconHtml}
         <div class="modrinth-info">
-          <div class="modrinth-title">${escapeHtml(hit.title)}</div>
-          <div class="modrinth-author">by ${escapeHtml(hit.author || '')}</div>
+          <div class="modrinth-title">${escapeHtml(hit.title)} <span class="modrinth-author">by ${escapeHtml(hit.author || '')}</span></div>
           <div class="modrinth-desc">${escapeHtml(hit.description || '')}</div>
           <div class="modrinth-meta">
-            <span class="modrinth-downloads">⬇️ ${dlFormatted}</span>
             ${envBadge}
-            ${hit.categories.slice(0, 3).map(c => `<span class="badge badge-secondary">${escapeHtml(c)}</span>`).join('')}
+            ${(hit.categories || []).slice(0, 4).map(c => `<span class="badge badge-secondary">${escapeHtml(c)}</span>`).join('')}
+            ${(hit.loaders || []).map(l => `<span class="modrinth-loader-tag">${escapeHtml(_modrinthLabel(l))}</span>`).join('')}
           </div>
-          <button class="btn btn-success btn-small modrinth-install-btn"
+        </div>
+        <div class="modrinth-stats">
+          <span title="Downloads">⬇️ ${_modrinthCount(hit.downloads)}</span>
+          <span title="Followers">♥ ${_modrinthCount(hit.follows)}</span>
+          ${updated ? `<span title="Last updated">🕒 ${escapeHtml(updated)}</span>` : ''}
+          <button class="btn btn-success btn-small"
                   onclick="openModrinthVersionModal('${escapeAttr(hit.projectId)}', '${escapeAttr(hit.title)}')">
             Install
           </button>
@@ -6236,21 +6421,14 @@ async function doModrinthSearch(pageOffset = 0) {
       `;
       resultsEl.appendChild(card);
     });
+    resultsEl.scrollTop = 0;
 
-    // Pagination
-    const total = data.totalHits;
-    if (total > MODRINTH_PAGE_SIZE) {
-      const paginEl = document.getElementById('modrinth-pagination');
-      const currentPage = Math.floor(pageOffset / MODRINTH_PAGE_SIZE) + 1;
-      const totalPages  = Math.ceil(total / MODRINTH_PAGE_SIZE);
-
-      let html = `<button ${pageOffset === 0 ? 'disabled' : ''} onclick="doModrinthSearch(${Math.max(0, pageOffset - MODRINTH_PAGE_SIZE)})">‹ Prev</button>`;
-      html += `<span class="pagination-info">Page ${currentPage} of ${totalPages} (${total} results)</span>`;
-      html += `<button ${pageOffset + MODRINTH_PAGE_SIZE >= total ? 'disabled' : ''} onclick="doModrinthSearch(${pageOffset + MODRINTH_PAGE_SIZE})">Next ›</button>`;
-      paginEl.innerHTML = html;
-    }
+    const html = _modrinthPaginationHtml(data.totalHits, pageSize, pageOffset);
+    pagers.forEach(p => { p.innerHTML = html; });
+    countEl.textContent = `${data.totalHits.toLocaleString()} result${data.totalHits === 1 ? '' : 's'}`;
 
   } catch (error) {
+    if (seq !== _modrinthSearchSeq) return;
     resultsEl.innerHTML = `<p class="modrinth-hint" style="color:#f45c43;">Failed to search Modrinth: ${escapeHtml(error.message)}</p>`;
     console.error('Modrinth search failed:', error);
   }
@@ -6268,11 +6446,10 @@ async function openModrinthVersionModal(projectId, projectTitle) {
   document.getElementById('modrinth-version-modal').classList.add('active');
 
   // Pre-select install folder based on search type
-  const type = document.getElementById('modrinth-type').value;
-  document.getElementById('modrinth-install-folder').value = (type === 'plugin') ? 'plugins' : 'mods';
+  document.getElementById('modrinth-install-folder').value = (_modrinth.type === 'plugin') ? 'plugins' : 'mods';
 
-  const loader    = document.getElementById('modrinth-loader').value;
-  const mcVersion = document.getElementById('modrinth-mcversion').value.trim();
+  const loader    = _modrinth.loader;
+  const mcVersion = _modrinth.mcVersion;
 
   try {
     const params = new URLSearchParams({ loader, mcVersion: mcVersion });
