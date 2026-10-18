@@ -6023,6 +6023,28 @@ select.form-control:disabled {
   font-size: 0.95rem;
 }
 
+.update-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.update-results-header h4 {
+  margin: 0;
+}
+
+.update-item + .update-results-header {
+  margin-top: 14px;
+}
+
+.update-note {
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+  color: var(--color-muted);
+}
+
 .update-item {
   display: flex;
   align-items: center;

@@ -144,7 +144,9 @@ function removeToast(id) {
 
 let _confirmResolve = null;
 
-function confirmAction(message, { title = 'Confirm', icon = '⚠️', okText = 'Confirm', okClass = 'btn-danger', cancelText = 'Cancel' } = {}) {
+// Resolves true / false, or 'extra' when the optional third button (shown
+// only when extraText is given) is clicked.
+function confirmAction(message, { title = 'Confirm', icon = '⚠️', okText = 'Confirm', okClass = 'btn-danger', cancelText = 'Cancel', extraText = '' } = {}) {
   return new Promise((resolve) => {
     _confirmResolve = resolve;
 
@@ -157,6 +159,10 @@ function confirmAction(message, { title = 'Confirm', icon = '⚠️', okText = '
     okBtn.className = `btn ${okClass}`;
 
     document.getElementById('confirm-modal-cancel').textContent = cancelText;
+    const extraBtn = document.getElementById('confirm-modal-extra');
+    extraBtn.textContent = extraText;
+    extraBtn.style.display = extraText ? '' : 'none';
+    extraBtn.onclick = () => closeConfirmModal('extra');
     document.getElementById('confirm-modal-overlay').classList.add('active');
 
     // Set up handlers (one-shot)
@@ -6478,7 +6484,8 @@ async function openModrinthVersionModal(projectId, projectTitle) {
                 onclick="installModrinthVersion(
                   '${escapeAttr(v.url)}',
                   '${escapeAttr(v.filename)}',
-                  '${escapeAttr(v.sha512 || '')}')">
+                  '${escapeAttr(v.sha512 || '')}',
+                  '${escapeAttr(v.versionId || '')}')">
           Install
         </button>
       `;
@@ -6495,22 +6502,29 @@ function closeModrinthVersionModal() {
   document.getElementById('modrinth-version-modal').classList.remove('active');
 }
 
-async function installModrinthVersion(url, filename, sha512) {
+async function installModrinthVersion(url, filename, sha512, versionId) {
   if (!currentServerId) return;
 
   const modType = document.getElementById('modrinth-install-folder').value;
-
-  // Show in-progress state
   const btn = event.target;
   const origText = btn.textContent;
-  btn.textContent = 'Installing…';
+  btn.textContent = 'Checking…';
   btn.disabled = true;
 
   try {
-    const result = await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
-      method: 'POST',
-      body: JSON.stringify({ url, filename, modType: modType, sha512 }),
-    });
+    const ctx = _modContext();
+    const deps = await _resolveModDependencies([versionId], ctx);
+    const choice = await _confirmDependencies(deps, `Install ${filename}`, 'Install');
+    if (!choice) {
+      btn.textContent = origText;
+      btn.disabled = false;
+      return;
+    }
+
+    btn.textContent = 'Installing…';
+    if (choice === 'all') await _installDependencies(deps.missing, modType);
+
+    const result = await _installModrinthFile({ url, filename, sha512 }, modType);
 
     // Held for admin approval (apiRequest already showed the notice): nothing
     // was installed, so don't claim it was.
@@ -6535,52 +6549,120 @@ async function installModrinthVersion(url, filename, sha512) {
 
 // ==================== Mod Update Checker ====================
 
+// Results of the last check, referenced by index from the buttons so the
+// URLs and hashes never pass through an inline handler.
+let _modUpdates = [];
+let _missingLibs = [];
+
+// Loader / game version of the current server, for choosing compatible
+// versions; the browser's own filters win while it is open.
+function _modContext() {
+  const server = servers.find(s => s.id === currentServerId);
+  const type = (server?.serverType || '').toLowerCase();
+  const known = ['fabric', 'forge', 'neoforge', 'quilt', 'paper', 'purpur', 'folia', 'spigot', 'bukkit', 'sponge', 'velocity', 'bungeecord', 'waterfall'];
+  const browsing = document.getElementById('modrinth-modal')?.classList.contains('active');
+  return {
+    loader: (browsing && _modrinth.loader) || (known.includes(type) ? type : ''),
+    mcVersion: (browsing && _modrinth.mcVersion)
+      || ((server?.version && server.version !== 'unknown') ? server.version : ''),
+  };
+}
+
+function _installModrinthFile(file, folder) {
+  return apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
+    method: 'POST',
+    body: JSON.stringify({ url: file.url, filename: file.filename, modType: folder, sha512: file.sha512 || '' }),
+  });
+}
+
+// Required libraries for the given versions (or, with none given, for the
+// mods already installed). A failed check returns null rather than blocking
+// the install it was meant to help.
+async function _resolveModDependencies(versionIds, ctx) {
+  const params = new URLSearchParams({ loader: ctx.loader, mcVersion: ctx.mcVersion });
+  if (versionIds && versionIds.length) params.set('versionIds', versionIds.filter(Boolean).join(','));
+  try {
+    return await apiRequest(`/api/servers/${currentServerId}/mods/dependencies?${params}`);
+  } catch (error) {
+    console.error('Dependency check failed:', error);
+    showNotification(`Couldn't check dependencies: ${error.message}`, 'warning');
+    return null;
+  }
+}
+
+// Ask before installing anything the user didn't pick. Resolves 'all'
+// (with libraries), 'only' (without), or false (cancelled); with nothing to
+// report it resolves 'all' without asking.
+async function _confirmDependencies(deps, title, verb) {
+  if (!deps) return 'only';
+  const missing = deps.missing || [];
+  const unresolved = deps.unresolved || [];
+  const incompatible = deps.incompatible || [];
+  if (!missing.length && !unresolved.length && !incompatible.length) return 'all';
+
+  const lines = [];
+  if (missing.length) {
+    lines.push('Required libraries that are not installed:');
+    missing.forEach(m => lines.push(`  • ${m.title} ${m.versionNumber || ''} (needed by ${m.requiredBy.join(', ')})`));
+  }
+  if (unresolved.length) {
+    lines.push('', 'Required, but no compatible version was found on Modrinth:');
+    unresolved.forEach(u => lines.push(`  • ${u.title} (needed by ${u.requiredBy.join(', ')})`));
+  }
+  if (incompatible.length) {
+    lines.push('', '⚠️ Marked incompatible with what is installed:');
+    incompatible.forEach(i => lines.push(`  • ${i.title} conflicts with ${i.conflictsWith.join(', ')}`));
+  }
+  if (deps.truncated) lines.push('', 'The dependency tree was too large to check completely.');
+
+  const choice = await confirmAction(lines.join('\n'), {
+    title, icon: '🧩',
+    okText: missing.length ? 'Include libraries' : verb,
+    okClass: 'btn-success',
+    extraText: missing.length ? 'Skip libraries' : '',
+  });
+  if (choice === 'extra') return 'only';
+  return choice ? 'all' : false;
+}
+
+async function _installDependencies(missing, fallbackFolder) {
+  const outcome = { installed: [], pending: [], failed: [] };
+  for (const lib of missing || []) {
+    try {
+      const result = await _installModrinthFile(lib, lib.folder || fallbackFolder);
+      (result && result.pending ? outcome.pending : outcome.installed).push(lib.title);
+    } catch (error) {
+      outcome.failed.push(lib.title);
+      console.error(`Installing ${lib.title} failed:`, error);
+    }
+  }
+  if (outcome.installed.length) showNotification(`Installed libraries: ${outcome.installed.join(', ')}`, 'success');
+  if (outcome.failed.length) showNotification(`Failed to install: ${outcome.failed.join(', ')}`, 'error');
+  return outcome;
+}
+
 async function checkModUpdates() {
   if (!currentServerId || !modrinthEnabled()) return;
 
   const btn = document.getElementById('check-updates-btn');
   if (btn) { btn.textContent = '⏳ Checking…'; btn.disabled = true; }
 
-  const server     = servers.find(s => s.id === currentServerId);
-  const loader     = (server?.serverType || '').toLowerCase();
-  const mcVersion  = (server?.version && server.version !== 'unknown') ? server.version : '';
-
+  const ctx = _modContext();
   const resultsEl = document.getElementById('mods-update-results');
   resultsEl.style.display = 'none';
 
   try {
-    const params = new URLSearchParams({ loader, mcVersion: mcVersion });
-    const data = await apiRequest(`/api/servers/${currentServerId}/mods/updates?${params}`);
+    const params = new URLSearchParams(ctx);
+    const [data, deps] = await Promise.all([
+      apiRequest(`/api/servers/${currentServerId}/mods/updates?${params}`),
+      _resolveModDependencies([], ctx),
+    ]);
+    _modUpdates = data.updates || [];
+    _missingLibs = deps?.missing || [];
+    renderModUpdateResults(deps);
 
-    const updates = data.updates || [];
-
-    if (updates.length === 0) {
+    if (!_modUpdates.length && !_missingLibs.length) {
       showNotification('All mods are up-to-date (or not found on Modrinth)', 'success');
-      resultsEl.style.display = 'none';
-    } else {
-      let html = `<h4>🔄 ${updates.length} update${updates.length !== 1 ? 's' : ''} available</h4>`;
-      updates.forEach(u => {
-        html += `
-          <div class="update-item">
-            <span class="update-filename">📦 ${escapeHtml(u.currentFilename)}</span>
-            <span class="update-arrow">→</span>
-            <span class="update-new-ver">${escapeHtml(u.versionNumber)}</span>
-            <span class="update-arrow">(${escapeHtml(u.filename)})</span>
-            <button class="btn btn-success btn-small"
-                    onclick="applyModUpdate(
-                      '${escapeAttr(u.url)}',
-                      '${escapeAttr(u.filename)}',
-                      '${escapeAttr(u.sha512 || '')}',
-                      '${escapeAttr(u.folder)}',
-                      '${escapeAttr(u.currentFilename)}',
-                      this)">
-              Update
-            </button>
-          </div>
-        `;
-      });
-      resultsEl.innerHTML = html;
-      resultsEl.style.display = 'block';
     }
   } catch (error) {
     showNotification(`Update check failed: ${error.message}`, 'error');
@@ -6590,53 +6672,208 @@ async function checkModUpdates() {
   }
 }
 
-async function applyModUpdate(url, filename, sha512, folder, currentFilename, btn) {
-  if (!currentServerId) return;
+function renderModUpdateResults(deps) {
+  const resultsEl = document.getElementById('mods-update-results');
+  let html = '';
 
-  const confirmed = await confirmAction(
-    `Update "${currentFilename}" to "${filename}"?\n\nThe old file will be replaced.`,
-    { title: 'Update Mod', icon: '🔄', okText: 'Update', okClass: 'btn-success' }
-  );
-  if (!confirmed) return;
+  if (_modUpdates.length) {
+    html += `<div class="update-results-header">
+        <h4>🔄 ${_modUpdates.length} update${_modUpdates.length !== 1 ? 's' : ''} available</h4>
+        ${_modUpdates.length > 1 ? '<button class="btn btn-success btn-small" onclick="applyAllModUpdates(this)">Update all</button>' : ''}
+      </div>`;
+    _modUpdates.forEach((u, i) => {
+      if (!u) return;
+      html += `
+        <div class="update-item" data-update="${i}">
+          <span class="update-filename">📦 ${escapeHtml(u.currentFilename)}</span>
+          <span class="update-arrow">→</span>
+          <span class="update-new-ver">${escapeHtml(u.versionNumber)}</span>
+          <span class="update-arrow">(${escapeHtml(u.filename)})</span>
+          <button class="btn btn-success btn-small" onclick="applyModUpdate(${i}, this)">Update</button>
+        </div>`;
+    });
+  }
+
+  if (_missingLibs.length) {
+    html += `<div class="update-results-header">
+        <h4>🧩 ${_missingLibs.length} required librar${_missingLibs.length !== 1 ? 'ies' : 'y'} missing</h4>
+        ${_missingLibs.length > 1 ? '<button class="btn btn-success btn-small" onclick="installAllMissingLibs(this)">Install all</button>' : ''}
+      </div>`;
+    _missingLibs.forEach((m, i) => {
+      if (!m) return;
+      html += `
+        <div class="update-item" data-lib="${i}">
+          <span class="update-filename">🧩 ${escapeHtml(m.title)} <span class="update-arrow">${escapeHtml(m.versionNumber || '')}</span></span>
+          <span class="update-arrow">needed by ${escapeHtml(m.requiredBy.join(', '))}</span>
+          <button class="btn btn-success btn-small" onclick="installMissingLib(${i}, this)">Install</button>
+        </div>`;
+    });
+  }
+
+  const unresolved = deps?.unresolved || [];
+  if (unresolved.length) {
+    html += `<p class="update-note">⚠️ No compatible version on Modrinth for: ${
+      unresolved.map(u => `${escapeHtml(u.title)} (needed by ${escapeHtml(u.requiredBy.join(', '))})`).join('; ')}</p>`;
+  }
+  const incompatible = deps?.incompatible || [];
+  if (incompatible.length) {
+    html += `<p class="update-note">⚠️ Incompatible mods installed: ${
+      incompatible.map(c => `${escapeHtml(c.title)} conflicts with ${escapeHtml(c.conflictsWith.join(', '))}`).join('; ')}</p>`;
+  }
+
+  resultsEl.innerHTML = html;
+  resultsEl.style.display = html ? 'block' : 'none';
+}
+
+function _dropUpdateRow(selector) {
+  document.querySelector(selector)?.remove();
+  if (!document.querySelector('#mods-update-results .update-item')) {
+    document.getElementById('mods-update-results').style.display = 'none';
+  }
+}
+
+// Install one update and remove the file it replaces. Returns true when the
+// new version is in place, false when it was held for approval.
+async function _applyOneUpdate(u) {
+  const result = await _installModrinthFile(u, u.folder);
+  // Held for admin approval: the new version is not installed yet, so the
+  // old file must stay.
+  if (result && result.pending) return false;
+
+  if (u.filename !== u.currentFilename) {
+    try {
+      await apiRequest(`/api/servers/${currentServerId}/mods/${u.folder}/${encodeURIComponent(u.currentFilename)}`, {
+        method: 'DELETE'
+      });
+    } catch (_) { /* best effort — new file already installed */ }
+  }
+  return true;
+}
+
+async function applyModUpdate(index, btn) {
+  const u = _modUpdates[index];
+  if (!currentServerId || !u) return;
 
   const origText = btn.textContent;
   btn.textContent = '⏳';
   btn.disabled = true;
 
   try {
-    // Install new version
-    const result = await apiRequest(`/api/servers/${currentServerId}/mods/modrinth/install`, {
-      method: 'POST',
-      body: JSON.stringify({ url, filename, modType: folder, sha512 }),
-    });
-
-    // Held for admin approval: the new version is not installed yet, so the
-    // old file must stay.
-    if (result && result.pending) {
+    const deps = await _resolveModDependencies([u.versionId], _modContext());
+    const confirmed = (deps?.missing?.length || deps?.unresolved?.length || deps?.incompatible?.length)
+      ? await _confirmDependencies(deps, `Update ${u.currentFilename}`, 'Update')
+      : await confirmAction(
+          `Update "${u.currentFilename}" to "${u.filename}"?\n\nThe old file will be replaced.`,
+          { title: 'Update Mod', icon: '🔄', okText: 'Update', okClass: 'btn-success' }
+        ) && 'all';
+    if (!confirmed) {
       btn.textContent = origText;
       btn.disabled = false;
       return;
     }
 
-    // Delete old file if the filename is different
-    if (filename !== currentFilename) {
-      try {
-        await apiRequest(`/api/servers/${currentServerId}/mods/${folder}/${encodeURIComponent(currentFilename)}`, {
-          method: 'DELETE'
-        });
-      } catch (_) { /* best effort — new file already installed */ }
+    if (confirmed === 'all' && deps?.missing?.length) await _installDependencies(deps.missing, u.folder);
+    const done = await _applyOneUpdate(u);
+    if (!done) {
+      btn.textContent = origText;
+      btn.disabled = false;
+      return;
     }
 
-    showNotification(`Updated to ${filename}`, 'success');
-    btn.closest('.update-item').remove();
-    const remaining = document.querySelectorAll('.update-item').length;
-    if (remaining === 0) document.getElementById('mods-update-results').style.display = 'none';
+    showNotification(`Updated to ${u.filename}`, 'success');
+    _modUpdates[index] = null;
+    _dropUpdateRow(`[data-update="${index}"]`);
     loadMods();
   } catch (error) {
     showNotification(`Update failed: ${error.message}`, 'error');
     btn.textContent = origText;
     btn.disabled = false;
   }
+}
+
+async function applyAllModUpdates(btn) {
+  const pending = _modUpdates.map((u, i) => [u, i]).filter(([u]) => u);
+  if (!currentServerId || !pending.length) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Checking…';
+  try {
+    const deps = await _resolveModDependencies(pending.map(([u]) => u.versionId), _modContext());
+    const list = pending.map(([u]) => `  • ${u.currentFilename} → ${u.versionNumber}`).join('\n');
+    let confirmed;
+    if (deps?.missing?.length || deps?.unresolved?.length || deps?.incompatible?.length) {
+      confirmed = await _confirmDependencies(deps, `Update ${pending.length} mods`, 'Update all');
+    } else {
+      confirmed = await confirmAction(`Update these ${pending.length} mods? The old files will be replaced.\n\n${list}`,
+        { title: 'Update All Mods', icon: '🔄', okText: 'Update all', okClass: 'btn-success' }) && 'all';
+    }
+    if (!confirmed) return;
+
+    if (confirmed === 'all' && deps?.missing?.length) await _installDependencies(deps.missing, 'mods');
+
+    let updated = 0, held = 0;
+    const failed = [];
+    for (const [u, i] of pending) {
+      btn.textContent = `⏳ ${updated + held + failed.length + 1}/${pending.length}`;
+      try {
+        if (await _applyOneUpdate(u)) {
+          updated++;
+          _modUpdates[i] = null;
+          _dropUpdateRow(`[data-update="${i}"]`);
+        } else {
+          held++;
+        }
+      } catch (error) {
+        failed.push(u.currentFilename);
+        console.error(`Updating ${u.currentFilename} failed:`, error);
+      }
+    }
+    if (updated) showNotification(`Updated ${updated} mod${updated !== 1 ? 's' : ''}`, 'success');
+    if (failed.length) showNotification(`Failed to update: ${failed.join(', ')}`, 'error');
+    loadMods();
+  } catch (error) {
+    showNotification(`Update failed: ${error.message}`, 'error');
+  } finally {
+    if (document.body.contains(btn)) {
+      btn.disabled = false;
+      btn.textContent = 'Update all';
+    }
+  }
+}
+
+async function installMissingLib(index, btn) {
+  const lib = _missingLibs[index];
+  if (!currentServerId || !lib) return;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  const outcome = await _installDependencies([lib], 'mods');
+  if (outcome.installed.length) {
+    _missingLibs[index] = null;
+    _dropUpdateRow(`[data-lib="${index}"]`);
+    loadMods();
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Install';
+  }
+}
+
+async function installAllMissingLibs(btn) {
+  const libs = _missingLibs.map((m, i) => [m, i]).filter(([m]) => m);
+  if (!currentServerId || !libs.length) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ Installing…';
+  const outcome = await _installDependencies(libs.map(([m]) => m), 'mods');
+  libs.forEach(([m, i]) => {
+    if (outcome.installed.includes(m.title)) {
+      _missingLibs[i] = null;
+      _dropUpdateRow(`[data-lib="${i}"]`);
+    }
+  });
+  if (document.body.contains(btn)) {
+    btn.disabled = false;
+    btn.textContent = 'Install all';
+  }
+  loadMods();
 }
 
 // ==================== Player Management ====================
