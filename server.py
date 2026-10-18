@@ -14796,11 +14796,11 @@ def modrinth_dependencies(server_id):
 
     Args:
         server_id: Target server (path param).
-        Query params: 'versionIds' — comma list of Modrinth version ids about
-            to be installed (the install/update flows). Omitted, the check
-            covers the mods already installed instead, to find libraries
-            that were never added. 'loader' and 'mcVersion' constrain which
-            version of a library is picked.
+        Query params: 'versionIds' — comma list (1–100) of Modrinth version
+            ids about to be installed (the install/update flows; the
+            installed mods are checked one at a time by /mods/check).
+            'loader' and 'mcVersion' constrain which version of a library
+            is picked.
 
     Returns:
         200 api_success with:
@@ -14814,7 +14814,7 @@ def modrinth_dependencies(server_id):
             incompatible: projectId, title, conflictsWith.
         'truncated' — true if the MODRINTH_DEP_MAX lookup budget ran out
             (the per-mod check gives each mod its own budget).
-        400 on a malformed version id, 403 if the integration is disabled,
+        400 on a missing or malformed version id, 403 if the integration is disabled,
         503 if the panel's Modrinth rate limit is exhausted, 504/502 on
         Modrinth errors.
 
@@ -14832,18 +14832,16 @@ def modrinth_dependencies(server_id):
     if error:
         return error
     version_ids = [v for v in request.args.get('versionIds', '').split(',') if v]
-    if any(not _MODRINTH_ID_RE.match(v) for v in version_ids) or len(version_ids) > 100:
+    if not version_ids or len(version_ids) > 100 \
+            or any(not _MODRINTH_ID_RE.match(v) for v in version_ids):
         return api_error('Invalid version id', 400)
 
     server_path = server_manager.get_server_path(server_id)
     try:
         installed = _identify_installed(server_id, _installed_jar_hashes(server_path))
-        if version_ids:
-            roots = _modrinth_get('/versions', params={'ids': json.dumps(version_ids)}, timeout=20)
-        else:
-            roots = [i['version'] for i in installed.values()]
+        roots = _modrinth_get('/versions', params={'ids': json.dumps(version_ids)}, timeout=20)
         result = _resolve_modrinth_dependencies(roots, installed, loader, mc_version,
-                                                reverse_incompatible=bool(version_ids))
+                                                reverse_incompatible=True)
     except requests.exceptions.RequestException as e:
         return _modrinth_error_response(e)
     result.pop('names')
@@ -14858,10 +14856,10 @@ def modrinth_check_mod(server_id):
     Check one installed mod/plugin: is it on Modrinth, is there an update,
     and are its required libraries installed.
 
-    The per-mod counterpart of /mods/updates + /mods/dependencies: the UI
-    walks the folder calling this once per JAR, so every mod gets its own
-    MODRINTH_DEP_MAX dependency budget and a slow or failing mod doesn't
-    sink the rest.
+    Backs both Check Updates (the UI walks the folders calling this once
+    per JAR, so every mod gets its own MODRINTH_DEP_MAX dependency budget
+    and a slow or failing mod doesn't sink the rest) and the per-row Check
+    button.
 
     Args:
         server_id: Target server (path param).
@@ -14871,7 +14869,8 @@ def modrinth_check_mod(server_id):
     Returns:
         200 api_success with 'filename', 'folder', 'status'
         ('not_on_modrinth', 'up_to_date' or 'update'), 'projectId', 'title',
-        'currentVersion', 'update' (the /mods/updates entry shape, or null)
+        'currentVersion', 'update' (currentFilename, folder, projectId,
+        versionId, versionNumber, filename, url, sha512, size — or null)
         and the missing / unresolved / incompatible / truncated fields of
         /mods/dependencies for the installed version. 400 on a bad folder
         or filename, 404 if the file is gone, 403 if the integration is
@@ -14935,83 +14934,6 @@ def modrinth_check_mod(server_id):
     body['title'] = deps.pop('names').get(pid, jar_path.name)
     body.update(deps)
     return api_success(body)
-
-
-@app.route('/api/servers/<server_id>/mods/updates', methods=['GET'])
-@server_access_required
-def check_mod_updates(server_id):
-    """
-    Check installed mods/plugins for available updates via Modrinth.
-
-    Identifies each installed JAR by its SHA-512 rather than by filename, so
-    renamed files are still matched and no local index is needed.
-
-    Args:
-        server_id: Target server (path param).
-        Query params: 'loader' (e.g. 'fabric', 'paper') and 'mcVersion' —
-            both optional; when given they constrain Modrinth to versions
-            compatible with that loader/game version.
-
-    Returns:
-        200 api_success with 'updates' — one entry per JAR whose newest
-        compatible Modrinth version differs from the installed hash
-        ('currentFilename', 'folder', 'projectId', 'versionId',
-        'versionNumber', 'filename', 'url', 'sha512', 'size') — and
-        'notOnModrinth', the filenames Modrinth could not identify. Both
-        lists are empty when the server has no mods/ or plugins/ JARs.
-        403 if the integration is disabled, 503 if the panel's Modrinth rate
-        limit is exhausted, 504 if Modrinth times out, 502 on any other
-        Modrinth error.
-
-    Side effects:
-        Read-only: hashes every JAR under mods/ and plugins/ (unreadable
-        files are skipped) and makes one POST to Modrinth's
-        /version_files/update endpoint with a 20s timeout. Nothing is
-        downloaded or installed — the caller decides what to act on.
-    """
-    if not _modrinth_enabled():
-        return _modrinth_disabled_error()
-    loader, mc_version, error = _modrinth_context_args()
-    if error:
-        return error
-    server_path = server_manager.get_server_path(server_id)
-
-    hashes = _installed_jar_hashes(server_path)
-    if not hashes:
-        return api_success({'updates': [], 'notOnModrinth': []})
-
-    # Ask Modrinth for the latest version matching these hashes
-    try:
-        body = {
-            'hashes': list(hashes.keys()),
-            'algorithm': 'sha512',
-        }
-        if loader:
-            body['loaders'] = [loader]
-        if mc_version:
-            body['game_versions'] = [mc_version]
-
-        resp = _modrinth_request('POST', '/version_files/update', json_body=body, timeout=20)
-        resp.raise_for_status()
-        latest_map = resp.json()   # {current_hash: {version object with latest available}}
-    except requests.exceptions.RequestException as e:
-        return _modrinth_error_response(e)
-
-    updates = []
-    not_on_modrinth = []
-
-    for current_hash, entry in hashes.items():
-        if current_hash in latest_map:
-            update = _modrinth_update_entry(entry['path'].name, entry['folder'], latest_map[current_hash])
-            if update and update['sha512'] and update['sha512'] != current_hash:
-                updates.append(update)
-        else:
-            not_on_modrinth.append(entry['path'].name)
-
-    return api_success({
-        'updates':        updates,
-        'notOnModrinth':  not_on_modrinth,
-    })
 
 
 # ==================== Properties API ====================
