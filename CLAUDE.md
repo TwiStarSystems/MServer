@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-MServer (v4.0.0) is a self-hosted web control panel for managing **Minecraft servers** (Java + Bedrock). It is a Python/Flask backend with a real-time websocket layer and a vanilla-JS multi-page frontend. A single operator host runs the panel; the panel launches, monitors, and manages multiple Minecraft server processes as subprocesses on the same machine.
+MServer (v4.1.0) is a self-hosted web control panel for managing **Minecraft servers** (Java + Bedrock). It is a Python/Flask backend with a real-time websocket layer and a vanilla-JS multi-page frontend. A single operator host runs the panel; the panel launches, monitors, and manages multiple Minecraft server processes as subprocesses on the same machine.
 
 ## Commands
 
@@ -145,4 +145,4 @@ Issues are tracked on GitHub (`TwiStarSystems/MServer`). For each bug, work the 
 - The action-approval policy only covers the routes that call `check_action_policy()`. A new mutating per-server route (or a second way to do an already-gated thing, e.g. installing a mod by a different path) has to call it too, or it bypasses the policy.
 - Host-level actions (OS update, service restart) go through the root-owned helper `mserver-hostctl` (installed to `/usr/local/sbin`, the only command the `www-data` sudoers rule allows, authenticated with the root password per request). Add new privileged operations there as a subcommand, never as a broader sudo rule.
 - Static files under `public/` are served by the catch-all `static_files` route, which requires a session for everything except its short `public_files` allowlist — an asset needed on `login.html`/`public.html`/`setup.html` must be added to that list. `/resourcepacks/` is expected to be served by the reverse proxy (see `nginx.conf`), since Minecraft clients fetch packs without a session.
-- `version` file holds the app version (`version=4.0.0`); referenced by the UI/update flow.
+- `version` file holds the app version (`version=4.1.0`); referenced by the UI/update flow.
