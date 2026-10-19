@@ -51,6 +51,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -144,8 +145,26 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
 )
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-# Set to True when serving over HTTPS (SESSION_COOKIE_SECURE=true in .env)
-app.config['SESSION_COOKIE_SECURE'] = _env_bool('SESSION_COOKIE_SECURE', False)
+# SESSION_COOKIE_SECURE in .env: true (always Secure), false (never), or auto —
+# Secure when the request arrived over HTTPS (directly, or via a proxy's
+# X-Forwarded-Proto through ProxyFix), plain over HTTP. Auto lets the panel be
+# reached directly over HTTP (e.g. while the proxy is down) without weakening
+# the cookie handed out through the HTTPS proxy.
+SESSION_COOKIE_SECURE_MODE = _env_str('SESSION_COOKIE_SECURE', 'false').strip().lower()
+if SESSION_COOKIE_SECURE_MODE != 'auto':
+    SESSION_COOKIE_SECURE_MODE = 'true' if _env_bool('SESSION_COOKIE_SECURE', False) else 'false'
+app.config['SESSION_COOKIE_SECURE'] = SESSION_COOKIE_SECURE_MODE == 'true'
+
+
+class _PerRequestSecureSessionInterface(SecureCookieSessionInterface):
+    """Session interface for SESSION_COOKIE_SECURE=auto: the Secure flag follows the request scheme."""
+
+    def get_cookie_secure(self, app):
+        return request.is_secure
+
+
+if SESSION_COOKIE_SECURE_MODE == 'auto':
+    app.session_interface = _PerRequestSecureSessionInterface()
 # Optional: scope session cookie to a domain (e.g. .twistar.org for subdomain sharing)
 _cookie_domain = _env_str('SESSION_COOKIE_DOMAIN', '')
 if _cookie_domain:
@@ -16432,6 +16451,13 @@ def _write_env_value(key, value):
         new_lines.append(f'{key}={value}')
     env_path.write_text('\n'.join(new_lines) + '\n')
 
+def _cookie_secure_mode(raw):
+    """Normalize a SESSION_COOKIE_SECURE value to 'true', 'false' or 'auto'."""
+    raw = (raw or '').strip().lower()
+    if raw == 'auto':
+        return 'auto'
+    return 'true' if raw in ('1', 'true', 'yes', 'on') else 'false'
+
 @app.route('/api/settings/network', methods=['GET'])
 @permission_required('panel.settings.view')
 def get_network_settings():
@@ -16439,7 +16465,7 @@ def get_network_settings():
     env = _read_env_file()
     return api_success({
         'corsOrigins':             env.get('CORS_ORIGINS', ''),
-        'sessionCookieSecure':     env.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true',
+        'sessionCookieSecure':     _cookie_secure_mode(env.get('SESSION_COOKIE_SECURE', 'false')),
         'sessionCookieDomain':     env.get('SESSION_COOKIE_DOMAIN', ''),
         'permanentSessionLifetime': int(env.get('PERMANENT_SESSION_LIFETIME', 604800)),
         'port':                    int(env.get('PORT', 3000)),
@@ -16468,7 +16494,10 @@ def update_network_settings():
         updated_keys.append('CORS_ORIGINS')
 
     if 'sessionCookieSecure' in data:
-        val = 'true' if data['sessionCookieSecure'] else 'false'
+        raw = data['sessionCookieSecure']
+        val = raw.strip().lower() if isinstance(raw, str) else ('true' if raw else 'false')
+        if val not in ('true', 'false', 'auto'):
+            return api_error("sessionCookieSecure must be 'true', 'false' or 'auto'")
         _write_env_value('SESSION_COOKIE_SECURE', val)
         updated_keys.append('SESSION_COOKIE_SECURE')
 
@@ -19146,7 +19175,7 @@ def run_server(host='0.0.0.0', port=3000):
     _cors_display = os.environ.get('CORS_ORIGINS', '').strip()
     if _cors_display in ('', '*'):
         _cors_display = 'same-origin only'
-    _cookie_secure = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+    _cookie_secure = SESSION_COOKIE_SECURE_MODE == 'true'
 
     print('=' * 60)
     print('MServer')
@@ -19155,7 +19184,8 @@ def run_server(host='0.0.0.0', port=3000):
     print(f'Listening on:  {host}:{port}')
     print(f'Environment:   {"development" if _is_dev else "production"}')
     print(f'CORS origins:  {_cors_display}')
-    if not _cookie_secure:
+    print(f'Secure cookie: {SESSION_COOKIE_SECURE_MODE}')
+    if SESSION_COOKIE_SECURE_MODE == 'false':
         print('  ⚠️  SESSION_COOKIE_SECURE is False. Set SESSION_COOKIE_SECURE=true in .env when using HTTPS.')
     if user_manager.needs_setup():
         print('ℹ️  No admin account configured yet.')

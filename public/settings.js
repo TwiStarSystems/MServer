@@ -2568,7 +2568,7 @@ async function loadNetworkSettings() {
       document.getElementById('base-url').value = branding.baseUrl || '';
       document.getElementById('game-hostname').value = branding.gameHostname || '';
       document.getElementById('cors-origins').value = net.corsOrigins || '';
-      document.getElementById('session-cookie-secure').checked = net.sessionCookieSecure ?? false;
+      document.getElementById('session-cookie-secure').value = net.sessionCookieSecure || 'false';
       document.getElementById('session-cookie-domain').value = net.sessionCookieDomain || '';
       document.getElementById('session-lifetime').value = net.permanentSessionLifetime ?? 604800;
       document.getElementById('network-port').value = net.port ?? 3000;
@@ -2593,7 +2593,7 @@ async function saveNetworkSettings() {
     // Save network/.env settings
     const payload = {
       corsOrigins: document.getElementById('cors-origins').value,
-      sessionCookieSecure: document.getElementById('session-cookie-secure').checked,
+      sessionCookieSecure: document.getElementById('session-cookie-secure').value,
       sessionCookieDomain: document.getElementById('session-cookie-domain').value,
       permanentSessionLifetime: parseInt(document.getElementById('session-lifetime').value, 10) || 604800,
     };

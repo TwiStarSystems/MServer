@@ -334,12 +334,13 @@
             <div class="settings-option">
               <div class="settings-option-info">
                 <label>Secure Session Cookies</label>
-                <small>Enable for HTTPS deployments. Cookies will only be sent over secure connections.</small>
+                <small><strong>On</strong>: cookies are only sent over HTTPS. <strong>Auto</strong>: Secure over HTTPS (including via your proxy), plain over HTTP, so the panel can also be reached directly by IP. <strong>Off</strong>: never Secure. Requires a restart.</small>
               </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="session-cookie-secure">
-                <span class="toggle-slider"></span>
-              </label>
+              <select id="session-cookie-secure" class="form-control" style="max-width:140px;">
+                <option value="true">On</option>
+                <option value="auto">Auto</option>
+                <option value="false">Off</option>
+              </select>
             </div>
 
             <div class="form-group" style="margin-bottom: 16px;">
