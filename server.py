@@ -5179,6 +5179,9 @@ class ServerManager:
         # Serializes port-conflict-check + commit so two concurrent requests can't
         # both pass the "port is free" check and write the same port to two servers.
         self.port_lock = threading.Lock()
+        # Ids of duplicated servers whose files are still being copied in by a
+        # duplicate_server job; start_server() refuses them until it finishes.
+        self.copying = set()
 
     # ── Internal row → dict helper ────────────────────────────────────────────
 
@@ -5381,12 +5384,13 @@ class ServerManager:
                     v = sanitizers[k](v)
                 sets.append(f'{col}=?')
                 values.append(1 if v is True else (0 if v is False else v))
-        if not sets:
+        if not sets and 'publicModsDownload' not in kwargs:
             return True
-        values.append(server_id)
-        conn = get_db()
-        conn.execute(f'UPDATE servers SET {", ".join(sets)} WHERE id=?', values)
-        conn.commit()
+        if sets:
+            values.append(server_id)
+            conn = get_db()
+            conn.execute(f'UPDATE servers SET {", ".join(sets)} WHERE id=?', values)
+            conn.commit()
 
         server_config = self.get_server_config(server_id)
         server_dir = Path(server_config.get('serverPath', ''))
@@ -5397,6 +5401,8 @@ class ServerManager:
                 managed_config.pop('Modded', None)
             if 'autoStart' in kwargs:
                 managed_config['AutoStart'] = 'true' if kwargs['autoStart'] else 'false'
+            if 'publicModsDownload' in kwargs:
+                managed_config['PublicModsDownload'] = 'true' if kwargs['publicModsDownload'] else 'false'
             self._write_managed_conf(server_dir, managed_config)
         return True
 
@@ -5859,6 +5865,8 @@ class ServerManager:
             # scheduled tasks, auto-start), rather than per route (issue #100).
             if not server_config.get('approved', True):
                 return False, "This server is waiting for admin approval and cannot be started yet."
+            if server_id in self.copying:
+                return False, "This server's files are still being copied from the original. Try again when the duplicate task finishes."
             
             server_path = Path(server_config.get('serverPath', ''))
             executable = server_config.get('executable', 'server.jar')
@@ -8295,6 +8303,129 @@ def _job_delete_server(job_id, params, progress, cancel):
     return {'deleted': True}
 
 
+# Top-level entries of a server directory, by what the duplicate form calls
+# them. Everything not listed is always copied (server.jar, eula.txt, ...).
+_DUPLICATE_MOD_ENTRIES = {'mods', 'plugins', 'config', 'defaultconfigs'}
+_DUPLICATE_PLAYER_ENTRIES = {
+    'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json',
+    'permissions.json', 'allowlist.json', BEDROCK_BANS_FILE,
+}
+# Never copied: the panel rewrites managed.conf for the copy, and the rest is
+# runtime output that belongs to the original.
+_DUPLICATE_SKIP_ENTRIES = {'managed.conf', 'logs', 'crash-reports', 'debug', 'cache'}
+
+
+def _is_world_dir(path):
+    """A Java world folder (has level.dat) or Bedrock's worlds/ directory."""
+    return path.is_dir() and (path.name == 'worlds' or (path / 'level.dat').is_file())
+
+
+def _set_properties_keys(properties_path, updates):
+    """Rewrite the given keys of a server.properties in place, appending any
+    that are missing, and leave every other line as it was."""
+    lines = properties_path.read_text(encoding='utf-8').splitlines() if properties_path.exists() else []
+    pending = dict(updates)
+    out = []
+    for line in lines:
+        key = line.split('=', 1)[0].strip() if '=' in line and not line.lstrip().startswith('#') else None
+        if key in pending:
+            out.append(f'{key}={pending.pop(key)}')
+        else:
+            out.append(line)
+    out.extend(f'{k}={v}' for k, v in pending.items())
+    properties_path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+
+
+def _job_duplicate_server(job_id, params, progress, cancel):
+    """
+    JobManager handler that copies one server's files into a duplicate.
+
+    Args:
+        job_id: Id of the jobs row (unused).
+        params: 'sourceId' and 'targetId' (the row the route already created),
+            'copyWorld', 'copyMods', 'copyPlayers' (bools — see the
+            _DUPLICATE_* sets for what each covers), 'ports' (the
+            server.properties keys to set, e.g. {'server-port': '25566'}) and
+            'motd' (optional; Java motd or Bedrock server-name).
+        progress: Callback(pct, message=None).
+        cancel: threading.Event checked once per file.
+
+    Returns:
+        {'serverId': <targetId>, 'files': <count copied>}.
+
+    Side effects:
+        Copies the selected entries into the target directory (symlinks are
+        skipped, not followed), writes the requested ports and motd into the
+        copy's server.properties, and rebuilds its managed.conf from the
+        original's with the copy's id, name, owner and port. The target stays
+        in server_manager.copying until this returns, so it cannot be started
+        half-copied. A failure leaves the partial copy for the owner to delete.
+    """
+    source_id, target_id = params['sourceId'], params['targetId']
+    try:
+        source_dir = server_manager.get_server_path(source_id)
+        target_dir = server_manager.get_server_path(target_id)
+        target_cfg = server_manager.get_server_config(target_id)
+
+        entries = []
+        for entry in source_dir.iterdir():
+            name = entry.name
+            if entry.is_symlink() or name in _DUPLICATE_SKIP_ENTRIES:
+                continue
+            if name in _DUPLICATE_MOD_ENTRIES and not params.get('copyMods', True):
+                continue
+            if name in _DUPLICATE_PLAYER_ENTRIES and not params.get('copyPlayers', True):
+                continue
+            if not params.get('copyWorld', True) and _is_world_dir(entry):
+                continue
+            entries.append(entry)
+
+        progress(2, 'Listing files…')
+        files = []
+        for entry in entries:
+            if entry.is_file():
+                files.append(entry)
+            elif entry.is_dir():
+                # os.walk does not descend into symlinked directories.
+                for root, _dirs, names in os.walk(entry):
+                    files.extend(p for p in (Path(root) / n for n in names)
+                                 if p.is_file() and not p.is_symlink())
+        total = len(files) or 1
+        progress(5, f'Copying {len(files)} files…')
+        for i, src in enumerate(files):
+            if cancel and cancel.is_set():
+                raise JobCancelled()
+            dest = target_dir / src.relative_to(source_dir)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            if i % 25 == 0:
+                progress(5 + int((i / total) * 90), f'Copying files… {i}/{len(files)}')
+
+        progress(96, 'Configuring the copy…')
+        props = dict(params.get('ports') or {})
+        motd = params.get('motd')
+        if motd:
+            props['server-name' if target_cfg.get('category') == 'bedrock' else 'motd'] = motd
+        if props:
+            _set_properties_keys(target_dir / 'server.properties', props)
+
+        managed = server_manager._read_managed_conf(source_dir)
+        managed.update({
+            'ServerId': target_id,
+            'ServerName': target_cfg.get('name', ''),
+            'Owner': target_cfg.get('owner') or 'admin',
+            'Port': props.get('server-port', managed.get('Port', '')),
+            'AutoStart': 'false',
+            'CreatedAt': datetime.now().isoformat(),
+            'LastStarted': '',
+        })
+        server_manager._write_managed_conf(target_dir, managed)
+        progress(100, f'Copied {len(files)} files')
+        return {'serverId': target_id, 'files': len(files)}
+    finally:
+        server_manager.copying.discard(target_id)
+
+
 def _job_zip_download(job_id, params, progress, cancel):
     """
     JobManager handler that zips a server folder for download.
@@ -8428,6 +8559,7 @@ job_manager.register('restore', _job_restore)
 job_manager.register('delete_server', _job_delete_server)
 job_manager.register('zip_download', _job_zip_download)
 job_manager.register('jar_download', _job_jar_download)
+job_manager.register('duplicate_server', _job_duplicate_server)
 
 
 def _cleanup_job_artifacts(max_age_hours=24):
@@ -9700,6 +9832,13 @@ def api_get_server_access(server_id):
             for g in group_manager.get_all_groups()
             if not group_manager.has_permission(g['id'], 'servers.access.all')
         ]
+        # Accounts the server can be handed to (POST .../owner): only the
+        # fields needed to pick one, never emails or login state.
+        result['availableOwners'] = [
+            {'id': u['id'], 'username': u['username'], 'name': u.get('name') or ''}
+            for u in user_manager.get_all_users()
+            if u['approved'] and not u['accountDisabled']
+        ]
     return api_success(result)
 
 @app.route('/api/servers/<server_id>/access', methods=['PUT'])
@@ -9719,6 +9858,71 @@ def api_update_server_access(server_id):
     # Unsharing can revoke access for every connected member of an affected group.
     _resync_all_connected_rooms()
     return api_success()
+
+@app.route('/api/servers/<server_id>/owner', methods=['POST'])
+@server_access_required
+def api_transfer_server_owner(server_id):
+    """
+    Assign the server to another account.
+
+    Same rule as changing sharing: the current owner or a user with
+    servers.access.all. Members of a shared group can use the server but
+    cannot give it away.
+
+    Args:
+        JSON body: 'userId' — the new owner; must be an approved, enabled account.
+
+    Returns:
+        api_success(owner={id, username, name}); 403 for a caller who may not
+        transfer, 400 for an unknown, unapproved or disabled target or for the
+        current owner.
+
+    Side effects:
+        Updates servers.owner and the Owner line of managed.conf, resyncs the
+        previous owner's socket rooms (they may have just lost access), and
+        notifies the new owner — and the previous one when someone else made
+        the change.
+    """
+    user_id, user = get_current_user()
+    server_config = server_manager.get_server_config(server_id)
+    old_owner_id = server_config.get('owner')
+    if not user_manager.user_has_permission(user, 'servers.access.all') and old_owner_id != user_id:
+        return api_error('Only the server owner can transfer ownership', 403)
+
+    new_owner_id = str((request.get_json(silent=True) or {}).get('userId') or '').strip()
+    new_owner = user_manager.get_user_by_id(new_owner_id) if new_owner_id else None
+    if (not new_owner or (user_manager.get_user(new_owner_id) or {}).get('isAntiLockout')
+            or not new_owner.get('approved') or new_owner.get('accountDisabled')):
+        return api_error('Choose an active account to transfer the server to', 400)
+    if new_owner_id == old_owner_id:
+        return api_error('That account already owns this server', 400)
+
+    conn = get_db()
+    conn.execute('UPDATE servers SET owner=? WHERE id=?', (new_owner_id, server_id))
+    conn.commit()
+    server_dir = Path(server_config.get('serverPath', ''))
+    if (server_dir / 'managed.conf').exists():
+        managed = server_manager._read_managed_conf(server_dir)
+        managed['Owner'] = new_owner_id
+        server_manager._write_managed_conf(server_dir, managed)
+
+    if old_owner_id:
+        _resync_user_rooms(old_owner_id)
+
+    server_name = server_config.get('name', server_id)
+    actor_name = user.get('username', 'Unknown')
+    notification_manager.create(
+        new_owner_id, 'action_notify', 'Server assigned to you',
+        f'{actor_name} made you the owner of "{server_name}".',
+        ref_type='server', ref_id=server_id)
+    if old_owner_id and old_owner_id != user_id:
+        notification_manager.create(
+            old_owner_id, 'action_notify', 'Server ownership changed',
+            f'{actor_name} transferred "{server_name}" to {new_owner.get("username", "another user")}.',
+            ref_type='server', ref_id=server_id)
+
+    return api_success(owner={'id': new_owner_id, 'username': new_owner.get('username', ''),
+                              'name': new_owner.get('name') or ''})
 
 
 # ==================== Notification API ====================
@@ -10026,15 +10230,57 @@ def api_public_servers():
             owner_user = user_manager.get_user_by_id(owner_id)
             if owner_user:
                 owner_name = owner_user.get('name') or owner_user.get('username', '')
-        public_servers.append({
+        entry = {
             'name': s['name'],
             'running': s['running'],
             'address': address,
             'ownerName': owner_name,
             'serverType': s.get('serverType'),
             'version': s.get('version'),
-        })
+        }
+        # Players of a modded server need its mods to join. The id is only
+        # published when there is a mod pack to fetch with it.
+        if _public_mods_download_allowed(s, managed):
+            mod_files = _enabled_mod_files(server_dir, 'mods')
+            if mod_files:
+                entry['id'] = sid
+                entry['modCount'] = len(mod_files)
+                entry['modsSize'] = sum(p.stat().st_size for p in mod_files)
+        public_servers.append(entry)
     return api_success(servers=public_servers)
+
+
+def _public_mods_download_allowed(server, managed):
+    """Whether the public page may offer this server's mods: a modded server
+    the owner has not opted out of it for (managed.conf PublicModsDownload)."""
+    return (server.get('category') == 'modded'
+            and managed.get('PublicModsDownload', 'true').lower() != 'false')
+
+
+@app.route('/api/public/servers/<server_id>/mods.zip', methods=['GET'])
+@limiter.limit('30 per 15 minutes')
+def api_public_mods_download(server_id):
+    """
+    Download a public modded server's enabled mods as one zip — no login.
+
+    Only what the public server list already advertises: an approved server
+    that is publicly visible, modded, and has not turned the mod pack off.
+    Anything else is a 404, so the route does not confirm that a hidden
+    server exists. Plugins are never included; players don't install those.
+    """
+    cfg = server_manager.get_server_config(server_id)
+    if not cfg or not cfg.get('approved'):
+        return api_error('Not found', 404)
+    server_dir = Path(cfg.get('serverPath', ''))
+    managed = server_manager._read_managed_conf(server_dir) if server_dir.exists() else {}
+    if (managed.get('PublicVisible', 'true').lower() == 'false'
+            or not _public_mods_download_allowed(cfg, managed)):
+        return api_error('Not found', 404)
+    zip_path = _build_modpack_zip(server_id, 'mods')
+    if not zip_path:
+        return api_error('Not found', 404)
+    return send_file(zip_path, as_attachment=True,
+                     download_name=_modpack_download_name(cfg.get('name'), 'mods'))
 
 
 # ==================== Server Management API ====================
@@ -11068,7 +11314,8 @@ def get_server(server_id):
         'status': status,
         **config,
         'serverType': engine,
-        'version': version
+        'version': version,
+        'publicModsDownload': managed.get('PublicModsDownload', 'true').lower() != 'false',
     })
 
 @app.route('/api/servers/<server_id>', methods=['PUT'])
@@ -11124,6 +11371,118 @@ def delete_server(server_id):
         target_id=server_id, execute_fn=do_delete,
         description=f'{user.get("username","Unknown")} deleted server "{server_name}".')
     return jsonify(result) if isinstance(result, dict) else result, status
+
+@app.route('/api/servers/<server_id>/duplicate', methods=['POST'])
+@server_access_required
+def duplicate_server(server_id):
+    """
+    Create a copy of a server under a new name and port.
+
+    Args:
+        server_id: The server to copy (path param).
+        JSON body: 'name' (required), 'port' (required; for Bedrock the IPv6
+            port is derived as port + 1, as the create wizard does), 'motd'
+            (optional), 'copyWorld' / 'copyMods' / 'copyPlayers' (default
+            true), 'copySharing' (default false — share the copy with the
+            same groups) and 'autoRestart' (default: the original's).
+
+    Returns:
+        202 {'started': True, 'jobId': ..., 'serverId': <new id>} plus
+        'pendingApproval' when the serverCreate policy holds it. 403 without
+        servers.create, 400 for a missing name or a bad or taken port.
+
+    Side effects:
+        Creates the new row (owned by the caller, like any created server)
+        and claims its ports with a server.properties stub under
+        server_manager.port_lock, then queues a duplicate_server job that
+        copies the files. The job is serialized with the original's other
+        jobs, so it never copies mid-backup or mid-restore; copying a running
+        server's world is allowed but may catch it mid-save.
+    """
+    user_id, user = get_current_user()
+    if not user_manager.user_has_permission(user, 'servers.create'):
+        return api_error('You do not have permission to create servers', 403)
+    source = server_manager.get_server_config(server_id)
+    data = request.get_json(silent=True) or {}
+
+    name = str(data.get('name') or '').strip()
+    if not name:
+        return api_error('Enter a name for the copy', 400)
+    if len(name) > 100:
+        return api_error('The name can be at most 100 characters', 400)
+
+    is_bedrock = source.get('category') == 'bedrock'
+    try:
+        port = int(str(data.get('port', '')).strip())
+    except (TypeError, ValueError):
+        port = 0
+    if not 1 <= port <= (65534 if is_bedrock else 65535):
+        return api_error('Port must be a number between 1 and 65535', 400)
+    ports = {'server-port': str(port)}
+    if is_bedrock:
+        ports['server-portv6'] = str(port + 1)
+
+    # One line, no control characters: it lands in server.properties.
+    motd = re.sub(r'[\x00-\x1f\x7f]', '', str(data.get('motd') or '')).strip()[:120]
+
+    is_admin = group_manager.is_admin_group(user.get('groupId'))
+    policy = settings_manager.get_policy('serverCreate')
+    approved = is_admin or policy != 'require_approval'
+    source_dir = Path(source['serverPath'])
+    source_managed = server_manager._read_managed_conf(source_dir) if source_dir.exists() else {}
+
+    with server_manager.port_lock:
+        conflict = _find_port_conflict(ports.values())
+        if conflict:
+            conflict_port, owner_name = conflict
+            detail = ' (the IPv6 port, port + 1)' if conflict_port != str(port) else ''
+            return api_error(f'Port {conflict_port}{detail} is already in use by server: {owner_name}', 400)
+        target_id = server_manager.create_server(
+            name=name,
+            executable=source.get('executable', 'server.jar'),
+            java_args=source.get('javaArgs', DEFAULT_JAVA_ARGS),
+            server_type=source.get('serverType'),
+            version=source_managed.get('Version') or source.get('version'),
+            owner=user_id,
+            approved=approved,
+            category=source.get('category', 'unmodded'),
+            port=port,
+            memory_limit_mb=source.get('memoryLimitMb', 0),
+            cpu_limit_percent=source.get('cpuLimitPercent', 0),
+            limit_action=source.get('limitAction', 'warn'),
+            auto_restart=bool(data.get('autoRestart', source.get('autoRestart', False))),
+            restart_attempts=source.get('restartAttempts', 3),
+        )
+        server_manager.copying.add(target_id)
+        # Claim the ports now; the job copies the real file over this and
+        # then writes the same ports back into it.
+        target_dir = server_manager.get_server_path(target_id)
+        (target_dir / 'server.properties').write_text(
+            ''.join(f'{k}={v}\n' for k, v in ports.items()), encoding='utf-8')
+
+    if data.get('copySharing'):
+        group_manager.set_server_groups(target_id, group_manager.get_server_group_ids(server_id))
+
+    source_name = source.get('name', server_id)
+    job_id = job_manager.submit(
+        'duplicate_server', f'Duplicate: {source_name} → {name}',
+        params={
+            'sourceId': server_id, 'targetId': target_id, 'ports': ports, 'motd': motd,
+            'copyWorld': bool(data.get('copyWorld', True)),
+            'copyMods': bool(data.get('copyMods', True)),
+            'copyPlayers': bool(data.get('copyPlayers', True)),
+        },
+        created_by=user_id, server_id=server_id)
+
+    if not is_admin and policy == 'notify':
+        notification_manager.notify_admins(
+            'action_notify', f'Server created — {user.get("username", "Unknown")}',
+            f'{user.get("username", "Unknown")} duplicated "{source_name}" as "{name}".',
+            ref_type='server', ref_id=target_id)
+    response = {'started': True, 'jobId': job_id, 'serverId': target_id}
+    if not approved:
+        response['pendingApproval'] = True
+    return jsonify(response), 202
 
 @app.route('/api/servers/<server_id>/managed', methods=['GET'])
 @server_access_required
@@ -13829,6 +14188,103 @@ def list_mods(server_id):
     result['mods'].sort(key=lambda x: x['name'].lower())
 
     return api_success(result)
+
+
+# Cached mod-pack zips, one per server and folder. Kept out of JOBS_TMP_DIR:
+# _cleanup_job_artifacts() deletes every *.zip there that is not a job.
+MODPACK_CACHE_DIR = UPLOADS_DIR / 'modpacks'
+_modpack_lock = threading.Lock()
+
+
+def _enabled_mod_files(server_path, mod_type):
+    """The enabled .jar files directly inside servers/<id>/<mod_type>/, by name.
+
+    Symlinks are skipped: the public mod-pack route serves these files to
+    anyone, and a link named foo.jar could point anywhere on the host.
+    """
+    mod_dir = Path(server_path) / mod_type
+    if not mod_dir.is_dir():
+        return []
+    files = [p for p in mod_dir.iterdir()
+             if p.suffix == '.jar' and not p.is_symlink() and p.is_file()]
+    return sorted(files, key=lambda p: p.name.lower())
+
+
+def _build_modpack_zip(server_id, mod_type):
+    """
+    Zip a server's enabled mods (or plugins) for download.
+
+    Returns the archive path, or None when there is nothing to pack. The zip
+    is cached under MODPACK_CACHE_DIR and named by a digest of the file names,
+    sizes and mtimes, so repeat downloads — the public page can be hit by every
+    player — reuse it until a mod is added, removed, toggled or updated. JARs
+    are already compressed, so the archive is stored, not deflated.
+    """
+    server_path = server_manager.get_server_path(server_id)
+    files = _enabled_mod_files(server_path, mod_type)
+    if not files:
+        return None
+    signature = hashlib.sha256('\n'.join(
+        f'{p.name}:{p.stat().st_size}:{p.stat().st_mtime_ns}' for p in files
+    ).encode('utf-8')).hexdigest()[:16]
+    prefix = f'{server_id}_{mod_type}_'
+    out_path = MODPACK_CACHE_DIR / f'{prefix}{signature}.zip'
+    with _modpack_lock:
+        if out_path.exists():
+            return out_path
+        MODPACK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        for old in MODPACK_CACHE_DIR.glob(f'{prefix}*.zip'):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        part_path = out_path.with_suffix('.part')
+        try:
+            with zipfile.ZipFile(part_path, 'w', zipfile.ZIP_STORED) as zf:
+                for p in files:
+                    zf.write(str(p), p.name)
+            part_path.replace(out_path)
+        finally:
+            if part_path.exists():
+                part_path.unlink()
+    return out_path
+
+
+def _modpack_download_name(server_name, mod_type):
+    """'My Server-mods.zip', reduced to characters safe in a filename."""
+    base = secure_filename(server_name or '') or 'server'
+    return f'{base}-{mod_type}.zip'
+
+
+@app.route('/api/servers/<server_id>/mods/<mod_type>/download-all', methods=['GET'])
+@server_access_required
+def download_all_mods(server_id, mod_type):
+    """Download every enabled mod (or plugin) of a server as one zip."""
+    if mod_type not in ['plugins', 'mods']:
+        return api_error('Invalid mod type', 400)
+    zip_path = _build_modpack_zip(server_id, mod_type)
+    if not zip_path:
+        return api_error(f'This server has no enabled {mod_type} to download', 404)
+    cfg = server_manager.get_server_config(server_id) or {}
+    return send_file(zip_path, as_attachment=True,
+                     download_name=_modpack_download_name(cfg.get('name'), mod_type))
+
+
+@app.route('/api/servers/<server_id>/mods/<mod_type>/<filename>/download', methods=['GET'])
+@server_access_required
+def download_mod(server_id, mod_type, filename):
+    """Download a single mod or plugin JAR (enabled or disabled)."""
+    if mod_type not in ['plugins', 'mods']:
+        return api_error('Invalid mod type', 400)
+    mod_dir = server_manager.get_server_path(server_id) / mod_type
+    mod_path, error = _mod_file_or_error(mod_dir, filename)
+    if error:
+        return error
+    if not mod_path.is_file():
+        return api_error('Mod not found', 404)
+    # A disabled mod downloads under its real name, ready to drop into a client.
+    download_name = filename[:-len('.disabled')] if filename.endswith('.disabled') else filename
+    return send_file(mod_path, as_attachment=True, download_name=download_name)
 
 @app.route('/api/servers/<server_id>/mods/upload', methods=['POST'])
 @limiter.limit("20 per 15 minutes")

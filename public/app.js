@@ -285,7 +285,7 @@ function updateUserUI() {
   // /api/servers/import) — hide the entry points rather than let them 403.
   if (currentUser) {
     const canCreate = currentUser.permissions && currentUser.permissions.some(p => p === '*' || p === 'servers.create');
-    ['add-server-btn', 'welcome-add-btn'].forEach(id => {
+    ['add-server-btn', 'welcome-add-btn', 'duplicate-server-btn'].forEach(id => {
       const btn = document.getElementById(id);
       if (btn) btn.style.display = canCreate ? '' : 'none';
     });
@@ -816,6 +816,9 @@ function onJobFinished(job) {
     if (typeof loadBackups === 'function') loadBackups();
   }
   if (job.type === 'delete_server' && job.status === 'completed') {
+    loadServers();
+  }
+  if (job.type === 'duplicate_server' && job.status === 'completed') {
     loadServers();
   }
 }
@@ -3784,6 +3787,12 @@ async function openEditServerModal() {
     document.getElementById('input-auto-start').checked = !!server.autoStart;
 
     loadServerSharing(currentServerId);
+
+    const publicModsField = document.getElementById('public-mods-field');
+    if (publicModsField) {
+      publicModsField.style.display = server.category === 'modded' ? '' : 'none';
+      document.getElementById('input-public-mods').checked = server.publicModsDownload !== false;
+    }
     
     if (versionSection && versionDisplay) {
       versionSection.style.display = 'block';
@@ -4112,6 +4121,11 @@ async function saveServer(e) {
     autoStart: document.getElementById('input-auto-start').checked
   };
   
+  const publicModsField = document.getElementById('public-mods-field');
+  if (editingServerId && publicModsField && publicModsField.style.display !== 'none') {
+    serverData.publicModsDownload = document.getElementById('input-public-mods').checked;
+  }
+  
   try {
     if (editingServerId) {
       // Sharing is saved on its own route (owner / access-all only) and is not
@@ -4165,15 +4179,19 @@ let _serverSharingInitial = null;
 async function loadServerSharing(serverId) {
   const field = document.getElementById('server-sharing-field');
   const list = document.getElementById('server-sharing-groups');
+  const ownerField = document.getElementById('server-owner-field');
   if (!field || !list) return;
 
   _serverSharingInitial = null;
   field.style.display = 'none';
+  if (ownerField) ownerField.style.display = 'none';
   list.innerHTML = '';
 
   try {
     const data = await apiRequest(`/api/servers/${serverId}/access`);
     if (!data.canManage) return;
+
+    renderOwnerOptions(data.owner, data.availableOwners || []);
 
     const shared = new Set((data.sharedGroups || []).map(g => g.id));
     const groups = data.availableGroups || [];
@@ -4205,6 +4223,185 @@ async function saveServerSharing(serverId) {
     body: JSON.stringify({ groupIds: selected })
   });
   _serverSharingInitial = selected.join(',');
+}
+
+// ==================== Server ownership ====================
+
+function ownerLabel(user) {
+  return user.name && user.name !== user.username ? `${user.name} (${user.username})` : user.username;
+}
+
+function renderOwnerOptions(owner, candidates) {
+  const ownerField = document.getElementById('server-owner-field');
+  const select = document.getElementById('input-owner');
+  if (!ownerField || !select) return;
+  const ownerId = owner ? owner.id : '';
+  const options = candidates.map(u =>
+    `<option value="${escapeAttrValue(u.id)}" ${u.id === ownerId ? 'selected' : ''}>${escapeHtml(ownerLabel(u))}</option>`);
+  // The owner may be an account that cannot be picked now (disabled, or no owner at all).
+  if (!candidates.some(u => u.id === ownerId)) {
+    options.unshift(`<option value="" selected>${owner ? escapeHtml(ownerLabel(owner)) : 'No owner'}</option>`);
+  }
+  select.innerHTML = options.join('');
+  select.dataset.currentOwner = ownerId;
+  ownerField.style.display = '';
+}
+
+async function transferServerOwnership() {
+  const serverId = editingServerId;
+  const select = document.getElementById('input-owner');
+  if (!serverId || !select) return;
+  const newOwnerId = select.value;
+  if (!newOwnerId || newOwnerId === select.dataset.currentOwner) {
+    showNotification('Choose a different account to assign the server to', 'info');
+    return;
+  }
+  const server = servers.find(s => s.id === serverId);
+  const targetName = select.options[select.selectedIndex].textContent;
+  if (!await confirmAction(
+    `Assign "${server?.name || 'this server'}" to ${targetName}?\n\nThey become its owner. Unless you can access every server or the server is shared with your group, you will lose access to it.`,
+    { title: 'Assign Server', icon: '👤', okText: 'Assign' })) {
+    select.value = select.dataset.currentOwner;
+    return;
+  }
+  try {
+    await apiRequest(`/api/servers/${serverId}/owner`, {
+      method: 'POST',
+      body: JSON.stringify({ userId: newOwnerId })
+    });
+    showNotification(`Server assigned to ${targetName}`, 'success');
+    select.dataset.currentOwner = newOwnerId;
+    await loadServers();
+    // The server drops out of the list when this user just gave away their access.
+    if (!servers.some(s => s.id === serverId)) {
+      closeServerModal();
+      currentServerId = null;
+      document.getElementById('no-server-view').style.display = 'flex';
+      document.getElementById('server-view').style.display = 'none';
+    }
+  } catch (error) {
+    select.value = select.dataset.currentOwner;
+    showNotification('Failed to assign server: ' + error.message, 'error');
+  }
+}
+
+// ==================== Server duplication ====================
+
+// First port after `start` that no listed server holds; Bedrock copies also
+// need start + 1 free for IPv6.
+function suggestDuplicatePort(start, isBedrock) {
+  const used = new Set(servers.flatMap(s => s.port ? [Number(s.port)] : []));
+  if (isBedrock) servers.forEach(s => { if (s.category === 'bedrock' && s.port) used.add(Number(s.port) + 1); });
+  for (let p = start + (isBedrock ? 2 : 1); p < 65535; p++) {
+    if (!used.has(p) && !(isBedrock && used.has(p + 1))) return p;
+  }
+  return '';
+}
+
+function openDuplicateServerModal() {
+  if (!currentServerId) return;
+  const server = servers.find(s => s.id === currentServerId);
+  if (!server) return;
+  closeDuplicateServerModal();
+
+  const isBedrock = server.category === 'bedrock';
+  const basePort = Number(server.port) || (isBedrock ? 19132 : 25565);
+  const modal = document.createElement('div');
+  modal.id = 'duplicate-server-modal';
+  modal.className = 'modal active';
+  modal.innerHTML = `
+    <div class="modal-content modal-medium">
+      <div class="modal-header">
+        <h2>📑 Duplicate Server</h2>
+        <button class="close-btn" onclick="closeDuplicateServerModal()">&times;</button>
+      </div>
+      <form id="duplicate-server-form" class="duplicate-server-form">
+        <p>Make a copy of <strong>"${escapeHtml(server.name)}"</strong>. The copy is a new server owned by you; it starts stopped.</p>
+        ${server.running ? '<p class="delete-warning">⚠️ This server is running. Stop it first for a consistent copy of the world.</p>' : ''}
+        <div class="form-field">
+          <label for="dup-name">Server Name <span class="req">*</span></label>
+          <input type="text" id="dup-name" class="form-control" maxlength="100" required autocomplete="off"
+                 value="${escapeAttrValue(server.name + ' (Copy)')}">
+        </div>
+        <div class="form-field">
+          <label for="dup-port">Server Port <span class="req">*</span></label>
+          <input type="number" id="dup-port" class="form-control" min="1" max="${isBedrock ? 65534 : 65535}" required
+                 value="${suggestDuplicatePort(basePort, isBedrock)}">
+          <small class="field-hint">${isBedrock ? 'The IPv6 port is set to this port + 1.' : 'Must not be used by another server.'}</small>
+        </div>
+        <div class="form-field">
+          <label for="dup-motd">${isBedrock ? 'Server Name shown in game' : 'MOTD'} <span class="opt-tag">optional</span></label>
+          <input type="text" id="dup-motd" class="form-control" maxlength="120" autocomplete="off"
+                 placeholder="Leave empty to keep the original's">
+        </div>
+        <div class="form-field">
+          <label class="switch-row">
+            <input type="checkbox" id="dup-copy-world" checked>
+            <span class="switch-label">Copy world data</span>
+          </label>
+          <label class="switch-row">
+            <input type="checkbox" id="dup-copy-mods" checked>
+            <span class="switch-label">Copy mods, plugins and their configs</span>
+          </label>
+          <label class="switch-row">
+            <input type="checkbox" id="dup-copy-players" checked>
+            <span class="switch-label">Copy player lists (ops, whitelist, bans)</span>
+          </label>
+          <label class="switch-row">
+            <input type="checkbox" id="dup-copy-sharing">
+            <span class="switch-label">Share with the same groups</span>
+          </label>
+          <label class="switch-row">
+            <input type="checkbox" id="dup-auto-restart" ${server.autoRestart ? 'checked' : ''}>
+            <span class="switch-label">Restart automatically after a crash</span>
+          </label>
+        </div>
+      </form>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeDuplicateServerModal()">Cancel</button>
+        <button type="submit" form="duplicate-server-form" class="btn btn-success" id="dup-submit">Duplicate</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.onclick = (e) => { if (e.target.id === 'duplicate-server-modal') closeDuplicateServerModal(); };
+  document.getElementById('duplicate-server-form').onsubmit = (e) => submitDuplicateServer(e, server.id);
+  document.getElementById('dup-name').select();
+}
+
+function closeDuplicateServerModal() {
+  const modal = document.getElementById('duplicate-server-modal');
+  if (modal) modal.remove();
+}
+
+async function submitDuplicateServer(e, sourceId) {
+  e.preventDefault();
+  const submitBtn = document.getElementById('dup-submit');
+  submitBtn.disabled = true;
+  try {
+    const result = await apiRequest(`/api/servers/${sourceId}/duplicate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('dup-name').value.trim(),
+        port: Number(document.getElementById('dup-port').value),
+        motd: document.getElementById('dup-motd').value.trim(),
+        copyWorld: document.getElementById('dup-copy-world').checked,
+        copyMods: document.getElementById('dup-copy-mods').checked,
+        copyPlayers: document.getElementById('dup-copy-players').checked,
+        copySharing: document.getElementById('dup-copy-sharing').checked,
+        autoRestart: document.getElementById('dup-auto-restart').checked
+      })
+    });
+    closeDuplicateServerModal();
+    showNotification(result.pendingApproval
+      ? 'Copying server files — the copy is pending admin approval'
+      : 'Copying server files — see Tasks for progress', 'info');
+    openJobsPanel();
+    loadServers();
+  } catch (error) {
+    submitBtn.disabled = false;
+    showNotification('Failed to duplicate server: ' + error.message, 'error');
+  }
 }
 
 function deleteServer() {
@@ -5986,6 +6183,12 @@ function createModRow(mod, type) {
     actionsDiv.appendChild(checkBtn);
   }
 
+  const downloadBtn = document.createElement('button');
+  downloadBtn.textContent = 'Download';
+  downloadBtn.className = 'btn btn-small action-btn';
+  downloadBtn.onclick = () => downloadMod(mod.name, type);
+  actionsDiv.appendChild(downloadBtn);
+
   const toggleBtn = document.createElement('button');
   toggleBtn.textContent = isEnabled ? 'Disable' : 'Enable';
   toggleBtn.className = `btn btn-small action-btn ${isEnabled ? '' : 'btn-success'}`;
@@ -6023,6 +6226,21 @@ async function toggleMod(filename, type, isEnabled) {
     showNotification(`Failed to ${action} ${filename}: ${error.message}`, 'error');
     console.error('Failed to toggle mod:', error);
   }
+}
+
+function downloadMod(filename, type) {
+  if (!currentServerId) return;
+  window.location.href = `/api/servers/${currentServerId}/mods/${type}/${encodeURIComponent(filename)}/download`;
+}
+
+function downloadAllMods(type) {
+  if (!currentServerId) return;
+  const enabled = (type === 'plugins' ? _allPlugins : _allMods).filter(m => !m.name.endsWith('.disabled'));
+  if (enabled.length === 0) {
+    showNotification(`There are no enabled ${type} to download`, 'info');
+    return;
+  }
+  window.location.href = `/api/servers/${currentServerId}/mods/${type}/download-all`;
 }
 
 async function deleteMod(filename, type) {
@@ -8432,12 +8650,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const killBtn = document.getElementById('kill-btn');
   const editBtn = document.getElementById('edit-server-btn');
   const deleteBtn = document.getElementById('delete-server-btn');
+  const duplicateBtn = document.getElementById('duplicate-server-btn');
   if (startBtn) startBtn.onclick = startServer;
   if (restartBtn) restartBtn.onclick = restartServer;
   if (stopBtn) stopBtn.onclick = stopServer;
   if (killBtn) killBtn.onclick = killServer;
   if (editBtn) editBtn.onclick = openEditServerModal;
   if (deleteBtn) deleteBtn.onclick = deleteServer;
+  if (duplicateBtn) duplicateBtn.onclick = openDuplicateServerModal;
   
   // Tab buttons
   document.querySelectorAll('.tab-button').forEach(btn => {

@@ -138,6 +138,7 @@
             <button id="stop-btn" class="btn btn-danger" disabled>Stop</button>
             <button id="kill-btn" class="btn btn-danger" disabled title="Force kill the server process">Kill</button>
             <button id="edit-server-btn" class="btn btn-small">⚙️ Settings</button>
+            <button id="duplicate-server-btn" class="btn btn-small" title="Make a copy of this server">📑 Duplicate</button>
             <button id="delete-server-btn" class="btn btn-danger btn-small">🗑️</button>
           </div>
         </header>
@@ -381,7 +382,10 @@
             <div id="mods-update-results" class="mods-update-results" style="display:none;"></div>
             
             <div class="mods-section">
-              <h4>📦 Plugins</h4>
+              <div class="mods-section-header">
+                <h4>📦 Plugins</h4>
+                <button type="button" class="btn btn-small" onclick="downloadAllMods('plugins')" title="Download every enabled plugin as one zip">⬇️ Download All</button>
+              </div>
               <p class="section-info">For Bukkit/Spigot/Paper compatible plugins</p>
               <table class="mods-table">
                 <thead>
@@ -400,7 +404,10 @@
             </div>
             
             <div class="mods-section">
-              <h4>🔧 Mods</h4>
+              <div class="mods-section-header">
+                <h4>🔧 Mods</h4>
+                <button type="button" class="btn btn-small" onclick="downloadAllMods('mods')" title="Download every enabled mod as one zip">⬇️ Download All</button>
+              </div>
               <p class="section-info">For Forge/NeoForge/Fabric compatible mods</p>
               <table class="mods-table">
                 <thead>
@@ -1359,6 +1366,25 @@
                     <label>Share with groups</label>
                     <div id="server-sharing-groups" class="sharing-groups"></div>
                     <small class="field-hint">Members of a selected group get full access to this server: console, files, backups and settings.</small>
+                  </div>
+
+                  <!-- Public mod pack (edit mode, modded servers only) -->
+                  <div class="form-field" id="public-mods-field" style="display: none;">
+                    <label class="switch-row">
+                      <input type="checkbox" id="input-public-mods">
+                      <span class="switch-label">Offer the mods on the public status page</span>
+                      <button type="button" class="help-icon" data-tip="Players can download every enabled mod in the mods folder as one zip from the public server list, so they have what they need to join. Plugins are never included." aria-label="More information">?</button>
+                    </label>
+                  </div>
+
+                  <!-- Ownership (edit mode only; same rule as sharing) -->
+                  <div class="form-field" id="server-owner-field" style="display: none;">
+                    <label for="input-owner">Owner</label>
+                    <div class="owner-row">
+                      <select id="input-owner" class="form-control"></select>
+                      <button type="button" class="btn btn-small" id="transfer-owner-btn" onclick="transferServerOwnership()">Assign</button>
+                    </div>
+                    <small class="field-hint">Assign this server to another account. This takes effect at once, without Save. Unless you can access every server or a group you are in is shared, you lose access to it.</small>
                   </div>
                 </div>
               </section>

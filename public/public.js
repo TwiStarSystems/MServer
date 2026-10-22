@@ -89,6 +89,12 @@ function createServerCard(server) {
                 </div>
                 ` : ''}
             </div>
+            ${server.id && server.modCount ? `
+            <a class="mods-download-btn" href="/api/public/servers/${encodeURIComponent(server.id)}/mods.zip" download>
+                ⬇️ Download Mods
+                <small>${server.modCount} mod${server.modCount === 1 ? '' : 's'} · ${formatBytes(server.modsSize || 0)} — needed to join</small>
+            </a>
+            ` : ''}
         </div>
     `;
 }

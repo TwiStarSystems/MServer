@@ -662,6 +662,13 @@ body {
   margin-bottom: 5px;
 }
 
+.mods-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
 .mods-section .section-info {
   font-size: 12px;
   color: #888;
@@ -3310,6 +3317,29 @@ select.form-control:disabled {
   font-weight: 500;
 }
 
+.mods-download-btn {
+  display: block;
+  margin-top: 12px;
+  padding: 10px 14px;
+  text-align: center;
+  background: #667eea;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.mods-download-btn:hover {
+  background: #5a6fd6;
+}
+
+.mods-download-btn small {
+  display: block;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
 .no-servers {
   text-align: center;
   padding: 60px 20px;
@@ -3830,6 +3860,29 @@ select.form-control:disabled {
 
 .delete-server-content {
   padding: 20px;
+}
+
+.owner-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.owner-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.duplicate-server-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  color: #e0e0e0;
+}
+
+.duplicate-server-form .switch-row + .switch-row {
+  margin-top: 8px;
 }
 
 .delete-server-content > p {
